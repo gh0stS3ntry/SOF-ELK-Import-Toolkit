@@ -7,6 +7,7 @@ This package contains a recursive wrapper and ten standalone Python importers fo
 ```text
 sof_elk_all_importers/
 ├── SOF-ELK_ImportWrapper.py
+├── SOF-ELK_CreateDataViews.py
 ├── README.md
 ├── csv_importers/
 │   ├── nirsoft_bhv2sofelk.py
