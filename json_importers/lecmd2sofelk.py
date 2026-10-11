@@ -75,6 +75,12 @@ def transform(raw, source_path, hostname, label_type, ingest_time):
         target["path"] = scalar_path(target["local_path"])
     elif target.get("absolute_path"):
         target["path"] = scalar_path(target["absolute_path"])
+    elif isinstance(target.get("path"), (dict, list)):
+        target["path"] = json.dumps(
+            target["path"],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
     if f.get("extra_blocks") not in (None, ""):
         if isinstance(f["extra_blocks"], str):
