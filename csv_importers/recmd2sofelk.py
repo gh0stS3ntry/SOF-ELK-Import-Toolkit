@@ -16,13 +16,6 @@ import sys
 from pathlib import Path
 from urllib import error, request
 
-# Handle Unicode characters that the Windows console cannot encode.
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
-
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
-
 try:
     csv.field_size_limit(sys.maxsize)
 except OverflowError:  # Windows: C long is 32-bit

@@ -37,6 +37,12 @@ CSV_IMPORTERS = {
     "AmcacheParser": ("amcache2sofelk.py", "amcache"),
     "AppCompatCacheParser": ("shimcache2sofelk.py", "shimcache"),
     "RECmd": ("recmd2sofelk.py", "registry"),
+    "RBCmd": ("rbcmd2sofelk.py", "recyclebin"),
+    "RecentFileCacheParser": ("recentfilecache2sofelk.py", "recentfilecache"),
+    "SQLECmd": ("sqlecmd2sofelk.py", "sqlitedb"),
+    "SrumECmd": ("srumecmd2sofelk.py", "srum"),
+    "SumECmd": ("sumecmd2sofelk.py", "sum"),
+    "WxTCmd": ("wxtcmd2sofelk.py", "activitiescache"),
 }
 
 BHV_HEADERS = {"url", "title", "visit time", "visit count", "visited from", "visit type",
@@ -111,6 +117,53 @@ def classify_csv(path: Path, headers: list[str]) -> set[str]:
     is_plugin_export = bool(re.match(r"^\d{8,}_", path.name)) and "__" in path.stem
     if path.suffix.lower() == ".csv" and (is_recmd_batch or is_plugin_export):
         found.add("RECmd")
+
+    # RBCmd: modern Recycle Bin $I output.
+    if path.suffix.lower() == ".csv" and (
+        "rbcmd" in name or "recyclebin" in name
+        or {"sourcefile", "version"}.issubset(fields) and any("deleted" in f or "deletion" in f for f in fields)
+    ):
+        found.add("RBCmd")
+
+    # RecentFileCacheParser.
+    if path.suffix.lower() == ".csv" and (
+        "recentfilecache" in name or "recentfilecacheparser" in name
+        or {"sourcefile", "sourcemodified", "file_names"}.issubset(fields)
+        or {"sourcefile", "sourcemodified"}.issubset(fields) and any("filename" in f or "filenames" in f for f in fields)
+    ):
+        found.add("RecentFileCacheParser")
+
+    # SQLECmd. Output varies with the SQLite map, so use both the tool name and
+    # characteristic SQLite/report columns. A filename hint is preferred.
+    if path.suffix.lower() == ".csv" and (
+        "sqlecmd" in name or {"sourcefile", "query"}.issubset(fields)
+        or {"database", "table"}.issubset(fields)
+        or "sqlitemap" in name
+    ):
+        found.add("SQLECmd")
+
+    # SrumECmd emits several well-known report CSVs, all with Timestamp/Id plus
+    # tool-specific columns.
+    if path.suffix.lower() == ".csv" and (
+        "srumecmd" in name or {"id", "timestamp", "exeinfo"}.issubset(fields)
+        or {"id", "timestamp", "user_id"}.issubset(fields) and any(x in fields for x in {"app_id", "bytesreceived", "bytessent", "networktype"})
+    ):
+        found.add("SrumECmd")
+
+    # SumECmd / UAL output. Filename is the strongest signal because SUM CSV
+    # schemas vary by report mode.
+    if path.suffix.lower() == ".csv" and (
+        "sumecmd" in name or "_sum_" in name or name.startswith("sum_")
+    ):
+        found.add("SumECmd")
+
+    # WxTCmd Windows Timeline output. It can generate Activity, ActivityOperations
+    # and ActivityPackage CSVs.
+    if path.suffix.lower() == ".csv" and (
+        "wxtcmd" in name or "activityoperations" in name or "activitypackage" in name
+        or {"id", "activitytypeorg", "activitytype", "executable", "starttime"}.issubset(fields)
+    ):
+        found.add("WxTCmd")
 
     return found
 
