@@ -234,6 +234,77 @@ python3 json_importers/pecmd2sofelk.py /cases/IR-2026-042 --hostname WS01
 
 The importers accept an Elasticsearch URL and optional HTTP Basic credentials. Use `--insecure` only if the endpoint is trusted and TLS certificate validation cannot be configured properly; it disables certificate checking. Be careful not to expose passwords in shell history or process listings on shared systems. For production, prefer a suitably scoped ingest account and secured transport.
 
+## Kibana Data View creator
+
+`SOF-ELK_CreateDataViews.py` creates the six Kibana Data Views that are not included out-of-box in the stock SOF-ELK distribution but are required for the additional direct-import indexes used by this package:
+
+| Script / data source | Kibana Data View | Indexes created by importer |
+|---|---|---|
+| NirSoft BrowsingHistoryView | `browsinghistory-*` | `browsinghistory-<hostname>` |
+| JLECmd | `jumplist-*` | `jumplist-<hostname>` |
+| SBECmd | `shellbag-*` | `shellbag-<hostname>` |
+| AmcacheParser | `amcache-*` | `amcache-<hostname>` |
+| AppCompatCacheParser / ShimCache | `shimcache-*` | `shimcache-<hostname>` |
+| RECmd | `registry-*` | `registry-<hostname>` |
+
+The script deliberately does not create the `filesystem-*`, `evtxlogs-*`, `lnkfiles-*`, or `prefetch-*` Data Views because those are already available in SOF-ELK out-of-box.
+
+The script uses Kibana's Data Views API and is standard-library only. By default it is idempotent: an existing Data View is detected and left unchanged. Use `--overwrite` to delete and recreate the six managed views. The Data Views are configured to use `@timestamp` as the time field and `allowNoIndex=true`, so they can be created before the first corresponding Elasticsearch index exists.
+
+### Usage
+
+Preview the six Data Views without modifying Kibana:
+
+```bash
+python3 SOF-ELK_CreateDataViews.py --dry-run
+```
+
+Create them on the local Kibana instance:
+
+```bash
+python3 SOF-ELK_CreateDataViews.py
+```
+
+Specify a Kibana URL:
+
+```bash
+python3 SOF-ELK_CreateDataViews.py --kibana https://kibana.example.com
+```
+
+Use HTTP Basic authentication when required:
+
+```bash
+python3 SOF-ELK_CreateDataViews.py \
+    --kibana https://kibana.example.com \
+    --user elastic \
+    --password 'your-password'
+```
+
+For a Kibana endpoint using a certificate that cannot be verified by the local Python trust store, use `--insecure`:
+
+```bash
+python3 SOF-ELK_CreateDataViews.py \
+    --kibana https://kibana.example.com \
+    --insecure
+```
+
+Force recreation of the six managed Data Views:
+
+```bash
+python3 SOF-ELK_CreateDataViews.py --overwrite
+```
+
+### Options
+
+- `--kibana URL`: Kibana base URL. Default: `http://localhost:5601`.
+- `--user USER`: HTTP Basic authentication username.
+- `--password PASSWORD`: HTTP Basic authentication password.
+- `--insecure`: disable TLS certificate verification.
+- `--overwrite`: delete and recreate the six managed Data Views if they already exist.
+- `--dry-run`: display the Data Views that would be managed without making API changes.
+
+Run the Data View creator after Kibana is available and before using the corresponding indexes in Discover. Because `allowNoIndex` is enabled, it is also safe to create the Data Views before the direct-import scripts have created their first host-specific indexes.
+
 ## Validation status and limitations
 
 The scripts have been checked using syntax/help and synthetic dry-run tests as described during their creation. No representative user-provided forensic export set or live Elasticsearch deployment was available for a field-by-field comparison and production-scale ingestion test. The implementations mirror the relevant SOF-ELK configuration and original importer logic, but do not reproduce every Filebeat runtime-only field, every Logstash parser-failure side effect, or every mapping outcome that can arise from heterogeneous source data. Validate each relevant tool format and timezone behavior before a production import.
