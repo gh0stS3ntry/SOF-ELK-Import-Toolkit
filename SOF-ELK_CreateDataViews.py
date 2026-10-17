@@ -5,19 +5,14 @@ SOF-ELK_CreateDataViews.py
 Create Kibana Data Views that are not included out-of-box in SOF-ELK for the
 additional direct-import forensic data sources used by the SOF-ELK importers.
 
-Creates the non-stock Data Views used by the direct-import toolkit:
+Creates:
+  clrusagelogs-*     ConvertUsageLogsTo-CSV.ps1 CLR Usage Logs
   browsinghistory-*   NirSoft BrowsingHistoryView
   jumplist-*          JLECmd
   shellbag-*          SBECmd
   amcache-*           AmcacheParser
   shimcache-*         AppCompatCacheParser / ShimCache
   registry-*          RECmd
-  recyclebin-*        RBCmd
-  recentfilecache-*   RecentFileCacheParser
-  sqlitedb-*          SQLECmd
-  srum-*              SrumECmd
-  sum-*               SumECmd
-  activitiescache-*   WxTCmd
 
 The existing SOF-ELK Data Views for filesystem-*, evtxlogs-*, lnkfiles-* and
 prefetch-* are deliberately not recreated because they already exist in the
@@ -34,18 +29,19 @@ import sys
 from urllib import error, request
 
 DATA_VIEWS = [
+    ("activitiescache", "activitiescache-*"),
+    ("sum", "sum-*"),
+    ("srum", "srum-*"),
+    ("sqlitedb", "sqlitedb-*"),
+    ("recentfilecache", "recentfilecache-*"),
+    ("recyclebin", "recyclebin-*"),
+    ("clrusagelogs", "clrusagelogs-*"),
     ("browsinghistory", "browsinghistory-*"),
     ("jumplist", "jumplist-*"),
     ("shellbag", "shellbag-*"),
     ("amcache", "amcache-*"),
     ("shimcache", "shimcache-*"),
     ("registry", "registry-*"),
-    ("recyclebin", "recyclebin-*"),
-    ("recentfilecache", "recentfilecache-*"),
-    ("sqlitedb", "sqlitedb-*"),
-    ("srum", "srum-*"),
-    ("sum", "sum-*"),
-    ("activitiescache", "activitiescache-*"),
 ]
 
 DATE_FORMAT = "YYYY-MM-DD HH:mm:ss.SSS\\Z"
@@ -102,7 +98,7 @@ def data_view_body(view_id, title):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Create the six non-stock SOF-ELK Kibana Data Views used by the direct CSV importers."
+        description="Create the non-stock SOF-ELK Kibana Data Views used by the direct CSV importers."
     )
     parser.add_argument(
         "--kibana",

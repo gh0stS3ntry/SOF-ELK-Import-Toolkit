@@ -1,6 +1,6 @@
 # SOF-ELK Import Toolkit
 
-This package contains a recursive wrapper and sixteen standalone Python importers for loading forensic CSV and JSON exports directly into Elasticsearch indexes used by SOF-ELK without relying on Logstash or Filebeat. The importers do not run KAPE, NirSoft, or Eric Zimmerman tools; they ingest exports that those tools have already produced.
+This package contains a recursive wrapper and seventeen standalone Python importers for loading forensic CSV and JSON exports directly into Elasticsearch indexes used by SOF-ELK without relying on Logstash or Filebeat. The importers do not run KAPE, NirSoft, or Eric Zimmerman tools; they ingest exports that those tools have already produced.
 
 ## Contents
 
@@ -22,7 +22,8 @@ sof_elk_all_importers/
     │   ├── srumecmd2sofelk.py
     │   ├── sumecmd2sofelk.py
     │   ├── wxtcmd2sofelk.py
-    │   └── recmd2sofelk.py
+    │   ├── recmd2sofelk.py
+    │   └── clrusagelogs2sofelk.py
     └── json_importers/
         ├── mftecmd2sofelk.py
         ├── evtxecmd2sofelk.py
@@ -96,13 +97,13 @@ Index hostnames are normalized to lowercase because Elasticsearch index names mu
 | `json_importers/lecmd2sofelk.py` | Eric Zimmerman LECmd | JSON / JSON.GZ / CSV | `lnkfiles-<hostname>` |
 | `json_importers/pecmd2sofelk.py` | Eric Zimmerman PECmd | JSON / JSON.GZ / CSV | `prefetch-<hostname>` |
 
-The per-host index names are intended to be discovered by the corresponding Kibana wildcard Data Views, such as `filesystem-*`, `evtxlogs-*`, `lnkfiles-*`, `prefetch-*`, `browsinghistory-*`, `jumplist-*`, `shellbag-*`, `amcache-*`, `shimcache-*`, `registry-*`, `recyclebin-*`, `recentfilecache-*`, `sqlitedb-*`, `srum-*`, `sum-*`, and `activitiescache-*`. These per-host names intentionally differ from SOF-ELK's conventional monthly `base_index-YYYY.MM` Logstash output names.
+The per-host index names are intended to be discovered by the corresponding Kibana wildcard Data Views, such as `filesystem-*`, `evtxlogs-*`, `lnkfiles-*`, `prefetch-*`, `browsinghistory-*`, `jumplist-*`, `shellbag-*`, `amcache-*`, `shimcache-*`, `registry-*`, `recyclebin-*`, `recentfilecache-*`, `sqlitedb-*`, `srum-*`, `sum-*`, and `activitiescache-*`, and `clrusagelogs-*`. These per-host names intentionally differ from SOF-ELK's conventional monthly `base_index-YYYY.MM` Logstash output names.
 
 ## CSV importers: direct use
 
 CSV importers do a type-inference pass before ingestion, convert recognized values, establish or extend mappings, and send documents through Elasticsearch's `_bulk` API. They retain the source-specific fields and metadata implemented by the importer, but the legacy KAPE CSV importers deliberately do not write the `forensic_tag` field in indexed documents. Source-specific classification may still be used internally by the importer.
 
-All twelve CSV importers accept an input file or directory, search directories recursively, and support `--hostname`, `--case`, `--es`, `--batch-size`, `--workers`, `--user`, `--password`, `--insecure`, `--dry-run`, and `--sample-docs`. The KAPE CSV importers also support `--local-tz` where applicable. Most CSV importers use source filename clues and/or characteristic CSV headers to recognize the appropriate output type.
+All thirteen CSV importers accept an input file or directory, search directories recursively, and support `--hostname`, `--case`, `--es`, `--batch-size`, `--workers`, `--user`, `--password`, `--insecure`, `--dry-run`, and `--sample-docs`. The KAPE CSV importers also support `--local-tz` where applicable. Most CSV importers use source filename clues and/or characteristic CSV headers to recognize the appropriate output type.
 
 ### 1. `nirsoft_bhv2sofelk.py`
 
@@ -113,8 +114,8 @@ Timestamp interpretation must use the timezone of the machine that ran BrowsingH
 Example:
 
 ```bash
-python3 csv_importers/nirsoft_bhv2sofelk.py /cases/IR-2026-042/BrowsingHistory.csv --hostname WS01 --tz +08:00 --dry-run
-python3 csv_importers/nirsoft_bhv2sofelk.py /cases/IR-2026-042/BrowsingHistory.csv --hostname WS01 --tz +08:00
+python3 Windows/csv_importers/nirsoft_bhv2sofelk.py /cases/IR-2026-042/BrowsingHistory.csv --hostname WS01 --tz +08:00 --dry-run
+python3 Windows/csv_importers/nirsoft_bhv2sofelk.py /cases/IR-2026-042/BrowsingHistory.csv --hostname WS01 --tz +08:00
 ```
 
 ### 2. `jlecmd2sofelk.py`
@@ -124,8 +125,8 @@ Loads JLECmd AutomaticDestinations and CustomDestinations CSV outputs into `jump
 Examples:
 
 ```bash
-python3 csv_importers/jlecmd2sofelk.py /cases/IR-2026-042/FileFolderAccess --hostname WS01 --dry-run
-python3 csv_importers/jlecmd2sofelk.py /cases/IR-2026-042/FileFolderAccess --hostname WS01
+python3 Windows/csv_importers/jlecmd2sofelk.py /cases/IR-2026-042/FileFolderAccess --hostname WS01 --dry-run
+python3 Windows/csv_importers/jlecmd2sofelk.py /cases/IR-2026-042/FileFolderAccess --hostname WS01
 ```
 
 Expected filename clues include `*_AutomaticDestinations.csv` and `*_CustomDestinations.csv`; field headers are also used to recognize the content.
@@ -137,8 +138,8 @@ Loads SBECmd ShellBags CSV outputs into `shellbag-<hostname>`. It detects ShellB
 Example:
 
 ```bash
-python3 csv_importers/sbecmd2sofelk.py /cases/IR-2026-042/ShellBags --hostname WS01 --dry-run
-python3 csv_importers/sbecmd2sofelk.py /cases/IR-2026-042/ShellBags --hostname WS01
+python3 Windows/csv_importers/sbecmd2sofelk.py /cases/IR-2026-042/ShellBags --hostname WS01 --dry-run
+python3 Windows/csv_importers/sbecmd2sofelk.py /cases/IR-2026-042/ShellBags --hostname WS01
 ```
 
 SBECmd filenames can vary by export workflow, so ensure its CSV headers identify the output correctly.
@@ -150,8 +151,8 @@ Loads AmcacheParser section CSVs into `amcache-<hostname>`. It recognizes sectio
 Example:
 
 ```bash
-python3 csv_importers/amcache2sofelk.py /cases/IR-2026-042/ProgramExecution --hostname WS01 --dry-run
-python3 csv_importers/amcache2sofelk.py /cases/IR-2026-042/ProgramExecution --hostname WS01
+python3 Windows/csv_importers/amcache2sofelk.py /cases/IR-2026-042/ProgramExecution --hostname WS01 --dry-run
+python3 Windows/csv_importers/amcache2sofelk.py /cases/IR-2026-042/ProgramExecution --hostname WS01
 ```
 
 ### 5. `shimcache2sofelk.py`
@@ -161,8 +162,8 @@ Loads AppCompatCacheParser / ShimCache CSVs into `shimcache-<hostname>`. It reco
 Example:
 
 ```bash
-python3 csv_importers/shimcache2sofelk.py /cases/IR-2026-042/ProgramExecution --hostname WS01 --dry-run
-python3 csv_importers/shimcache2sofelk.py /cases/IR-2026-042/ProgramExecution --hostname WS01
+python3 Windows/csv_importers/shimcache2sofelk.py /cases/IR-2026-042/ProgramExecution --hostname WS01 --dry-run
+python3 Windows/csv_importers/shimcache2sofelk.py /cases/IR-2026-042/ProgramExecution --hostname WS01
 ```
 
 ### 6. `recmd2sofelk.py`
@@ -172,8 +173,8 @@ Loads RECmd batch output and plugin-detail CSVs into `registry-<hostname>`. It d
 Examples:
 
 ```bash
-python3 csv_importers/recmd2sofelk.py /cases/IR-2026-042/Registry --hostname WS01 --dry-run
-python3 csv_importers/recmd2sofelk.py /cases/IR-2026-042/Registry --hostname WS01
+python3 Windows/csv_importers/recmd2sofelk.py /cases/IR-2026-042/Registry --hostname WS01 --dry-run
+python3 Windows/csv_importers/recmd2sofelk.py /cases/IR-2026-042/Registry --hostname WS01
 ```
 
 Filename examples include `*_RECmd_Batch_Kroll_Batch_Output.csv` and timestamp-prefixed plugin files such as `*_UserAssist__C_Users_bob_NTUSER.DAT.csv`. The script derives plugin/hive metadata from the actual filename pattern; confirm files from your tool version with a dry run.
@@ -185,8 +186,8 @@ Loads RBCmd CSV output into `recyclebin-<hostname>`. The importer uses RBCmd/Rec
 Example:
 
 ```bash
-python3 csv_importers/rbcmd2sofelk.py /cases/IR-2026-042/RecycleBin --hostname WS01 --dry-run
-python3 csv_importers/rbcmd2sofelk.py /cases/IR-2026-042/RecycleBin --hostname WS01
+python3 Windows/csv_importers/rbcmd2sofelk.py /cases/IR-2026-042/RecycleBin --hostname WS01 --dry-run
+python3 Windows/csv_importers/rbcmd2sofelk.py /cases/IR-2026-042/RecycleBin --hostname WS01
 ```
 
 Expected filename clues include names containing `RBCmd` or `RecycleBin`.
@@ -198,8 +199,8 @@ Loads RecentFileCacheParser CSV output into `recentfilecache-<hostname>`. It ide
 Example:
 
 ```bash
-python3 csv_importers/recentfilecache2sofelk.py /cases/IR-2026-042/RecentFileCache --hostname WS01 --dry-run
-python3 csv_importers/recentfilecache2sofelk.py /cases/IR-2026-042/RecentFileCache --hostname WS01
+python3 Windows/csv_importers/recentfilecache2sofelk.py /cases/IR-2026-042/RecentFileCache --hostname WS01 --dry-run
+python3 Windows/csv_importers/recentfilecache2sofelk.py /cases/IR-2026-042/RecentFileCache --hostname WS01
 ```
 
 ### 9. `sqlecmd2sofelk.py`
@@ -209,8 +210,8 @@ Loads SQLECmd SQLite-report CSV output into `sqlitedb-<hostname>`. Because SQLEC
 Example:
 
 ```bash
-python3 csv_importers/sqlecmd2sofelk.py /cases/IR-2026-042/SQLite --hostname WS01 --dry-run
-python3 csv_importers/sqlecmd2sofelk.py /cases/IR-2026-042/SQLite --hostname WS01
+python3 Windows/csv_importers/sqlecmd2sofelk.py /cases/IR-2026-042/SQLite --hostname WS01 --dry-run
+python3 Windows/csv_importers/sqlecmd2sofelk.py /cases/IR-2026-042/SQLite --hostname WS01
 ```
 
 ### 10. `srumecmd2sofelk.py`
@@ -220,8 +221,8 @@ Loads SrumECmd CSV reports into `srum-<hostname>`. It identifies SrumECmd output
 Example:
 
 ```bash
-python3 csv_importers/srumecmd2sofelk.py /cases/IR-2026-042/SRUM --hostname WS01 --dry-run
-python3 csv_importers/srumecmd2sofelk.py /cases/IR-2026-042/SRUM --hostname WS01
+python3 Windows/csv_importers/srumecmd2sofelk.py /cases/IR-2026-042/SRUM --hostname WS01 --dry-run
+python3 Windows/csv_importers/srumecmd2sofelk.py /cases/IR-2026-042/SRUM --hostname WS01
 ```
 
 ### 11. `sumecmd2sofelk.py`
@@ -231,8 +232,8 @@ Loads SumECmd / User Access Logging CSV output into `sum-<hostname>`. Filename c
 Example:
 
 ```bash
-python3 csv_importers/sumecmd2sofelk.py /cases/IR-2026-042/SUM --hostname WS01 --dry-run
-python3 csv_importers/sumecmd2sofelk.py /cases/IR-2026-042/SUM --hostname WS01
+python3 Windows/csv_importers/sumecmd2sofelk.py /cases/IR-2026-042/SUM --hostname WS01 --dry-run
+python3 Windows/csv_importers/sumecmd2sofelk.py /cases/IR-2026-042/SUM --hostname WS01
 ```
 
 ### 12. `wxtcmd2sofelk.py`
@@ -242,32 +243,45 @@ Loads WxTCmd Windows Timeline CSV output into `activitiescache-<hostname>`. It r
 Example:
 
 ```bash
-python3 csv_importers/wxtcmd2sofelk.py /cases/IR-2026-042/WindowsTimeline --hostname WS01 --dry-run
-python3 csv_importers/wxtcmd2sofelk.py /cases/IR-2026-042/WindowsTimeline --hostname WS01
+python3 Windows/csv_importers/wxtcmd2sofelk.py /cases/IR-2026-042/WindowsTimeline --hostname WS01 --dry-run
+python3 Windows/csv_importers/wxtcmd2sofelk.py /cases/IR-2026-042/WindowsTimeline --hostname WS01
 ```
 
 WxTCmd can emit multiple related CSV report types, so inspect the dry-run discovery summary to confirm that the intended files were selected.
 
+### 13. `clrusagelogs2sofelk.py`
+
+Loads the CSV produced by `ConvertUsageLogsTo-CSV.ps1` into `clrusagelogs-<hostname>`. The expected columns are `User`, `AssemblyName`, `FirstExecutionTimestamp`, `LastExecutionTimestamp`, and `File`. The importer validates the expected schema, converts the execution timestamps to Elasticsearch-compatible values, uses `LastExecutionTimestamp` as the preferred `@timestamp` with `FirstExecutionTimestamp` as fallback, preserves the user, assembly name, source file, and CLR usage-log information, and uses deterministic IDs for repeatable imports.
+
+Example:
+
+```bash
+python3 Windows/csv_importers/clrusagelogs2sofelk.py /cases/IR-2026-042/CLRUsageLogs.csv --hostname WS01 --dry-run
+python3 Windows/csv_importers/clrusagelogs2sofelk.py /cases/IR-2026-042/CLRUsageLogs.csv --hostname WS01
+```
+
+The wrapper can identify this output from its filename and the characteristic five-column header, so a standalone invocation is normally only needed when testing or troubleshooting the importer.
+
 ## JSON importers: direct use
 
-The four importers under `json_importers/` implement the main field transformations in the corresponding SOF-ELK Logstash filters and shared preprocessing/postprocessing rules. In current versions they can ingest both the original JSON/JSON.GZ exports and corresponding CSV outputs. JSON input is parsed incrementally, so a whole export does not need to be loaded into memory. Keep `sof_elk_json_bulk_common.py` alongside all four scripts.
+The four importers under `Windows/json_importers/` implement the main field transformations in the corresponding SOF-ELK Logstash filters and shared preprocessing/postprocessing rules. In current versions they can ingest both the original JSON/JSON.GZ exports and corresponding CSV outputs. JSON input is parsed incrementally, so a whole export does not need to be loaded into memory. Keep `sof_elk_json_bulk_common.py` alongside all four scripts in `Windows/json_importers/`.
 
 Accepted JSON data files are `.json` and `.json.gz`. JSON input may be a top-level JSON array, a single JSON object, or a sequence of whitespace-separated/NDJSON objects. For CSV input, the scripts use the shared CSV bulk helper and the same index and host conventions as their JSON path. When a directory is supplied, a tool-specific filename pattern is used for JSON files; CSV discovery is format-aware and header-aware. PECmd timeline JSON is excluded.
 
 The four importers support `--hostname`, `--es`, `--user`, `--password`, `--insecure`, `--batch-size`, `--workers`, `--dry-run`, and `--sample-docs`. For CSV paths, `--case` and `--local-tz` are also available where supported by the shared CSV ingestion layer.
 
-### 13. `mftecmd2sofelk.py`
+### 14. `mftecmd2sofelk.py`
 
 Loads MFTECmd JSON or CSV into `filesystem-<hostname>`. JSON directory searches use MFTECmd output filename patterns, including `*_MFTECmd*_Output.json` and gzip equivalents; CSV discovery also accepts MFTECmd output CSVs. The importer transforms standard-information and filename MACB timestamps into `file.stdinfo.*` and `file.filename.*`, creates `file.name`, `file.path`, and `file.type`, translates `kape.mft.*`, converts NTFS attributes to boolean properties, handles alternate data streams, splits update reasons, and selects `@timestamp` from the most appropriate available MFT/USN time field.
 
 Example:
 
 ```bash
-python3 json_importers/mftecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --dry-run
-python3 json_importers/mftecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --es http://localhost:9200
+python3 Windows/json_importers/mftecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --dry-run
+python3 Windows/json_importers/mftecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --es http://localhost:9200
 ```
 
-### 14. `evtxecmd2sofelk.py`
+### 15. `evtxecmd2sofelk.py`
 
 Loads EvtxECmd JSON or CSV into `evtxlogs-<hostname>`. JSON directory searches use `*_EvtxECmd_Output.json` and gzip equivalents; CSV discovery also accepts EvtxECmd output CSVs. The importer maps Windows event fields to `winlog.*` and KAPE fields, parses `Payload` JSON where present, expands supported event-data values, maps UserData/Binary, copies the repository-specific `winlog.user.identifer` value to `user.id` where present, parses remote IP/port where possible, splits keywords, and constructs the summary `message`.
 
@@ -276,11 +290,11 @@ Heterogeneous `UserData.EventData` values are normalized to a consistent text re
 Example:
 
 ```bash
-python3 json_importers/evtxecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --dry-run
-python3 json_importers/evtxecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --workers 2
+python3 Windows/json_importers/evtxecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --dry-run
+python3 Windows/json_importers/evtxecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --workers 2
 ```
 
-### 15. `lecmd2sofelk.py`
+### 16. `lecmd2sofelk.py`
 
 Loads LECmd JSON or CSV into `lnkfiles-<hostname>`. JSON directory searches use `*_LECmd_Output.json` and gzip equivalents; CSV discovery also accepts LECmd output CSVs. The importer maps source/origin and target timestamps and paths into the SOF-ELK `file.*` layout; applies local/absolute target path precedence; handles header flags, attributes, extra blocks, empty target times, and `(None)` drive type; converts target MFT entry/sequence numbers; and selects source LNK modification time for `@timestamp`.
 
@@ -289,19 +303,19 @@ Non-string target structures, including argument-only targets, are normalized be
 Example:
 
 ```bash
-python3 json_importers/lecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --dry-run
-python3 json_importers/lecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --batch-size 3000 --workers 3
+python3 Windows/json_importers/lecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --dry-run
+python3 Windows/json_importers/lecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --batch-size 3000 --workers 3
 ```
 
-### 16. `pecmd2sofelk.py`
+### 17. `pecmd2sofelk.py`
 
 Loads PECmd JSON or CSV into `prefetch-<hostname>`. JSON directory searches use `*_PECmd_Output.json` and gzip equivalents; CSV discovery also accepts PECmd output CSVs. `*_PECmd_Output_Timeline.json` and its CSV equivalent are deliberately excluded, since they are flattened timeline views of records already represented by regular output. The importer maps Prefetch and executable fields, splits `Directories` and `FilesLoaded`, removes configured .NET unset sentinels, converts timestamps and numeric fields, merges supported `PreviousRunN` values into `prefetch.previous_runs`, builds the summary `message`, and chooses `@timestamp` from LastRun and then source file modification time.
 
 Example:
 
 ```bash
-python3 json_importers/pecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --dry-run
-python3 json_importers/pecmd2sofelk.py /cases/IR-2026-042 --hostname WS01
+python3 Windows/json_importers/pecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --dry-run
+python3 Windows/json_importers/pecmd2sofelk.py /cases/IR-2026-042 --hostname WS01
 ```
 
 ## Shared field, timestamp, and index behavior
@@ -327,7 +341,7 @@ The importers accept an Elasticsearch URL and optional HTTP Basic credentials. U
 
 ## Kibana Data View creator
 
-`SOF-ELK_CreateDataViews.py` creates the twelve Kibana Data Views that are not included out-of-box in the stock SOF-ELK distribution but are required for the additional direct-import indexes used by this package:
+`SOF-ELK_CreateDataViews.py` creates the thirteen Kibana Data Views that are not included out-of-box in the stock SOF-ELK distribution but are required for the additional direct-import indexes used by this package:
 
 | Script / data source | Kibana Data View | Indexes created by importer |
 |---|---|---|
@@ -343,14 +357,15 @@ The importers accept an Elasticsearch URL and optional HTTP Basic credentials. U
 | SrumECmd | `srum-*` | `srum-<hostname>` |
 | SumECmd | `sum-*` | `sum-<hostname>` |
 | WxTCmd | `activitiescache-*` | `activitiescache-<hostname>` |
+| ConvertUsageLogsTo-CSV.ps1 | `clrusagelogs-*` | `clrusagelogs-<hostname>` |
 
 The script deliberately does not create the `filesystem-*`, `evtxlogs-*`, `lnkfiles-*`, or `prefetch-*` Data Views because those are already available in SOF-ELK out-of-box.
 
-The script uses Kibana's Data Views API and is standard-library only. By default it is idempotent: an existing Data View is detected and left unchanged. Use `--overwrite` to delete and recreate the twelve managed views. The Data Views are configured to use `@timestamp` as the time field and `allowNoIndex=true`, so they can be created before the first corresponding Elasticsearch index exists.
+The script uses Kibana's Data Views API and is standard-library only. By default it is idempotent: an existing Data View is detected and left unchanged. Use `--overwrite` to delete and recreate the thirteen managed views. The Data Views are configured to use `@timestamp` as the time field and `allowNoIndex=true`, so they can be created before the first corresponding Elasticsearch index exists.
 
 ### Usage
 
-Preview the twelve Data Views without modifying Kibana:
+Preview the thirteen Data Views without modifying Kibana:
 
 ```bash
 python3 SOF-ELK_CreateDataViews.py --dry-run
@@ -397,7 +412,7 @@ python3 SOF-ELK_CreateDataViews.py --overwrite
 - `--user USER`: HTTP Basic authentication username.
 - `--password PASSWORD`: HTTP Basic authentication password.
 - `--insecure`: disable TLS certificate verification.
-- `--overwrite`: delete and recreate the twelve managed Data Views if they already exist.
+- `--overwrite`: delete and recreate the thirteen managed Data Views if they already exist.
 - `--dry-run`: display the Data Views that would be managed without making API changes.
 
 Run the Data View creator after Kibana is available and before using the corresponding indexes in Discover. Because `allowNoIndex` is enabled, it is also safe to create the Data Views before the direct-import scripts have created their first host-specific indexes.

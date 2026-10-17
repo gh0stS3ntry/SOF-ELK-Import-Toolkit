@@ -23,26 +23,27 @@ import tempfile
 from pathlib import Path
 from typing import Iterable
 
-HYBRID_IMPORTERS = {
-    "MFTECmd": ("mftecmd2sofelk.py", ("*_mftecmd*_output.json", "*_mftecmd*_output.json.gz", "*_mftecmd*_output.csv"), ()),
-    "EvtxECmd": ("evtxecmd2sofelk.py", ("*_evtxecmd_output.json", "*_evtxecmd_output.json.gz", "*_evtxecmd_output.csv"), ()),
-    "LECmd": ("lecmd2sofelk.py", ("*_lecmd_output.json", "*_lecmd_output.json.gz", "*_lecmd_output.csv"), ()),
-    "PECmd": ("pecmd2sofelk.py", ("*_pecmd_output.json", "*_pecmd_output.json.gz", "*_pecmd_output.csv"), ("*_pecmd_output_timeline.json", "*_pecmd_output_timeline.json.gz", "*_pecmd_output_timeline.csv")),
+JSON_IMPORTERS = {
+    "MFTECmd": ("mftecmd2sofelk.py", ("*_mftecmd*_output.json", "*_mftecmd*_output.json.gz"), ()),
+    "EvtxECmd": ("evtxecmd2sofelk.py", ("*_evtxecmd_output.json", "*_evtxecmd_output.json.gz"), ()),
+    "LECmd": ("lecmd2sofelk.py", ("*_lecmd_output.json", "*_lecmd_output.json.gz"), ()),
+    "PECmd": ("pecmd2sofelk.py", ("*_pecmd_output.json", "*_pecmd_output.json.gz"), ("*_pecmd_output_timeline.json", "*_pecmd_output_timeline.json.gz")),
 }
 
 CSV_IMPORTERS = {
-    "NirSoft BrowsingHistoryView": ("nirsoft_bhv2sofelk.py", "browsinghistory"),
-    "JLECmd": ("jlecmd2sofelk.py", "jumplist"),
-    "SBECmd": ("sbecmd2sofelk.py", "shellbag"),
-    "AmcacheParser": ("amcache2sofelk.py", "amcache"),
-    "AppCompatCacheParser": ("shimcache2sofelk.py", "shimcache"),
-    "RECmd": ("recmd2sofelk.py", "registry"),
     "RBCmd": ("rbcmd2sofelk.py", "recyclebin"),
     "RecentFileCacheParser": ("recentfilecache2sofelk.py", "recentfilecache"),
     "SQLECmd": ("sqlecmd2sofelk.py", "sqlitedb"),
     "SrumECmd": ("srumecmd2sofelk.py", "srum"),
     "SumECmd": ("sumecmd2sofelk.py", "sum"),
     "WxTCmd": ("wxtcmd2sofelk.py", "activitiescache"),
+    "ConvertUsageLogsTo-CSV": ("clrusagelogs2sofelk.py", "clrusagelogs"),
+    "NirSoft BrowsingHistoryView": ("nirsoft_bhv2sofelk.py", "browsinghistory"),
+    "JLECmd": ("jlecmd2sofelk.py", "jumplist"),
+    "SBECmd": ("sbecmd2sofelk.py", "shellbag"),
+    "AmcacheParser": ("amcache2sofelk.py", "amcache"),
+    "AppCompatCacheParser": ("shimcache2sofelk.py", "shimcache"),
+    "RECmd": ("recmd2sofelk.py", "registry"),
 }
 
 BHV_HEADERS = {"url", "title", "visit time", "visit count", "visited from", "visit type",
@@ -83,7 +84,11 @@ def classify_csv(path: Path, headers: list[str]) -> set[str]:
     fields = {norm_header(h) for h in headers}
     # BrowsingHistoryView: the familiar export name or its characteristic columns.
     found: set[str] = set()
-    if ("browsinghistory" in name or bool(fields & BHV_HEADERS)) and path.suffix.lower() in {".csv", ".txt", ".tsv"}:
+    if path.suffix.lower() in {".csv", ".txt", ".tsv"} and (
+        "browsinghistory" in name
+        or len(fields & BHV_HEADERS) >= 3
+        or {"url", "title", "visit_time", "visit_count", "user_profile"}.issubset(fields)
+    ):
         found.add("NirSoft BrowsingHistoryView")
 
     # JLECmd: Automatic/Custom Destinations exports. Avoid classifying arbitrary AppId CSVs.
@@ -111,6 +116,25 @@ def classify_csv(path: Path, headers: list[str]) -> set[str]:
     ):
         found.add("AppCompatCacheParser")
 
+    if path.suffix.lower() == ".csv":
+        if "rbcmd" in name or {"deletiontime", "originalfilename", "originalpath"}.intersection(fields) >= {"deletiontime"} :
+            found.add("RBCmd")
+        if "recentfilecacheparser" in name or {"sourcecreated", "sourcemodified", "filenames"}.issubset(fields):
+            found.add("RecentFileCacheParser")
+        if "sqlecmd" in name or {"database", "table", "url"}.issubset(fields):
+            found.add("SQLECmd")
+        if "srumecmd" in name or "srumecmd" in stem or {"timestamp", "appid", "exetimestamp"}.intersection(fields) and ("foregroundbytesread" in fields or "foregroundbyteswritten" in fields):
+            found.add("SrumECmd")
+        if "sumecmd" in name or {"servername", "username", "applicationname"}.issubset(fields):
+            found.add("SumECmd")
+        if "wxtcmd" in name or {"activitytype", "starttime", "endtime", "operationtype"}.intersection(fields) >= {"starttime"} and ("activitytype" in fields or "operationtype" in fields):
+            found.add("WxTCmd")
+        # ConvertUsageLogsTo-CSV.ps1: exact five-column schema. Filename is a strong cue,
+        # but the header check prevents arbitrary CSVs from being classified as CLR usage logs.
+        clr_headers = {"user", "assemblyname", "firstexecutiontimestamp", "lastexecutiontimestamp", "file"}
+        if "convertusagelogs" in name or "usage logs" in name or clr_headers.issubset({re.sub(r"\s+", "", f) for f in fields}):
+            found.add("ConvertUsageLogsTo-CSV")
+
     # RECmd batch and plugin outputs. KAPE plugin filenames commonly have a timestamp
     # prefix and a double underscore before the hive path (e.g. UserAssist__C_Users_...).
     is_recmd_batch = "recmd_batch" in name or ("recmd" in name and "batch" in name)
@@ -118,59 +142,12 @@ def classify_csv(path: Path, headers: list[str]) -> set[str]:
     if path.suffix.lower() == ".csv" and (is_recmd_batch or is_plugin_export):
         found.add("RECmd")
 
-    # RBCmd: modern Recycle Bin $I output.
-    if path.suffix.lower() == ".csv" and (
-        "rbcmd" in name or "recyclebin" in name
-        or {"sourcefile", "version"}.issubset(fields) and any("deleted" in f or "deletion" in f for f in fields)
-    ):
-        found.add("RBCmd")
-
-    # RecentFileCacheParser.
-    if path.suffix.lower() == ".csv" and (
-        "recentfilecache" in name or "recentfilecacheparser" in name
-        or {"sourcefile", "sourcemodified", "file_names"}.issubset(fields)
-        or {"sourcefile", "sourcemodified"}.issubset(fields) and any("filename" in f or "filenames" in f for f in fields)
-    ):
-        found.add("RecentFileCacheParser")
-
-    # SQLECmd. Output varies with the SQLite map, so use both the tool name and
-    # characteristic SQLite/report columns. A filename hint is preferred.
-    if path.suffix.lower() == ".csv" and (
-        "sqlecmd" in name or {"sourcefile", "query"}.issubset(fields)
-        or {"database", "table"}.issubset(fields)
-        or "sqlitemap" in name
-    ):
-        found.add("SQLECmd")
-
-    # SrumECmd emits several well-known report CSVs, all with Timestamp/Id plus
-    # tool-specific columns.
-    if path.suffix.lower() == ".csv" and (
-        "srumecmd" in name or {"id", "timestamp", "exeinfo"}.issubset(fields)
-        or {"id", "timestamp", "user_id"}.issubset(fields) and any(x in fields for x in {"app_id", "bytesreceived", "bytessent", "networktype"})
-    ):
-        found.add("SrumECmd")
-
-    # SumECmd / UAL output. Filename is the strongest signal because SUM CSV
-    # schemas vary by report mode.
-    if path.suffix.lower() == ".csv" and (
-        "sumecmd" in name or "_sum_" in name or name.startswith("sum_")
-    ):
-        found.add("SumECmd")
-
-    # WxTCmd Windows Timeline output. It can generate Activity, ActivityOperations
-    # and ActivityPackage CSVs.
-    if path.suffix.lower() == ".csv" and (
-        "wxtcmd" in name or "activityoperations" in name or "activitypackage" in name
-        or {"id", "activitytypeorg", "activitytype", "executable", "starttime"}.issubset(fields)
-    ):
-        found.add("WxTCmd")
-
     return found
 
 
 def discover(root: Path) -> tuple[dict[str, list[Path]], dict[str, list[Path]]]:
     """Walk the tree once; return selected files for the four JSON and six CSV importers."""
-    json_files = {name: [] for name in HYBRID_IMPORTERS}
+    json_files = {name: [] for name in JSON_IMPORTERS}
     csv_files = {name: [] for name in CSV_IMPORTERS}
     # os.walk avoids materializing a list of every descendant path at once.
     for dirpath, dirnames, filenames in os.walk(root):
@@ -179,7 +156,7 @@ def discover(root: Path) -> tuple[dict[str, list[Path]], dict[str, list[Path]]]:
         for filename in filenames:
             path = directory / filename
             lower = filename.lower()
-            for importer, (_script, patterns, excludes) in HYBRID_IMPORTERS.items():
+            for importer, (_script, patterns, excludes) in JSON_IMPORTERS.items():
                 if has_json_pattern(path, patterns, excludes):
                     json_files[importer].append(path)
             suffix = path.suffix.lower()
@@ -341,7 +318,7 @@ def main() -> int:
 
     todo: list[tuple[str, str, str, list[Path], list[str] | None, bool]] = []
     failed: list[tuple[str, int]] = []
-    for label, (script, _patterns, _excludes) in HYBRID_IMPORTERS.items():
+    for label, (script, _patterns, _excludes) in JSON_IMPORTERS.items():
         files = json_files[label]
         if files:
             todo.append((label, "json_importers", script, files, None, True))
@@ -361,7 +338,7 @@ def main() -> int:
 
     print("\nDiscovery summary:", flush=True)
     total_files = 0
-    for label, files in [(x, json_files[x]) for x in HYBRID_IMPORTERS] + [(x, csv_files[x]) for x in CSV_IMPORTERS]:
+    for label, files in [(x, json_files[x]) for x in JSON_IMPORTERS] + [(x, csv_files[x]) for x in CSV_IMPORTERS]:
         print(f"  {label}: {len(files)} file(s)", flush=True)
         total_files += len(files)
     if not todo:
