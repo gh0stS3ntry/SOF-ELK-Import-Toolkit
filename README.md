@@ -9,25 +9,26 @@ sof_elk_all_importers/
 ├── SOF-ELK_ImportWrapper.py
 ├── SOF-ELK_CreateDataViews.py
 ├── README.md
-├── csv_importers/
-│   ├── nirsoft_bhv2sofelk.py
-│   ├── jlecmd2sofelk.py
-│   ├── sbecmd2sofelk.py
-│   ├── amcache2sofelk.py
-│   ├── shimcache2sofelk.py
-│   ├── rbcmd2sofelk.py
-│   ├── recentfilecache2sofelk.py
-│   ├── sqlecmd2sofelk.py
-│   ├── srumecmd2sofelk.py
-│   ├── sumecmd2sofelk.py
-│   ├── wxtcmd2sofelk.py
-│   └── recmd2sofelk.py
-└── json_importers/
-    ├── mftecmd2sofelk.py
-    ├── evtxecmd2sofelk.py
-    ├── lecmd2sofelk.py
-    ├── pecmd2sofelk.py
-    └── sof_elk_json_bulk_common.py
+└── Windows
+    ├── csv_importers/
+    │   ├── nirsoft_bhv2sofelk.py
+    │   ├── jlecmd2sofelk.py
+    │   ├── sbecmd2sofelk.py
+    │   ├── amcache2sofelk.py
+    │   ├── shimcache2sofelk.py
+    │   ├── rbcmd2sofelk.py
+    │   ├── recentfilecache2sofelk.py
+    │   ├── sqlecmd2sofelk.py
+    │   ├── srumecmd2sofelk.py
+    │   ├── sumecmd2sofelk.py
+    │   ├── wxtcmd2sofelk.py
+    │   └── recmd2sofelk.py
+    └── json_importers/
+        ├── mftecmd2sofelk.py
+        ├── evtxecmd2sofelk.py
+        ├── lecmd2sofelk.py
+        ├── pecmd2sofelk.py
+        └── sof_elk_json_bulk_common.py
 ```
 
 Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. In particular, keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers if it is present in your package version.
