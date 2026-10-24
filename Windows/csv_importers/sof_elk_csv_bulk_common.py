@@ -10,7 +10,8 @@ import json
 import re
 import ssl
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib import error, request
 
@@ -32,6 +33,35 @@ ES_FAMILY = {
     "long": "long", "integer": "long", "short": "long", "byte": "long",
     "date": "date", "date_nanos": "date", "boolean": "boolean",
 }
+
+
+def sanitize_hostname(hostname: str) -> str:
+    value = re.sub(r"[^a-z0-9._-]+", "-", hostname.strip().lower()).strip("._-")
+    if not value:
+        raise ValueError("--hostname must contain at least one letter or digit")
+    return value
+
+
+def select_csv_files(root: Path, hints, header_match=None) -> list[Path]:
+    """CSV files to import: an explicit file as-is, else files whose name contains a hint
+    or whose normalized header set satisfies header_match."""
+    if root.is_file():
+        return [root] if root.suffix.lower() == ".csv" else []
+    out = []
+    for p in sorted(root.rglob("*.csv"), key=lambda x: str(x).lower()):
+        if not p.is_file():
+            continue
+        if any(h in p.name.lower() for h in hints):
+            out.append(p)
+            continue
+        if header_match is not None:
+            try:
+                header, _ = read_header_and_rows(p)
+            except RuntimeError:
+                continue
+            if header and header_match({normalize_header(h) for h in header}):
+                out.append(p)
+    return out
 
 
 def auth_header(user: str | None, password: str | None) -> dict[str, str]:
@@ -136,10 +166,13 @@ def init_type_state(fields):
     return {f: {"seen": False, "boolean": True, "long": True, "date": True, "date_hits": 0, "bad": None} for f in fields}
 
 
-def scan_rows(rows_iter, fields, state):
-    count = 0
+def scan_rows(rows_iter, fields, state, ts_index=None, ts_tz="Z"):
+    """Update type state; return (row count, rows with a parseable value at ts_index)."""
+    count = usable = 0
     for row in rows_iter:
         count += 1
+        if ts_index is not None and ts_index < len(row) and parse_ts(row[ts_index], ts_tz):
+            usable += 1
         for i, field in enumerate(fields):
             raw = row[i] if i < len(row) else ""
             value = (raw or "").strip()
@@ -163,7 +196,7 @@ def scan_rows(rows_iter, fields, state):
                 s["date"] = False
                 if s["bad"] is None and OTHER_DATE_RE.search(value):
                     s["bad"] = value[:80]
-    return count
+    return count, usable
 
 
 def finalize_types(state, local_tz: str | None):
@@ -310,16 +343,7 @@ def deterministic_id(host, tool, source_file, row_number, row):
 
 
 def bulk_send(es, index, actions, user, password, insecure, workers=2, batch_size=2000):
-    batches = []
-    batch = []
-    for action in actions:
-        batch.append(action)
-        if len(batch) >= batch_size:
-            batches.append(batch)
-            batch = []
-    if batch:
-        batches.append(batch)
-
+    """Send (meta, doc) actions in batches; at most workers*2 batches are held at once."""
     def send(one_batch):
         ndjson = bytearray()
         for meta, doc in one_batch:
@@ -338,22 +362,41 @@ def bulk_send(es, index, actions, user, password, insecure, workers=2, batch_siz
                     errors.append(op.get("error"))
         return len(one_batch) - len(errors), len(errors), errors
 
-    success = errors = 0
+    workers = max(1, workers)
+    success = errors = n_batches = 0
     error_samples = []
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = [pool.submit(send, b) for b in batches]
-        for fut in as_completed(futures):
-            ok, bad, errs = fut.result()
-            success += ok; errors += bad
-            if len(error_samples) < 10:
-                error_samples.extend(errs[:10-len(error_samples)])
-    return success, errors, len(batches), error_samples
+    pending = deque()
+
+    def collect_one():
+        nonlocal success, errors
+        ok, bad, errs = pending.popleft().result()
+        success += ok; errors += bad
+        if len(error_samples) < 10:
+            error_samples.extend(errs[:10-len(error_samples)])
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        batch = []
+        for action in actions:
+            batch.append(action)
+            if len(batch) >= batch_size:
+                pending.append(pool.submit(send, batch))
+                n_batches += 1
+                batch = []
+                if len(pending) >= workers * 2:
+                    collect_one()
+        if batch:
+            pending.append(pool.submit(send, batch))
+            n_batches += 1
+        while pending:
+            collect_one()
+    return success, errors, n_batches, error_samples
 
 
 def process_csv_import(paths, *, hostname, tool_key, index, es="http://localhost:9200", user=None,
                        password=None, insecure=False, batch_size=2000, workers=2, case=None,
                        local_tz=None, time_preferences=None, transform=None, dry_run=False,
                        sample_docs=2):
+    hostname = sanitize_hostname(hostname)
     plans = []
     for path in paths:
         header, rows = read_header_and_rows(path)
@@ -361,10 +404,11 @@ def process_csv_import(paths, *, hostname, tool_key, index, es="http://localhost
             continue
         fields = sanitize_fields(header)
         state = init_type_state(fields)
-        count = scan_rows(rows, fields, state)
-        types = finalize_types(state, local_tz)
         ts_field = choose_timestamp_field(fields, time_preferences or [])
-        plans.append((path, header, fields, types, ts_field, count))
+        ts_index = fields.index(ts_field) if ts_field else None
+        count, usable = scan_rows(rows, fields, state, ts_index, field_tz(ts_field or "", local_tz))
+        types = finalize_types(state, local_tz)
+        plans.append((path, header, fields, types, ts_field, count, usable))
 
     merged_types, conflicts = merge_types([p[3] for p in plans])
     print(f"{len(paths)} CSV files, {sum(p[5] for p in plans)} rows -> index '{index}'", flush=True)
@@ -374,11 +418,8 @@ def process_csv_import(paths, *, hostname, tool_key, index, es="http://localhost
             print(f"  {f}: {', '.join(vals)}", flush=True)
     print("\nTimestamp check", flush=True)
     for p in plans:
-        path, _header, fields, _types, ts_field, count = p
+        path, _header, fields, _types, ts_field, count, usable = p
         if ts_field:
-            _, rows = read_header_and_rows(path)
-            idx = fields.index(ts_field)
-            usable = sum(1 for row in rows if idx < len(row) and parse_ts(row[idx], field_tz(ts_field, local_tz)))
             print(f"  {path.stem[:55]:<55} @timestamp <- {ts_field} {usable}/{count}", flush=True)
         else:
             print(f"  {path.stem[:55]:<55} WARN @timestamp <- ingest time", flush=True)
@@ -386,7 +427,7 @@ def process_csv_import(paths, *, hostname, tool_key, index, es="http://localhost
         print("\nDry run only - nothing sent.", flush=True)
         shown = 0
         now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-        for path, header, fields, _types, ts_field, _count in plans:
+        for path, header, fields, _types, ts_field, _count, _usable in plans:
             if shown >= sample_docs:
                 break
             _, rows = read_header_and_rows(path)
@@ -422,7 +463,7 @@ def process_csv_import(paths, *, hostname, tool_key, index, es="http://localhost
 
     now = dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     def actions():
-        for path, _header, fields, _types, ts_field, _count in plans:
+        for path, _header, fields, _types, ts_field, _count, _usable in plans:
             _, rows = read_header_and_rows(path)
             for rn, row in enumerate(rows, 1):
                 doc = make_doc(hostname, tool_key, path.name, row, fields, merged_types, ts_field, now, local_tz, case, transform, renames)

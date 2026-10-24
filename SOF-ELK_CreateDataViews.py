@@ -6,7 +6,13 @@ Create Kibana Data Views that are not included out-of-box in SOF-ELK for the
 additional direct-import forensic data sources used by the SOF-ELK importers.
 
 Creates:
-  clrusagelogs-*     ConvertUsageLogsTo-CSV.ps1 CLR Usage Logs
+  activitiescache-*   WxTCmd
+  sum-*               SumECmd
+  srum-*              SrumECmd
+  sqlitedb-*          SQLECmd
+  recentfilecache-*   RecentFileCacheParser
+  recyclebin-*        RBCmd
+  clrusagelogs-*      ConvertUsageLogsTo-CSV.ps1 CLR Usage Logs
   browsinghistory-*   NirSoft BrowsingHistoryView
   jumplist-*          JLECmd
   shellbag-*          SBECmd
@@ -115,7 +121,7 @@ def main():
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Delete and recreate the six Data Views if they already exist",
+        help="Delete and recreate the thirteen Data Views if they already exist",
     )
     parser.add_argument(
         "--dry-run",

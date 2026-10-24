@@ -102,6 +102,14 @@ def parse_ts(value, default_tz="Z"):
     return f"{date}T{time}.{frac}{tz}"
 
 
+def sanitize_hostname(hostname):
+    """Lower-case host name safe for an Elasticsearch index name."""
+    value = re.sub(r"[^a-z0-9._-]+", "-", hostname.strip().lower()).strip("._-")
+    if not value:
+        raise ValueError("--hostname must contain at least one letter or digit")
+    return value
+
+
 def clean_fields(header):
     """CSV header -> Elasticsearch-safe, unique field names (no dots, no leading _)."""
     used, out = set(RESERVED), []
@@ -558,7 +566,11 @@ def main():
             sys.exit(f"--local-tz must look like +08:00 or -0500, got '{args.local_tz}'")
         local_tz = f"{m.group(1)}{int(m.group(2)):02d}:{m.group(3) or '00'}"
 
-    index = (args.index or f"shimcache-{args.hostname.lower()}").lower()
+    try:
+        host = sanitize_hostname(args.hostname)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    index = (args.index or f"shimcache-{host}").lower()
     if args.index and index != args.index:
         print(f"note: Elasticsearch index names must be lower-case, using '{index}'\n")
 
@@ -600,7 +612,6 @@ def main():
     types, conflicts = merge_types(plan)
 
     ingest_time = dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    host = args.hostname.lower()
 
     if skipped:
         print(f"Skipped {len(skipped)} CSV(s) outside this importer's supported source type"

@@ -8,6 +8,7 @@ This package contains a recursive wrapper and seventeen standalone Python import
 sof_elk_all_importers/
 ├── SOF-ELK_ImportWrapper.py
 ├── SOF-ELK_CreateDataViews.py
+├── SOF-ELK_ConfigureRemoteIngest.sh
 ├── README.md
 └── Windows
     ├── csv_importers/
@@ -23,7 +24,8 @@ sof_elk_all_importers/
     │   ├── sumecmd2sofelk.py
     │   ├── wxtcmd2sofelk.py
     │   ├── recmd2sofelk.py
-    │   └── clrusagelogs2sofelk.py
+    │   ├── clrusagelogs2sofelk.py
+    │   └── sof_elk_csv_bulk_common.py
     └── json_importers/
         ├── mftecmd2sofelk.py
         ├── evtxecmd2sofelk.py
@@ -32,7 +34,7 @@ sof_elk_all_importers/
         └── sof_elk_json_bulk_common.py
 ```
 
-Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. In particular, keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers if it is present in your package version.
+Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. In particular, keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers in `csv_importers/` (the RBCmd, RecentFileCacheParser, SQLECmd, SrumECmd, SumECmd, and WxTCmd importers require it).
 
 ## Quick start: use the wrapper
 
@@ -64,19 +66,19 @@ Wrapper options:
 | `--user USER` / `--password PASSWORD` | Optional HTTP Basic authentication. |
 | `--insecure` | Skip TLS certificate verification. Use only for a trusted endpoint. |
 | `--batch-size N` | Documents per bulk request; default `2000`. |
-| `--workers N` | Concurrent bulk workers; default `2`. |
-| `--case ID` | Optional incident/case ID passed to importers that support it. |
-| `--local-tz +HH:MM` | Offset used to convert KAPE CSV columns marked `LOCAL`; without it, such columns are generally retained as text. |
+| `--workers N` | Concurrent bulk workers; default `2`. Passed to the four JSON importers only. |
+| `--case ID` | Optional incident/case ID passed to every CSV importer (the JSON importers do not support it). |
+| `--local-tz +HH:MM` | Offset used to convert KAPE CSV columns marked `LOCAL`; without it, such columns are generally retained as text. Passed to every CSV importer except BrowsingHistoryView (which uses `--bhv-tz`) and the CLR usage-log importer (which has no LOCAL columns). |
 | `--bhv-tz +HH:MM\|UTC` | Offset for the computer that ran BrowsingHistoryView, or `UTC` if its GMT option was enabled. |
 | `--date-order dmy\|mdy\|ymd` | Optional BrowsingHistoryView regional date order where it cannot be inferred. |
 | `--dry-run` | Validate and preview records without sending them to Elasticsearch. |
-| `--sample-docs N` | Number of transformed sample documents shown by each importer where supported in dry-run mode. |
+| `--sample-docs N` | Number of transformed sample documents shown in dry-run mode. Passed to the four JSON importers only. |
 
 The wrapper stages selected inputs using links when supported (falling back as needed) so it can invoke importers with the correct basenames and source-detection behavior. The staging directory is temporary and is removed after the run. The wrapper itself should remain at the package root so that it can locate both importer subdirectories.
 
 ## Index names and inputs
 
-Index hostnames are normalized to lowercase because Elasticsearch index names must be lowercase. The defaults below can be overridden with `--index` when running a CSV importer directly. The four Eric Zimmerman importers in `json_importers/` also accept CSV in current versions, in addition to their original JSON/JSON.GZ formats.
+Hostnames are normalized the same way by every importer: lowercased (Elasticsearch index names must be lowercase), with any run of characters other than `a-z`, `0-9`, `.`, `_`, and `-` replaced by `-`, and leading/trailing `.`, `_`, `-` removed. For example, `WS 01` becomes `ws-01`. The normalized name is used in the index name and, for the CSV importers, in `host.name`. When running the JLECmd, SBECmd, AmcacheParser, ShimCache, RECmd, or BrowsingHistoryView importer directly, the default index can be overridden with `--index`; the other importers always use the default. The four Eric Zimmerman importers in `json_importers/` also accept CSV in current versions, in addition to their original JSON/JSON.GZ formats.
 
 | Script | Tool / evidence type | Input format | Default index |
 |---|---|---|---|
@@ -103,7 +105,16 @@ The per-host index names are intended to be discovered by the corresponding Kiba
 
 CSV importers do a type-inference pass before ingestion, convert recognized values, establish or extend mappings, and send documents through Elasticsearch's `_bulk` API. They retain the source-specific fields and metadata implemented by the importer, but the legacy KAPE CSV importers deliberately do not write the `forensic_tag` field in indexed documents. Source-specific classification may still be used internally by the importer.
 
-All thirteen CSV importers accept an input file or directory, search directories recursively, and support `--hostname`, `--case`, `--es`, `--batch-size`, `--workers`, `--user`, `--password`, `--insecure`, `--dry-run`, and `--sample-docs`. The KAPE CSV importers also support `--local-tz` where applicable. Most CSV importers use source filename clues and/or characteristic CSV headers to recognize the appropriate output type.
+All thirteen CSV importers accept an input file or directory, search directories recursively, and support `--hostname`, `--case`, `--es`, `--batch-size`, `--user`, `--password`, `--insecure`, and `--dry-run`. The remaining options differ by importer:
+
+| Importer(s) | Inputs | Additional options |
+|---|---|---|
+| `jlecmd`, `sbecmd`, `amcache`, `shimcache`, `recmd` | one or more files/folders | `--index`, `--local-tz` |
+| `nirsoft_bhv` | one or more files/folders | `--index`, `--tz` (required), `--date-order` |
+| `rbcmd`, `recentfilecache`, `sqlecmd`, `srumecmd`, `sumecmd`, `wxtcmd` | one file or folder | `--local-tz`, `--workers`, `--sample-docs` |
+| `clrusagelogs` | one file or folder | `--sample-docs` |
+
+Most CSV importers use source filename clues and/or characteristic CSV headers to recognize the appropriate output type. When given a folder, the RBCmd, RecentFileCacheParser, SQLECmd, SrumECmd, and WxTCmd importers select a CSV if its filename contains a tool clue or its header matches the same signature the wrapper uses; SumECmd relies on filename clues only.
 
 ### 1. `nirsoft_bhv2sofelk.py`
 
@@ -266,9 +277,9 @@ The wrapper can identify this output from its filename and the characteristic fi
 
 The four importers under `Windows/json_importers/` implement the main field transformations in the corresponding SOF-ELK Logstash filters and shared preprocessing/postprocessing rules. In current versions they can ingest both the original JSON/JSON.GZ exports and corresponding CSV outputs. JSON input is parsed incrementally, so a whole export does not need to be loaded into memory. Keep `sof_elk_json_bulk_common.py` alongside all four scripts in `Windows/json_importers/`.
 
-Accepted JSON data files are `.json` and `.json.gz`. JSON input may be a top-level JSON array, a single JSON object, or a sequence of whitespace-separated/NDJSON objects. For CSV input, the scripts use the shared CSV bulk helper and the same index and host conventions as their JSON path. When a directory is supplied, a tool-specific filename pattern is used for JSON files; CSV discovery is format-aware and header-aware. PECmd timeline JSON is excluded.
+Accepted JSON data files are `.json` and `.json.gz`. JSON input may be a top-level JSON array, a single JSON object, or a sequence of whitespace-separated/NDJSON objects. For CSV input, the scripts read rows with `iter_csv_records` in `sof_elk_json_bulk_common.py` and apply the same transformation, index, and host conventions as their JSON path. When a directory is supplied, a tool-specific filename pattern is used for JSON files; CSV discovery is format-aware and header-aware. PECmd timeline JSON is excluded.
 
-The four importers support `--hostname`, `--es`, `--user`, `--password`, `--insecure`, `--batch-size`, `--workers`, `--dry-run`, and `--sample-docs`. For CSV paths, `--case` and `--local-tz` are also available where supported by the shared CSV ingestion layer.
+The four importers support `--hostname`, `--es`, `--user`, `--password`, `--insecure`, `--batch-size`, `--workers`, `--dry-run`, and `--sample-docs`. They do not support `--case`, `--local-tz`, or `--index`, for either JSON or CSV input.
 
 ### 14. `mftecmd2sofelk.py`
 
@@ -323,7 +334,8 @@ python3 Windows/json_importers/pecmd2sofelk.py /cases/IR-2026-042 --hostname WS0
 - CSV importers preserve the source-specific field transformations and type/timestamp behavior implemented for each importer. The original KAPE-derived CSV importers omit `forensic_tag` from stored documents as requested. The four JSON/CSV hybrid importers preserve their source-specific Logstash-derived transformations where implemented.
 - The evidence hostname is used to form each target index name. It is normalized to lowercase because Elasticsearch index names must be lowercase.
 - The scripts create an index if it does not exist, define explicit mappings for recognized non-string fields, and use dynamic string mappings. Existing mappings are checked before writing. CSV importers route incompatible field types to `<field>_text` where supported. JSON/CSV hybrid importers report bulk indexing rejections and exit non-zero when any documents are rejected.
-- Importers use deterministic document IDs based on host and stable file/record properties so rerunning the same exports does not create duplicate logical documents. BrowsingHistoryView additionally uses a counter to preserve identical rows.
+- Importers use deterministic document IDs based on host and stable file/record properties so rerunning the same exports does not create duplicate logical documents. Identical rows within one file are kept as separate documents (by row position, or by a counter for BrowsingHistoryView).
+- **Upgrade note:** the document-ID scheme changed for the RECmd, JLECmd, SBECmd, and CLR usage-log importers. If a host was loaded with an earlier version of these importers, delete that host's documents (or its index) before re-importing, otherwise the old and new IDs produce duplicates.
 - `--dry-run` previews parsing/transformation and prints sample documents, but it does not prove that a live Elasticsearch cluster will accept every mapping. Always test representative output from your installed tool versions before loading production evidence.
 
 ## Timestamp and data-quality cautions
@@ -400,7 +412,7 @@ python3 SOF-ELK_CreateDataViews.py \
     --insecure
 ```
 
-Force recreation of the twelve managed Data Views:
+Force recreation of the thirteen managed Data Views:
 
 ```bash
 python3 SOF-ELK_CreateDataViews.py --overwrite
@@ -416,6 +428,16 @@ python3 SOF-ELK_CreateDataViews.py --overwrite
 - `--dry-run`: display the Data Views that would be managed without making API changes.
 
 Run the Data View creator after Kibana is available and before using the corresponding indexes in Discover. Because `allowNoIndex` is enabled, it is also safe to create the Data Views before the direct-import scripts have created their first host-specific indexes.
+
+## Remote ingest configuration
+
+`SOF-ELK_ConfigureRemoteIngest.sh` prepares a standalone SOF-ELK Elasticsearch node to accept bulk imports from a separate importer VM:
+
+```bash
+sudo ./SOF-ELK_ConfigureRemoteIngest.sh 192.168.233.145
+```
+
+It validates the importer's IPv4 address, backs up `/etc/elasticsearch/elasticsearch.yml`, sets `network.host: 0.0.0.0` and `discovery.type: single-node`, adds a firewalld rich rule that allows only that IP to reach TCP/9200, restarts Elasticsearch, and checks that the API is listening. It assumes Elasticsearch is configured under `/etc/elasticsearch` and that firewalld manages the host firewall. It does not enable or change Elasticsearch authentication, so restrict network exposure accordingly.
 
 ## Efficiency and Big-O considerations
 

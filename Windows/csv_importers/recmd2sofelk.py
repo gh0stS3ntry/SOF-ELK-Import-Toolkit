@@ -75,6 +75,14 @@ def parse_ts(value, default_tz="Z"):
     return f"{date}T{time}.{frac}{tz}"
 
 
+def sanitize_hostname(hostname):
+    """Lower-case host name safe for an Elasticsearch index name."""
+    value = re.sub(r"[^a-z0-9._-]+", "-", hostname.strip().lower()).strip("._-")
+    if not value:
+        raise ValueError("--hostname must contain at least one letter or digit")
+    return value
+
+
 def clean_fields(header):
     """CSV header -> Elasticsearch-safe, unique field names (no dots, no leading _)."""
     used, out = set(RESERVED), []
@@ -446,7 +454,11 @@ def main():
             sys.exit(f"--local-tz must look like +08:00 or -0500, got '{args.local_tz}'")
         local_tz = f"{m.group(1)}{int(m.group(2)):02d}:{m.group(3) or '00'}"
 
-    index = (args.index or f"registry-{args.hostname.lower()}").lower()
+    try:
+        host = sanitize_hostname(args.hostname)
+    except ValueError as exc:
+        sys.exit(str(exc))
+    index = (args.index or f"registry-{host}").lower()
     if args.index and index != args.index:
         print(f"note: Elasticsearch index names must be lower-case, using '{index}'\n")
 
@@ -482,7 +494,6 @@ def main():
     types, conflicts = merge_types(plan)
 
     ingest_time = dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    host = args.hostname.lower()
 
     loaded = sum(len(p["files"]) for p in plan.values())
     total_rows = sum(p["rows"] for p in plan.values())
@@ -541,14 +552,15 @@ def main():
         for f, fields, hive in p["files"]:
             meta = {"host": host, "tag": p["tag"], "hive": hive,
                     "source_file": f.name, "case": args.case}
-            # ID ignores the KAPE run timestamp in the file name, so a re-run doesn't duplicate
+            # ID = host + tool + file name (minus KAPE's run timestamp) + row position + row.
+            # Re-runs overwrite instead of duplicating; identical rows in a file stay separate.
             stable_name = re.sub(r"^\d{8,}_", "", f.name)
             rows = read_rows(f)
             next(rows)
-            for row in rows:
+            for n, row in enumerate(rows):
                 doc = build_doc(row, fields, write, renames, p["ts"], meta, ingest_time, local_tz)
                 doc_id = hashlib.sha1(json.dumps(
-                    [host, p["tag"], stable_name, row], ensure_ascii=False).encode()).hexdigest()
+                    [host, p["tag"], stable_name, n, row], ensure_ascii=False).encode()).hexdigest()
                 lines.append(json.dumps({"index": {"_index": index, "_id": doc_id}}))
                 lines.append(json.dumps(doc, ensure_ascii=False))
                 if len(lines) >= args.batch_size * 2:

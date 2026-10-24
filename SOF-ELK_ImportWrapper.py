@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Discover forensic exports recursively and run the matching SOF-ELK importer.
 
-Expected layout (as in sof_elk_all_importers.zip):
+Expected layout:
   SOF-ELK_ImportWrapper.py
-  csv_importers/<six CSV importers>
-  json_importers/<four JSON importers and sof_elk_json_bulk_common.py>
+  Windows/csv_importers/<thirteen CSV importers and sof_elk_csv_bulk_common.py>
+  Windows/json_importers/<four JSON importers and sof_elk_json_bulk_common.py>
 
 The wrapper only selects files and orchestrates the existing importers. It does not
 parse or index evidence itself.
@@ -45,6 +45,9 @@ CSV_IMPORTERS = {
     "SumECmd": ("sumecmd2sofelk.py", "sum"),
     "WxTCmd": ("wxtcmd2sofelk.py", "activitiescache"),
 }
+
+# CSV importers that do not accept --local-tz.
+NO_LOCAL_TZ = {"NirSoft BrowsingHistoryView", "ConvertUsageLogsTo-CSV"}
 
 BHV_HEADERS = {"url", "title", "visit time", "visit count", "visited from", "visit type",
                "visit duration", "web browser", "user profile", "browser profile", "url length",
@@ -176,7 +179,7 @@ def classify_csv(path: Path, headers: list[str]) -> set[str]:
 
 
 def discover(root: Path) -> tuple[dict[str, list[Path]], dict[str, list[Path]]]:
-    """Walk the tree once; return selected files for the four JSON and six CSV importers."""
+    """Walk the tree once; return selected files for the four JSON and thirteen CSV importers."""
     json_files = {name: [] for name in HYBRID_IMPORTERS}
     csv_files = {name: [] for name in CSV_IMPORTERS}
     # os.walk avoids materializing a list of every descendant path at once.
@@ -270,7 +273,7 @@ def add_common_cli_args(command: list[str], args: argparse.Namespace, *, is_json
     if not is_json:
         if args.case:
             command.extend(["--case", args.case])
-        if args.local_tz and label != "NirSoft BrowsingHistoryView":
+        if args.local_tz and label not in NO_LOCAL_TZ:
             command.extend(["--local-tz", args.local_tz])
     if args.dry_run:
         command.append("--dry-run")

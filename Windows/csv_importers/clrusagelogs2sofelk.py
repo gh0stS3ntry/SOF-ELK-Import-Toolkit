@@ -90,13 +90,16 @@ def set_nested(doc: dict, path: str, value):
     cur[parts[-1]] = value
 
 
+def sanitize_hostname(hostname: str) -> str:
+    """Lower-case host name safe for an Elasticsearch index name."""
+    value = re.sub(r"[^a-z0-9._-]+", "-", hostname.strip().lower()).strip("._-")
+    if not value:
+        raise ValueError("--hostname must contain at least one letter or digit")
+    return value
+
+
 def index_name(hostname: str) -> str:
-    host = hostname.strip().lower()
-    if not host:
-        raise ValueError("Hostname cannot be empty")
-    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", host):
-        raise ValueError(f"Invalid hostname for Elasticsearch index: {hostname}")
-    return f"{INDEX_PREFIX}-{host}"
+    return f"{INDEX_PREFIX}-{sanitize_hostname(hostname)}"
 
 
 def detect_csv(path: Path):
@@ -139,8 +142,11 @@ def runtime_from_path(file_path: str) -> str | None:
     return m.group(1) if m else None
 
 
-def stable_id(index: str, source_file: str, rownum: int, doc: dict) -> str:
-    basis = json.dumps({"index": index, "file": source_file, "row": rownum, "doc": doc},
+def stable_id(index: str, source_file: str, rownum: int, row: dict) -> str:
+    # Built from the raw CSV row, not the document, so the ingest-time fallback for
+    # rows without a timestamp does not change the ID between runs.
+    values = [[str(k), v] for k, v in row.items()]
+    basis = json.dumps({"index": index, "file": source_file, "row": rownum, "values": values},
                        sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha1(basis.encode("utf-8")).hexdigest()
 
@@ -235,7 +241,7 @@ def build_document(row: dict[str, str], hostname: str, source_file: str, rownum:
     event_ts = last_ts or first_ts
 
     doc = {
-        "host": {"name": hostname.strip().lower()},
+        "host": {"name": sanitize_hostname(hostname)},
         "kape": {
             "source_file": source_file,
             "timestamp_source": "LastExecutionTimestamp" if last_ts else "FirstExecutionTimestamp" if first_ts else "ingest_time",
@@ -282,6 +288,14 @@ def parse_args():
 
 def main():
     args = parse_args()
+    try:
+        return run(args)
+    except (RuntimeError, ValueError, error.URLError, OSError) as exc:
+        print(f"ERROR: {getattr(exc, 'reason', exc)}")
+        return 1
+
+
+def run(args):
     if args.batch_size < 1:
         raise SystemExit("--batch-size must be >= 1")
     root = Path(args.input)
@@ -302,8 +316,10 @@ def main():
     if args.dry_run:
         print("Mode: dry run")
     else:
-        status, _ = http_json(args.es, "GET", "/", headers=auth_header(args.user, args.password), insecure=args.insecure)
-        print(f"Connected to Elasticsearch {status and _ .get('version', {}).get('number', '?')}")
+        status, info = http_json(args.es, "GET", "/", headers=auth_header(args.user, args.password), insecure=args.insecure)
+        if status >= 300:
+            raise RuntimeError(f"Elasticsearch at {args.es} returned HTTP {status}: {json.dumps(info)[:300]}")
+        print(f"Connected to Elasticsearch {info.get('version', {}).get('number', '?')}")
         created = create_index(args.es, idx, args.user, args.password, args.insecure)
         print(f"{'Created' if created else 'Using existing'} index: {idx} (refresh disabled during initial bulk load)")
 
@@ -331,7 +347,7 @@ def main():
                         print("  SAMPLE", json.dumps(doc, ensure_ascii=False)[:1400])
                         samples += 1
                 else:
-                    batch.append({"_id": stable_id(idx, path.name, rownum, doc), "_source": doc})
+                    batch.append({"_id": stable_id(idx, path.name, rownum, row), "_source": doc})
                     if len(batch) >= args.batch_size:
                         s, e = bulk_index(args.es, idx, batch, args.user, args.password, args.insecure)
                         success += s
