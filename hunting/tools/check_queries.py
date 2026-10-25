@@ -11,7 +11,7 @@ It cannot run a query, but it catches the mistakes that cost the most time on a 
     (\\d / \\s / \\w, unescaped & @ ~ # < >, ^ / $ anchors, bounded repetition after .*);
   * LIKE patterns with a lone backslash (ES|QL LIKE uses backslash as its escape character);
   * every query folder has a README.md, every query is in the catalog in hunting/README.md,
-    and every query ID a checklist names exists.
+    every query ID a checklist names exists, and relative links in the pack's Markdown resolve.
 
 Usage:
     python3 hunting/tools/check_queries.py            # check the whole pack
@@ -316,6 +316,11 @@ def main():
         for ref in sorted(set(re.findall(r"\[([A-Z0-9]{2,4}-\d{2})\]", text))):
             if ref not in ids:
                 problems.append(("error", f"{md}: references unknown query {ref}"))
+
+    for md in sorted(PACK.rglob("*.md")):
+        for target in re.findall(r"\]\(([^)#\s]+)[^)]*\)", md.read_text(encoding="utf-8")):
+            if not re.match(r"^[a-z]+:", target) and not (md.parent / target).exists():
+                problems.append(("error", f"{md}: broken link to {target}"))
 
     errors = [p for p in problems if p[0] == "error"]
     for level, msg in problems:
