@@ -129,6 +129,26 @@ python3 Windows/csv_importers/nirsoft_bhv2sofelk.py /cases/IR-2026-042/BrowsingH
 python3 Windows/csv_importers/nirsoft_bhv2sofelk.py /cases/IR-2026-042/BrowsingHistory.csv --hostname WS01 --tz +08:00
 ```
 
+The wrapper treats a file as a BrowsingHistoryView export only if its header has `URL` plus at least two BrowsingHistoryView-specific columns (such as `Visit Time`, `Web Browser`, or `History File`), or if it is a headerless file named like `BrowsingHistory*` whose first value is a URL. Older wrapper versions matched any `Url` or `Title` column, so RECmd plugin CSVs (TypedURLs, SCSI) were also loaded into `browsinghistory-<hostname>`. Every RECmd row has a `BatchKeyPath` field and no `URL` field (it has `Url`), while every real BrowsingHistoryView row has `URL`. To find those leftover documents, then remove them:
+
+```esql
+FROM browsinghistory-* METADATA _index
+| WHERE BatchKeyPath IS NOT NULL OR URL IS NULL
+| STATS docs = COUNT(*) BY _index, ingest.source_file
+```
+
+```bash
+curl -s -X POST "http://localhost:9200/browsinghistory-*/_delete_by_query?conflicts=proceed" \
+  -H 'Content-Type: application/json' -d '{
+  "query": {"bool": {"should": [
+    {"exists": {"field": "BatchKeyPath"}},
+    {"bool": {"must_not": {"exists": {"field": "URL"}}}}
+  ], "minimum_should_match": 1}}
+}'
+```
+
+Run the ES|QL check first and confirm that it lists only RECmd files. The ES|QL check fails with an unknown-column error if no index has a `BatchKeyPath` field; that means there is nothing to clean up.
+
 ### 2. `jlecmd2sofelk.py`
 
 Loads JLECmd AutomaticDestinations and CustomDestinations CSV outputs into `jumplist-<hostname>`. It identifies Automatic versus Custom Jump Lists primarily from the filename and also considers CSV headers. It infers field types, normalizes EZ Tools timestamps, chooses a per-row `@timestamp` using the original FileFolderAccess priorities, extracts `user.name` from `SourceFile` paths where possible, and adds `kape.source_file`, `kape.timestamp_source`, and optional `case`. LOCAL time columns remain text unless `--local-tz` is supplied. The script merges same-named columns to a compatible type across both Jump List variants and stores conflicting values as strings. Stable IDs allow re-importing the same rows without duplication.
