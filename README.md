@@ -33,7 +33,9 @@ sof_elk_all_importers/
     ├── index_templates/
     │   ├── component-toolkit-common.json
     │   ├── index-amcache.json
+    │   ├── index-jumplist.json
     │   ├── index-registry.json
+    │   ├── index-shellbag.json
     │   └── index-shimcache.json
     └── json_importers/
         ├── mftecmd2sofelk.py
@@ -164,7 +166,7 @@ Run the ES|QL check first and confirm that it lists only RECmd files. The ES|QL 
 
 ### 2. `jlecmd2sofelk.py`
 
-Loads JLECmd AutomaticDestinations and CustomDestinations CSV outputs into `jumplist-<hostname>`. It identifies Automatic versus Custom Jump Lists primarily from the filename and also considers CSV headers. It infers field types, normalizes EZ Tools timestamps, chooses a per-row `@timestamp` using the original FileFolderAccess priorities, extracts `user.name` from `SourceFile` paths where possible, and adds `kape.source_file`, `kape.timestamp_source`, and optional `case`. LOCAL time columns remain text unless `--local-tz` is supplied. The script merges same-named columns to a compatible type across both Jump List variants and stores conflicting values as strings. Stable IDs allow re-importing the same rows without duplication.
+Loads JLECmd AutomaticDestinations and CustomDestinations CSV outputs into `jumplist-<hostname>` with a fixed schema, installing the `sofelk-toolkit-jumplist` index template (`jumplist-*`). It identifies Automatic versus Custom Jump Lists primarily from the filename and also considers CSV headers; `event.dataset` is `jumplist.automatic` or `jumplist.custom`. The embedded LNK target goes to ECS `file.path` (lower-cased, from `LocalPath`), `file.created`, `file.mtime`, `file.accessed` and `file.size`; the other columns are `jumplist.<snake_case>` (for example `jumplist.app_id`, `jumplist.entry_last_modified`, `jumplist.source.path`). `@timestamp` is the DestList entry's `LastModified`, falling back to the jump list file's `SourceModified`. `user.name` comes from the `SourceFile` path. Field reference: [`docs/schemas/jumplist.md`](docs/schemas/jumplist.md). `--local-tz` is accepted but not used (JLECmd output is UTC). An index created by the earlier inferred-type version is refused; delete it and reload the host. Stable IDs allow re-importing the same rows without duplication.
 
 Examples:
 
@@ -177,7 +179,7 @@ Expected filename clues include `*_AutomaticDestinations.csv` and `*_CustomDesti
 
 ### 3. `sbecmd2sofelk.py`
 
-Loads SBECmd ShellBags CSV outputs into `shellbag-<hostname>`. It detects ShellBags by characteristic fields such as `BagPath`, or `AbsolutePath` together with `ShellType`, and can also use an SBECmd filename clue. It infers types and timestamp values, extracts a user name from `SourceFile` paths or filenames when available, and adds `host.name`, `kape.source_file`, `kape.timestamp_source`, and optional `case`. It supports `--local-tz`, dry-run preview, compatible mapping updates, and stable document IDs.
+Loads SBECmd ShellBags CSV outputs into `shellbag-<hostname>` with a fixed schema, installing the `sofelk-toolkit-shellbag` index template (`shellbag-*`). It detects ShellBags by characteristic fields such as `BagPath`, or `AbsolutePath` together with `ShellType`, and can also use an SBECmd filename clue. Columns map to `shellbag.<snake_case>` (for example `shellbag.absolute_path`, `shellbag.last_interacted`), and the folder's MAC times from the shell item go to ECS `file.created`, `file.mtime` and `file.accessed`. `@timestamp` is `LastInteracted`, falling back to the bag key's `LastWriteTime`. `user.name` and `shellbag.hive` come from SBECmd's `<user>_NTUSER.csv` / `<user>_UsrClass.csv` file names. Field reference: [`docs/schemas/shellbag.md`](docs/schemas/shellbag.md). `--local-tz` is accepted but not used. An index created by the earlier inferred-type version is refused; delete it and reload the host.
 
 Example:
 
@@ -372,7 +374,7 @@ python3 Windows/json_importers/pecmd2sofelk.py /cases/IR-2026-042 --hostname WS0
 
 - CSV importers preserve the source-specific field transformations and type/timestamp behavior implemented for each importer. The original KAPE-derived CSV importers omit `forensic_tag` from stored documents as requested. The four JSON/CSV hybrid importers preserve their source-specific Logstash-derived transformations where implemented.
 - The evidence hostname is used to form each target index name. It is normalized to lowercase because Elasticsearch index names must be lowercase.
-- The AmcacheParser, ShimCache and RECmd importers use a fixed, template-defined schema (see [`docs/schemas/`](docs/schemas/)). The other scripts create an index if it does not exist, define explicit mappings for recognized non-string fields, and use dynamic string mappings. Existing mappings are checked before writing. CSV importers route incompatible field types to `<field>_text` where supported. JSON/CSV hybrid importers report bulk indexing rejections and exit non-zero when any documents are rejected.
+- The AmcacheParser, ShimCache, RECmd, JLECmd and SBECmd importers use a fixed, template-defined schema (see [`docs/schemas/`](docs/schemas/)). The other scripts create an index if it does not exist, define explicit mappings for recognized non-string fields, and use dynamic string mappings. Existing mappings are checked before writing. CSV importers route incompatible field types to `<field>_text` where supported. JSON/CSV hybrid importers report bulk indexing rejections and exit non-zero when any documents are rejected.
 - Importers use deterministic document IDs based on host and stable file/record properties so rerunning the same exports does not create duplicate logical documents. Identical rows within one file are kept as separate documents (by row position, or by a counter for BrowsingHistoryView).
 - **Upgrade note:** the document-ID scheme changed for the RECmd, JLECmd, SBECmd, and CLR usage-log importers. If a host was loaded with an earlier version of these importers, delete that host's documents (or its index) before re-importing, otherwise the old and new IDs produce duplicates.
 - `--dry-run` previews parsing/transformation and prints sample documents, but it does not prove that a live Elasticsearch cluster will accept every mapping. Always test representative output from your installed tool versions before loading production evidence.
