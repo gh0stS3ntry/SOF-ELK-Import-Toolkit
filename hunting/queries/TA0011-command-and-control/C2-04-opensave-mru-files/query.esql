@@ -1,0 +1,35 @@
+// C2-04 | Files chosen in Open/Save dialogs (OpenSaveMRU / OpenSavePidlMRU)
+// Tactic: TA0011 Command and Control | ATT&CK: T1105, T1204.002
+// Indexes: registry-* | Needs: RECmd OpenSavePidlMRU plugin and/or batch output with ComDlg32\OpenSave*MRU
+FROM registry-* METADATA _index
+| EVAL key_lower = TO_LOWER(COALESCE(registry.key, ""))
+| WHERE key_lower LIKE "*comdlg32*opensavemru*" OR key_lower LIKE "*comdlg32*opensavepidlmru*"
+| EVAL mru_type = CASE(key_lower LIKE "*opensavepidlmru*", "OpenSavePidlMRU", "OpenSaveMRU")
+| EVAL mru_ext = REPLACE(key_lower, "^.*opensave(pidl)?mru\\\\?", "")
+| WHERE COALESCE(registry.value, "") != "MRUListEx"
+| EVAL file_path = COALESCE(registry.plugin.absolute_path, MV_CONCAT(registry.data.strings, " "), registry.value_data2, registry.value_data3)
+| WHERE file_path IS NOT NULL AND file_path != ""
+// the batch CSV repeats each entry with an "Opened on" line in ValueData2; keep one copy
+| WHERE NOT COALESCE(registry.value_data2, "") LIKE "Opened*"
+| EVAL fp = TO_LOWER(file_path)
+| EVAL f_downloads = fp LIKE "*downloads*"
+| EVAL f_exec = fp RLIKE ".*[.](exe|dll|msi|scr|ps1|bat|cmd|vbs|js|hta|jar|lnk|iso|img|vhd|zip|rar|7z)"
+| EVAL f_network = fp RLIKE "\\\\\\\\.*|.*(https?://|my network places|network).*"
+| EVAL opened = COALESCE(registry.plugin.opened_on, registry.last_write)
+| KEEP
+    _index,
+    opened,
+    user.name,
+    mru_type,
+    mru_ext,
+    registry.plugin.mru_position,
+    file_path,
+    f_downloads,
+    f_exec,
+    f_network,
+    registry.value,
+    registry.key,
+    event.dataset,
+    kape.source_hive
+| SORT opened ASC
+| LIMIT 10000

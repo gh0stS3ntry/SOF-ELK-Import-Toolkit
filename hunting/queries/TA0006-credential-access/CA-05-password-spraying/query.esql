@@ -1,0 +1,41 @@
+// CA-05 | Password spraying: one source failing against many accounts
+// Tactic: TA0006 Credential Access | ATT&CK: T1110.003, T1110.001
+// Indexes: evtxlogs-* | Needs: Security 4625 (any host), 4771/4776 (domain controllers)
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE TO_STRING(winlog.channel) == "Security"
+| WHERE eid == "4625"
+     OR (eid == "4771" AND TO_STRING(winlog.payload.event_data.Status) == "0x18")
+     OR (eid == "4776" AND TO_LOWER(TO_STRING(winlog.payload.event_data.Status)) IN ("0xc000006a", "0xc0000064"))
+| EVAL account = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.TargetUserName), ""))
+| WHERE account != "" AND account != "-"
+| EVAL ip = REPLACE(COALESCE(TO_STRING(winlog.payload.event_data.IpAddress), "-"), "^::ffff:", "")
+| EVAL src = CASE(ip NOT IN ("-", "", "::1", "127.0.0.1"), ip,
+    COALESCE(TO_STRING(winlog.payload.event_data.WorkstationName), TO_STRING(winlog.payload.event_data.Workstation), "(local)"))
+| EVAL time_bucket = DATE_TRUNC(30 minutes, @timestamp)
+| STATS
+    failed_attempts = COUNT(*),
+    targeted_accounts = COUNT_DISTINCT(account),
+    accounts = VALUES(account),
+    event_ids = VALUES(eid),
+    logon_types = VALUES(winlog.payload.event_data.LogonType),
+    sub_status = VALUES(winlog.payload.event_data.SubStatus),
+    first_attempt = MIN(@timestamp),
+    last_attempt = MAX(@timestamp)
+  BY _index, src, time_bucket
+| WHERE failed_attempts >= 10 AND targeted_accounts >= 5
+| EVAL accounts = MV_SLICE(accounts, 0, 49)
+| KEEP
+    _index,
+    time_bucket,
+    src,
+    failed_attempts,
+    targeted_accounts,
+    first_attempt,
+    last_attempt,
+    event_ids,
+    logon_types,
+    sub_status,
+    accounts
+| SORT time_bucket ASC
+| LIMIT 10000

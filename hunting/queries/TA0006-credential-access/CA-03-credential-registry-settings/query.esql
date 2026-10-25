@@ -1,0 +1,53 @@
+// CA-03 | Registry settings that enable or hide credential theft, and tool traces
+// Tactic: TA0006 Credential Access | ATT&CK: T1003.001, T1112, T1547.005, T1550.002
+// Indexes: registry-* | Needs: RECmd batch output that dumps the Lsa, WDigest and CrashControl keys
+FROM registry-* METADATA _index
+| WHERE event.dataset == "registry.batch"
+| EVAL key_lower = TO_LOWER(COALESCE(registry.key, ""))
+| EVAL vname = TO_LOWER(COALESCE(registry.value, ""))
+| EVAL vdata = TRIM(COALESCE(MV_CONCAT(registry.data.strings, " "), ""))
+| EVAL vdata_l = TO_LOWER(vdata)
+| EVAL kind = CASE(
+    key_lower RLIKE ".*\\\\control\\\\securityproviders\\\\wdigest" AND vname == "uselogoncredential" AND vdata_l RLIKE "1|0x0*1|1[ ].*", "WDigest cleartext credential caching enabled",
+    key_lower RLIKE ".*\\\\control\\\\lsa" AND vname == "runasppl" AND vdata_l RLIKE "0|0x0+|0[ ].*", "LSA protection (RunAsPPL) explicitly disabled",
+    key_lower RLIKE ".*\\\\control\\\\lsa" AND vname == "lsacfgflags" AND vdata_l RLIKE "0|0x0+|0[ ].*", "Credential Guard explicitly disabled (LsaCfgFlags=0)",
+    key_lower RLIKE ".*\\\\control\\\\lsa" AND vname == "disablerestrictedadmin" AND vdata_l RLIKE "0|0x0+|0[ ].*", "RDP Restricted Admin mode enabled (pass-the-hash over RDP)",
+    key_lower RLIKE ".*\\\\control\\\\lsa" AND vname IN ("security packages", "notification packages", "authentication packages"), "LSA package list",
+    key_lower RLIKE ".*\\\\control\\\\lsa" AND vname == "disabledomaincreds" AND vdata_l RLIKE "0|0x0+|0[ ].*", "Domain credential caching allowed (DisableDomainCreds=0)",
+    key_lower RLIKE ".*\\\\windows nt\\\\currentversion\\\\winlogon" AND vname == "cachedlogonscount", "Cached logons count",
+    key_lower RLIKE ".*\\\\control\\\\crashcontrol" AND vname == "nmicrashdump" AND vdata_l RLIKE "1|0x0*1|1[ ].*", "NMI-triggered crash dump enabled",
+    key_lower RLIKE ".*\\\\software\\\\sysinternals\\\\(procdump|process explorer|livekd|psexec)(\\\\.*)?", "Sysinternals tool EULA key",
+    key_lower RLIKE ".*\\\\services\\\\(mimidrv|mimikatz|pmdump|dumpit|winpmem|rtcore64|dbutil_2_3|gdrv|iqvw64e|physmem)(\\\\.*)?", "Known dump/BYOVD driver service key",
+    null)
+| WHERE kind IS NOT NULL
+| EVAL f_pkg_bad = kind == "LSA package list" AND vdata_l RLIKE ".*(mimilib|mimikatz|mimilsa|memssp|kiwissp|mimi).*"
+| EVAL f_pkg_extra = kind == "LSA package list"
+    AND NOT vdata_l RLIKE "([ ,;|\"]|scecli|rassfm|msv1_0|kerberos|schannel|wdigest|tspkg|pku2u|cloudap|negoexts|livessp)*"
+| EVAL score = CASE(
+    kind LIKE "WDigest*", 5,
+    kind LIKE "Known dump*", 5,
+    f_pkg_bad, 5,
+    kind LIKE "LSA protection*", 4,
+    kind LIKE "RDP Restricted*", 4,
+    kind LIKE "Sysinternals*" AND key_lower LIKE "*procdump", 4,
+    kind LIKE "Sysinternals*", 3,
+    kind LIKE "Credential Guard*", 3,
+    f_pkg_extra, 3,
+    kind LIKE "NMI*", 2,
+    kind LIKE "Domain credential*", 1,
+    kind LIKE "Cached logons*" AND vdata_l NOT IN ("10", "0", "1", "2"), 1,
+    0)
+| WHERE score >= 2
+| KEEP
+    _index,
+    registry.last_write,
+    score,
+    kind,
+    user.name,
+    registry.value,
+    vdata,
+    registry.key,
+    registry.hive_path,
+    kape.source_file
+| SORT score DESC, registry.last_write DESC
+| LIMIT 3000

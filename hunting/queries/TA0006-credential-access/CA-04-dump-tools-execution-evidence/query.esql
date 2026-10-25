@@ -1,0 +1,60 @@
+// CA-04 | Credential dumping and memory dump tools in Amcache, ShimCache and SRUM
+// Tactic: TA0006 Credential Access | ATT&CK: T1003, T1003.001, T1003.003
+// Indexes: amcache-*, shimcache-*, srum-* | Needs: any of the three
+FROM amcache-*, shimcache-*, srum-* METADATA _index
+| EVAL exe_path = TO_LOWER(COALESCE(file.path, process.executable, ""))
+| WHERE exe_path != ""
+| EVAL exe_name = REPLACE(exe_path, "^.*\\\\", "")
+| EVAL category = CASE(
+    exe_name RLIKE ".*(mimikatz|mimilib|mimidrv|kekeo|safetykatz|sharpkatz|pypykatz|nanodump|dumpert|lsassy|handlekatz|sharpdump|lazagne|rubeus|pwdump|fgdump|gsecdump|cachedump|quarkspwdump|secretsdump|dumpcreds).*[.](exe|dll|sys)"
+      OR exe_name IN ("wce.exe", "wce64.exe"), "Credential-dumping tool",
+    exe_name IN ("procdump.exe", "procdump64.exe", "procdump64a.exe", "dumpit.exe", "winpmem.exe", "avdump.exe", "processdump.exe", "sqldumper.exe", "createdump.exe", "rdrleakdiag.exe"), "Process/memory dump utility",
+    exe_name RLIKE "(procexp|procexp64|processhacker.*|systeminformer|pchunter.*|livekd.*)[.]exe", "Process-inspection tool",
+    exe_name IN ("ntdsutil.exe", "vssadmin.exe", "diskshadow.exe", "esentutl.exe", "wbadmin.exe"), "NTDS/VSS-related LOLBin",
+    null)
+| WHERE category IS NOT NULL
+| EVAL artifact = REPLACE(_index, "-.*$", "")
+| EVAL ts = COALESCE(amcache.file_key_last_write, file.mtime, srum.timestamp)
+| EVAL f_userpath = exe_path RLIKE ".*\\\\(users|programdata|perflogs|temp|appdata|downloads)\\\\.*"
+| EVAL f_standard = exe_path RLIKE ".*\\\\(program files|program files [(]x86[)]|windows\\\\system32|windows\\\\syswow64|windows\\\\sysnative)\\\\.*"
+| EVAL exe_norm = REPLACE(exe_path, "^(\\\\device\\\\harddiskvolume[0-9]+|[a-z]:)", "")
+| STATS
+    host_count = COUNT_DISTINCT(_index),
+    occurrences = COUNT(*),
+    artifacts = VALUES(artifact),
+    users = VALUES(user.name),
+    fg_written = SUM(srum.foreground_bytes_written),
+    bg_written = SUM(srum.background_bytes_written),
+    in_userpath = MAX(TO_INTEGER(f_userpath)),
+    in_standard_dir = MAX(TO_INTEGER(f_standard)),
+    sha1_values = VALUES(file.hash.sha1),
+    first_seen = MIN(ts),
+    last_seen = MAX(ts),
+    source_indices = VALUES(_index)
+  BY exe_norm, exe_name, category
+| EVAL written_mb = ROUND((COALESCE(TO_DOUBLE(fg_written), 0.0) + COALESCE(TO_DOUBLE(bg_written), 0.0)) / 1048576.0, 1)
+| EVAL score = CASE(
+    category == "Credential-dumping tool", 6,
+    category == "Process/memory dump utility", 3,
+    2)
+    + CASE(in_userpath == 1, 3, 0)
+    + CASE(in_standard_dir == 0, 1, 0)
+    + CASE(host_count <= 2, 1, 0)
+| WHERE score >= 3
+| KEEP
+    source_indices,
+    host_count,
+    score,
+    category,
+    artifacts,
+    users,
+    written_mb,
+    in_userpath,
+    in_standard_dir,
+    sha1_values,
+    first_seen,
+    last_seen,
+    exe_name,
+    exe_norm
+| SORT score DESC, host_count ASC
+| LIMIT 1000

@@ -1,0 +1,70 @@
+// EX-08 | Script interpreter execution (Python, WSH, mshta, PowerShell) across event sources
+// Tactic: TA0002 Execution | ATT&CK: T1059.001, T1059.005, T1059.006, T1059.007, T1218.005
+// Indexes: evtxlogs-* | Needs: PowerShell Operational 4104 on at least one host; adds Security 4688 / Sysmon 1 when present
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| WHERE (ch == "Security" AND eid == "4688")
+     OR (ch == "Microsoft-Windows-Sysmon/Operational" AND eid == "1")
+     OR (ch == "Microsoft-Windows-PowerShell/Operational" AND eid == "4104")
+// kape.executable_info is "<image> <command line>" for 4688 and Sysmon 1; 4104 keeps its text in ScriptBlockText
+| EVAL txt = TO_LOWER(CONCAT(
+    COALESCE(TO_STRING(kape.executable_info), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.ScriptBlockText), "")))
+| EVAL f_python = txt RLIKE ".*\\\\(python[0-9.]*|pythonw[0-9.]*|py|pyw)[.]exe.*"
+| EVAL f_wsh = txt RLIKE ".*\\\\(wscript|cscript)[.]exe.*"
+| EVAL f_mshta = txt RLIKE ".*\\\\mshta[.]exe.*"
+| EVAL f_ps = txt RLIKE ".*\\\\(powershell|pwsh|powershell_ise)[.]exe.*"
+| EVAL f_other = txt RLIKE ".*\\\\(perl|ruby|node|lua|php|jsc|autoit3|autohotkey|autohotkey64)[.]exe.*"
+| EVAL f_interp = f_python OR f_wsh OR f_mshta OR f_ps OR f_other
+| EVAL f_py_kw = txt RLIKE ".*(import socket|import subprocess|import base64|import ctypes|import urllib|import pty|pty[.]spawn|os[.]system|subprocess[.]popen|ctypes[.]windll|marshal[.]loads|zlib[.]decompress|base64[.]b64decode|socket[.]socket).*"
+| EVAL f_scripting_api = txt RLIKE ".*(wscript[.]shell|createobject|scripting[.]filesystemobject|adodb[.]stream|msxml2[.]xmlhttp|winhttp[.]winhttprequest|shell[.]application|activexobject|wscript[.]sleep|getobject[(]).*"
+| WHERE f_interp OR f_py_kw OR f_scripting_api
+| EVAL f_inline = (f_python AND txt RLIKE ".*[ ]-c[ ].*")
+    OR (f_wsh AND txt RLIKE ".*(//e:|//b[ ]|//nologo).*")
+    OR (f_mshta AND txt RLIKE ".*(vbscript:|javascript:|http:|https:|about:).*")
+    OR (f_ps AND txt RLIKE ".*(-enc|-encodedcommand|-nop|-noprofile|-w[ ]+hidden|-windowstyle[ ]+hidden|iex[ (]|invoke-expression|downloadstring|frombase64string).*")
+| EVAL f_userpath = txt RLIKE ".*\\\\(appdata|temp|programdata|users\\\\public|downloads|desktop|perflogs)\\\\.*"
+| EVAL f_script_ext = txt RLIKE ".*[.](vbs|vbe|jse|wsf|wsh|hta|pyw|pyc|py)[^a-z0-9].*"
+| EVAL f_net = txt RLIKE ".*(http://|https://|ftp://).*"
+| EVAL f_obf = txt RLIKE ".*(frombase64string|b64decode|-enc[ ]|-encodedcommand|chr[(]|chrw[(]|strreverse).*"
+| EVAL f_office_parent = f_interp AND txt RLIKE ".*(parentimage|creator process name).*(winword|excel|powerpnt|outlook|onenote|msaccess|mspub|visio)[.]exe.*"
+| EVAL score = CASE(f_interp, 1, 0)
+    + CASE(f_py_kw, 3, 0)
+    + CASE(f_office_parent, 3, 0)
+    + CASE(f_inline, 2, 0)
+    + CASE(f_obf, 2, 0)
+    + CASE(f_interp AND f_userpath, 2, 0)
+    + CASE(f_interp AND f_script_ext, 1, 0)
+    + CASE(f_interp AND f_net, 1, 0)
+    + CASE(f_scripting_api, 1, 0)
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_python, "python; ", ""),
+    CASE(f_wsh, "wscript/cscript; ", ""),
+    CASE(f_mshta, "mshta; ", ""),
+    CASE(f_ps, "powershell; ", ""),
+    CASE(f_other, "other interpreter; ", ""),
+    CASE(f_py_kw, "python payload keywords; ", ""),
+    CASE(f_scripting_api, "VBS/JS scripting API; ", ""),
+    CASE(f_inline, "inline/encoded/hidden execution; ", ""),
+    CASE(f_obf, "obfuscation/base64; ", ""),
+    CASE(f_interp AND f_userpath, "user-writable path; ", ""),
+    CASE(f_interp AND f_script_ext, "script file argument; ", ""),
+    CASE(f_interp AND f_net, "network URL; ", ""),
+    CASE(f_office_parent, "spawned by Office app; ", "")
+  ), "; $", "")
+| EVAL cmd_preview = SUBSTRING(TRIM(txt), 1, 1500)
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    ch,
+    eid,
+    score,
+    reasons,
+    kape.map_description,
+    winlog.payload.event_data.SubjectUserName,
+    user.id,
+    cmd_preview
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

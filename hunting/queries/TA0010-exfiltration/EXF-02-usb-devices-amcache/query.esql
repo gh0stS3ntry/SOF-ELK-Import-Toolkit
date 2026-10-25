@@ -1,0 +1,30 @@
+// EXF-02 | Plug and Play devices recorded in Amcache (removable storage, phones, keyboards)
+// Tactic: TA0010 Exfiltration | ATT&CK: T1052.001, T1200
+// Indexes: amcache-* | Needs: AmcacheParser DevicePnps output
+FROM amcache-* METADATA _index
+| WHERE event.dataset == "amcache.device_pnps"
+| EVAL id = TO_LOWER(COALESCE(amcache.key_name, amcache.parent_id, ""))
+| EVAL cls = TO_LOWER(COALESCE(amcache.class, ""))
+| EVAL desc = COALESCE(amcache.bus_reported_description, amcache.description, amcache.model, "")
+| WHERE id RLIKE ".*(usbstor|usb\\\\|scsi\\\\|swd\\\\wpdbusenum|wpd|sd\\\\|sdbus|mtp).*"
+    OR cls IN ("diskdrive", "wpd", "volume", "usb", "keyboard", "hidclass", "media", "image")
+| EVAL kind = CASE(
+    id LIKE "*usbstor*" OR (cls == "diskdrive" AND id RLIKE ".*(usb|scsi).*"), "USB storage",
+    id LIKE "*wpdbusenum*" OR cls == "wpd" OR id LIKE "*mtp*", "Portable device (phone, camera, MTP)",
+    cls IN ("keyboard", "hidclass") AND id LIKE "*usb*", "USB keyboard / HID",
+    cls == "volume", "Volume",
+    CONCAT("other (", cls, ")"))
+| EVAL f_badusb = TO_LOWER(desc) RLIKE ".*(rubber|ducky|teensy|digispark|arduino|leonardo|promicro|malduino|bashbunny|hak5|flipper).*"
+    OR id RLIKE ".*vid_(16c0|2341|1b4f|239a|2e8a|1209).*"
+| STATS
+    first_seen = MIN(amcache.key_last_write),
+    last_seen = MAX(amcache.key_last_write),
+    descriptions = VALUES(desc),
+    manufacturers = VALUES(amcache.manufacturer),
+    badusb = MAX(TO_INTEGER(f_badusb)),
+    host_count = COUNT_DISTINCT(_index),
+    source_indices = VALUES(_index)
+  BY kind, id
+| KEEP source_indices, host_count, kind, badusb, first_seen, last_seen, descriptions, manufacturers, id
+| SORT badusb DESC, last_seen DESC
+| LIMIT 10000

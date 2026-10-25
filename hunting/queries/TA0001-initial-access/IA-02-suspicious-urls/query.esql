@@ -1,0 +1,68 @@
+// IA-02 | Suspicious URLs in browsing history
+// Tactic: TA0001 Initial Access | ATT&CK: T1566.002, T1189, T1204.001
+// Indexes: browsinghistory-* | Needs: BrowsingHistoryView
+FROM browsinghistory-* METADATA _index
+| WHERE url.original IS NOT NULL AND url.original != ""
+| EVAL full_url = url.original
+| EVAL url_lower = TO_LOWER(full_url)
+| EVAL url_path = REPLACE(url_lower, "[?#].*$", "")
+| EVAL host_name = COALESCE(TO_LOWER(url.domain), REPLACE(url_lower, "^[a-z][a-z0-9+.\\-]*://([^/?#@]*@)?([^/?#:]+).*$", "$2"))
+| EVAL f_exfil_webhook = url_lower RLIKE ".*(discord(app)?[.]com/api/webhooks|hooks[.]slack[.]com/services|api[.]telegram[.]org/bot).*"
+| EVAL f_scheme_abuse = url_lower RLIKE "(javascript|vbscript|data|ms-msdt|search-ms|ms-officecmd|ms-appinstaller|mhtml|jnlp):.*"
+| EVAL f_offensive_kw = url_lower RLIKE ".*(mimikatz|rubeus|sharphound|bloodhound|cobalt-?strike|sliver|metasploit|meterpreter|lazagne|impacket|nanodump|brute-?ratel|powersploit|powerview|covenant|havoc-c2|nc64|netcat).*"
+| EVAL f_ip_host = host_name RLIKE "[0-9]{1,3}([.][0-9]{1,3}){3}" OR host_name RLIKE "[\\[].*[\\]]" OR host_name RLIKE "0x[0-9a-f]+"
+| EVAL f_userinfo = url_lower RLIKE "(https?|ftp)://[^/?#]*[@].*"
+| EVAL f_tunnel_ddns = host_name RLIKE "(.*[.])?(ngrok[.]io|ngrok-free[.]app|ngrok[.]app|trycloudflare[.]com|serveo[.]net|loca[.]lt|localtunnel[.]me|duckdns[.]org|no-ip[.](com|org|biz)|ddns[.]net|hopto[.]org|zapto[.]org|sytes[.]net|serveftp[.]com|webhop[.]me|myftp[.]org)"
+| EVAL f_paste_share = host_name RLIKE "(.*[.])?(pastebin[.]com|paste[.]ee|hastebin[.]com|ghostbin[.]com|transfer[.]sh|anonfiles[.]com|file[.]io|gofile[.]io|mega[.]nz|mediafire[.]com|temp[.]sh|0x0[.]st|catbox[.]moe|sendspace[.]com|cdn[.]discordapp[.]com|raw[.]githubusercontent[.]com|gist[.]githubusercontent[.]com|workers[.]dev|pages[.]dev|glitch[.]me|repl[.]co)"
+| EVAL f_exec_download = url_path RLIKE ".*[.](exe|dll|msi|scr|ps1|bat|cmd|vbs|vbe|js|jse|wsf|hta|jar|lnk|iso|img|vhd|vhdx|cab|chm|xll)"
+| EVAL f_punycode = host_name LIKE "*xn--*"
+| EVAL f_shortener = host_name IN ("bit.ly", "tinyurl.com", "t.co", "goo.gl", "is.gd", "cutt.ly", "rebrand.ly", "shorturl.at", "ow.ly", "buff.ly", "tiny.cc", "rb.gy", "bl.ink", "s.id")
+| EVAL f_risky_tld = host_name RLIKE ".*[.](zip|mov|top|xyz|tk|ml|ga|cf|gq|click|icu|cyou|buzz|monster|cfd|sbs|rest|surf|cam)"
+| EVAL f_odd_port = url_lower RLIKE "(https?|ftp)://[^/?#]*:[0-9]{2,5}([/?#].*)?" AND NOT url_lower RLIKE "(https?|ftp)://[^/?#]*:(80|443)([/?#].*)?"
+| EVAL f_long_url = LENGTH(full_url) > 300
+| EVAL f_encoded_blob = url_lower RLIKE ".*[a-z0-9+/=_\\-]{120,}.*" OR url_lower RLIKE ".*(%[0-9a-f]{2}){8,}.*"
+| EVAL f_phish_kw = url_path RLIKE ".*(login|signin|sign-in|verify|password|webmail|owa|office365|secure-?update|account-?update).*"
+    AND NOT host_name RLIKE "(.*[.])?(microsoft[.]com|microsoftonline[.]com|live[.]com|office[.]com|office365[.]com|google[.]com|github[.]com)"
+| EVAL f_remote_tool = host_name RLIKE "(.*[.])?(anydesk[.]com|teamviewer[.]com|screenconnect[.]com|connectwise[.]com|rustdesk[.]com|splashtop[.]com|ultraviewer[.]net|getscreen[.]me)"
+| EVAL score = CASE(f_exfil_webhook, 3, 0) + CASE(f_scheme_abuse, 3, 0) + CASE(f_offensive_kw, 2, 0)
+    + CASE(f_ip_host, 2, 0) + CASE(f_userinfo, 2, 0) + CASE(f_tunnel_ddns, 2, 0) + CASE(f_paste_share, 2, 0)
+    + CASE(f_exec_download, 2, 0) + CASE(f_punycode, 2, 0) + CASE(f_shortener, 1, 0) + CASE(f_risky_tld, 1, 0)
+    + CASE(f_odd_port, 1, 0) + CASE(f_long_url, 1, 0) + CASE(f_encoded_blob, 1, 0) + CASE(f_phish_kw, 1, 0)
+    + CASE(f_remote_tool, 1, 0)
+| WHERE score > 0
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_exfil_webhook, "webhook/bot exfil endpoint; ", ""),
+    CASE(f_scheme_abuse, "abusable URI scheme; ", ""),
+    CASE(f_offensive_kw, "offensive tool keyword; ", ""),
+    CASE(f_ip_host, "IP-literal host; ", ""),
+    CASE(f_userinfo, "credentials/userinfo in URL; ", ""),
+    CASE(f_tunnel_ddns, "tunnel/dynamic DNS host; ", ""),
+    CASE(f_paste_share, "paste/file-share/abusable hosting; ", ""),
+    CASE(f_exec_download, "executable/script/image download; ", ""),
+    CASE(f_punycode, "punycode domain; ", ""),
+    CASE(f_shortener, "URL shortener; ", ""),
+    CASE(f_risky_tld, "high-abuse TLD; ", ""),
+    CASE(f_odd_port, "non-standard port; ", ""),
+    CASE(f_long_url, "very long URL; ", ""),
+    CASE(f_encoded_blob, "encoded/blob-like content; ", ""),
+    CASE(f_phish_kw, "phishing-style keyword; ", ""),
+    CASE(f_remote_tool, "remote access tool site; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    browsinghistory.visit_time,
+    user.name,
+    browsinghistory.web_browser,
+    browsinghistory.browser_profile,
+    score,
+    reasons,
+    full_url,
+    host_name,
+    browsinghistory.title,
+    browsinghistory.visit_count,
+    browsinghistory.typed_count,
+    browsinghistory.visit_type,
+    browsinghistory.visited_from,
+    browsinghistory.history_file
+| SORT score DESC, browsinghistory.visit_time ASC
+| LIMIT 10000

@@ -1,0 +1,27 @@
+// DI-06 | Bursts of discovery commands from one account (process creation)
+// Tactic: TA0007 Discovery | ATT&CK: T1082, T1016, T1049, T1057, T1033, T1087, T1018
+// Indexes: evtxlogs-* | Needs: Security 4688 or Sysmon 1 (image names are enough)
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| WHERE (ch == "Security" AND eid == "4688") OR (ch == "Microsoft-Windows-Sysmon/Operational" AND eid == "1")
+// kape.executable_info is "<image> <command line>" for both sources
+| EVAL ei = TO_LOWER(TRIM(COALESCE(TO_STRING(kape.executable_info), "")))
+| EVAL image_name = REPLACE(REPLACE(ei, "^\"?([^\"]*?[.]exe).*$", "$1"), "^.*\\\\", "")
+| WHERE image_name IN ("whoami.exe", "hostname.exe", "systeminfo.exe", "ipconfig.exe", "arp.exe", "route.exe", "netstat.exe", "nbtstat.exe", "net.exe", "net1.exe", "nltest.exe", "nslookup.exe", "ping.exe", "tasklist.exe", "qprocess.exe", "query.exe", "quser.exe", "qwinsta.exe", "klist.exe", "cmdkey.exe", "dsquery.exe", "dsget.exe", "adfind.exe", "setspn.exe", "gpresult.exe", "wmic.exe", "sc.exe", "reg.exe", "fsutil.exe", "netsh.exe", "tracert.exe", "pathping.exe", "ver.exe", "csvde.exe", "ldifde.exe")
+| EVAL account = COALESCE(TO_STRING(winlog.payload.event_data.SubjectUserName), TO_STRING(user.id), "")
+| WHERE NOT account LIKE "*$"
+| EVAL time_bucket = DATE_TRUNC(10 minutes, @timestamp)
+| STATS
+    commands = COUNT(*),
+    distinct_tools = COUNT_DISTINCT(image_name),
+    tools = VALUES(image_name),
+    sample_cmds = VALUES(ei),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, account, time_bucket
+| WHERE distinct_tools >= 4
+| EVAL sample_cmds = MV_SLICE(sample_cmds, 0, 19)
+| KEEP _index, time_bucket, account, distinct_tools, commands, tools, first_seen, last_seen, sample_cmds
+| SORT distinct_tools DESC, time_bucket ASC
+| LIMIT 5000

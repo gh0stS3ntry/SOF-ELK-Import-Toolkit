@@ -1,0 +1,49 @@
+// PR-01 | Accounts given sensitive privileges at logon (Security 4672), by rarity
+// Tactic: TA0004 Privilege Escalation | ATT&CK: T1078, T1134
+// Indexes: evtxlogs-* | Needs: Security 4672 ("Audit Special Logon", on by default)
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE TO_STRING(winlog.channel) == "Security" AND eid == "4672"
+| EVAL account = CONCAT(COALESCE(TO_STRING(winlog.payload.event_data.SubjectDomainName), ""), "\\", COALESCE(TO_STRING(winlog.payload.event_data.SubjectUserName), ""))
+| EVAL user_l = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.SubjectUserName), ""))
+// built-in service identities and machine accounts get these privileges at every boot
+| WHERE NOT user_l IN ("system", "local service", "network service", "-", "")
+    AND NOT user_l LIKE "*$"
+    AND NOT user_l LIKE "dwm-*" AND NOT user_l LIKE "umfd-*"
+| EVAL privs = TO_LOWER(COALESCE(MV_CONCAT(winlog.payload.event_data.PrivilegeList, " "), ""))
+| EVAL f_debug = privs LIKE "*sedebugprivilege*"
+| EVAL f_tcb = privs LIKE "*setcbprivilege*"
+| EVAL f_backup = privs LIKE "*sebackupprivilege*" OR privs LIKE "*serestoreprivilege*"
+| EVAL f_driver = privs LIKE "*seloaddriverprivilege*"
+| EVAL f_impersonate = privs LIKE "*seimpersonateprivilege*" OR privs LIKE "*seassignprimarytokenprivilege*"
+| EVAL f_delegation = privs LIKE "*seenabledelegationprivilege*"
+| STATS
+    logons = COUNT(*),
+    hosts = COUNT_DISTINCT(_index),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    debug = MAX(TO_INTEGER(f_debug)),
+    tcb = MAX(TO_INTEGER(f_tcb)),
+    backup_restore = MAX(TO_INTEGER(f_backup)),
+    load_driver = MAX(TO_INTEGER(f_driver)),
+    impersonate = MAX(TO_INTEGER(f_impersonate)),
+    enable_delegation = MAX(TO_INTEGER(f_delegation)),
+    source_indices = VALUES(_index)
+  BY account
+| EVAL score = CASE(logons <= 5, 2, 0) + CASE(hosts == 1, 1, 0) + tcb * 2 + enable_delegation * 2 + load_driver + debug
+| KEEP
+    account,
+    score,
+    logons,
+    hosts,
+    first_seen,
+    last_seen,
+    debug,
+    tcb,
+    backup_restore,
+    load_driver,
+    impersonate,
+    enable_delegation,
+    source_indices
+| SORT score DESC, logons ASC
+| LIMIT 5000

@@ -1,0 +1,46 @@
+// PE-21 | Group Policy scripts, scheduled tasks and preferences in SYSVOL ($MFT and $J)
+// Tactic: TA0003 Persistence | ATT&CK: T1484.001, T1053.005, T1037.003, T1552.006
+// Indexes: filesystem-* | Needs: MFTECmd $MFT and/or $J from a domain controller
+FROM filesystem-* METADATA _index
+| EVAL p = TO_LOWER(COALESCE(TO_STRING(file.path), CONCAT(COALESCE(TO_STRING(file.directory), ""), "\\", COALESCE(TO_STRING(file.name), ""))))
+| WHERE p RLIKE ".*\\\\sysvol\\\\.*\\\\(policies|scripts)\\\\.*"
+| EVAL fname = TO_LOWER(COALESCE(TO_STRING(file.name), ""))
+| WHERE fname != "" AND COALESCE(TO_STRING(file.type), "") != "dir"
+| EVAL record_type = CASE(file.update_reasons IS NOT NULL, "USN $J", "$MFT")
+| EVAL reasons_usn = MV_CONCAT(TO_UPPER(TO_STRING(file.update_reasons)), ",")
+| EVAL gpo_guid = REPLACE(p, "^.*\\\\policies\\\\(\\{[^}]+\\}).*$", "$1")
+| EVAL item = CASE(
+    fname == "scheduledtasks.xml", "GPP scheduled task",
+    fname IN ("scripts.ini", "psscripts.ini"), "Startup/logon script list",
+    p RLIKE ".*\\\\(machine|user)\\\\scripts\\\\(startup|shutdown|logon|logoff)\\\\.*", "Script file in GPO",
+    p RLIKE ".*\\\\sysvol\\\\[^\\\\]+\\\\scripts\\\\.*", "NETLOGON script",
+    fname IN ("groups.xml", "services.xml", "datasources.xml", "drives.xml", "printers.xml"), "GPP item (may hold cpassword)",
+    fname == "registry.xml", "GPP registry item",
+    fname == "registry.pol", "Registry.pol (administrative template)",
+    fname == "gpttmpl.inf", "Security template (rights, groups)",
+    fname == "gpt.ini", "GPO version",
+    fname RLIKE ".*[.](exe|dll|ps1|bat|cmd|vbs|js|hta|msi)", "Executable or script in SYSVOL",
+    "Other")
+| EVAL f_exec = fname RLIKE ".*[.](exe|dll|ps1|bat|cmd|vbs|vbe|js|jse|wsf|hta|msi|scr)"
+| EVAL f_task = fname == "scheduledtasks.xml"
+| EVAL f_cpassword_file = fname IN ("groups.xml", "services.xml", "scheduledtasks.xml", "datasources.xml", "drives.xml", "printers.xml")
+| EVAL score = CASE(f_task, 3, 0) + CASE(f_exec, 3, 0) + CASE(item == "Startup/logon script list", 2, 0)
+    + CASE(item == "Security template (rights, groups)", 1, 0) + CASE(f_cpassword_file, 1, 0)
+| EVAL event_time = CASE(record_type == "USN $J", @timestamp, COALESCE(file.stdinfo.mtime, file.stdinfo.created))
+| KEEP
+    _index,
+    record_type,
+    event_time,
+    score,
+    item,
+    gpo_guid,
+    file.name,
+    p,
+    file.size,
+    reasons_usn,
+    file.stdinfo.created,
+    file.stdinfo.mtime,
+    file.filename.created,
+    kape.mft.inuse
+| SORT event_time DESC
+| LIMIT 10000

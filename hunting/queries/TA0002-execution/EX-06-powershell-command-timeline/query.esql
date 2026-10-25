@@ -1,0 +1,45 @@
+// EX-06 | PowerShell commands in time order, with user and host application
+// Tactic: TA0002 Execution | ATT&CK: T1059.001
+// Indexes: evtxlogs-* | Needs: Windows PowerShell 400/600/800 or PowerShell Operational 4103
+FROM evtxlogs-* METADATA _index
+| WHERE winlog.channel LIKE "*PowerShell*" OR winlog.provider_name LIKE "*PowerShell*"
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| EVAL event_string = MV_CONCAT(winlog.payload.event_data.string, ", ")
+| GROK event_string "UserId=%{GREEDYDATA:user_account}"
+| GROK event_string "HostName=%{GREEDYDATA:powershell_execution_vector}"
+| GROK event_string "HostApplication=%{GREEDYDATA:command_line}"
+| EVAL command_line = TRIM(REPLACE(REPLACE(REPLACE(command_line, "&gt;", ">"), "&lt;", "<"), "&amp;", "&"))
+| GROK event_string "CommandLine=%{GREEDYDATA:command_line2}"
+| EVAL command_line2 = TRIM(REPLACE(REPLACE(REPLACE(command_line2, "&gt;", ">"), "&lt;", "<"), "&amp;", "&"))
+| EVAL user_account = TRIM(user_account)
+| EVAL command_line = COALESCE(command_line, ""), command_line2 = COALESCE(command_line2, "")
+| WHERE command_line != "" OR command_line2 != ""
+// bare powershell.exe with no arguments
+| WHERE command_line NOT LIKE "C:*Windows*System32*WindowsPowerShell*v1.0*powershell.exe"
+// known good from public literature
+  AND command_line NOT LIKE "C:*Program Files (x86)*Microsoft SQL Server*Tools*Binn*SQLPS.exe agentjob"
+  AND command_line NOT LIKE "C:*Windows*system32*ServerManager.exe*"
+// CrowdStrike RTR session artefact
+  AND command_line NOT LIKE "C:*Windows*system32*DllHost.exe /Processid:{BD07DDB9-1C61-4DCE-9202-A2BA1757CDB2}"
+// evidence collection by the IR team: adjust to your own collection tooling
+  AND command_line NOT LIKE "*KAPE_EDR*"
+  AND command_line2 NOT LIKE "*KAPE*"
+// group identical events written to more than one channel
+| STATS
+    eids = VALUES(eid),
+    user_accounts = VALUES(user_account)
+  BY @timestamp, _index, ch, powershell_execution_vector, command_line, command_line2
+| EVAL eid = MV_CONCAT(eids, ", ")
+| EVAL user_account = MV_CONCAT(user_accounts, ", ")
+| KEEP
+    @timestamp,
+    _index,
+    ch,
+    eid,
+    user_account,
+    powershell_execution_vector,
+    command_line,
+    command_line2
+| SORT @timestamp ASC
+| LIMIT 10000

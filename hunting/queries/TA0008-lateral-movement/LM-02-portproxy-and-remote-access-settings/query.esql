@@ -1,0 +1,53 @@
+// LM-02 | netsh portproxy rules, RDP enablement and remote-admin settings in the registry
+// Tactic: TA0008 Lateral Movement | ATT&CK: T1090.001, T1021.001, T1112, T1548.002
+// Indexes: registry-* | Needs: RECmd batch output with Services\PortProxy, Terminal Server and Policies\System keys
+FROM registry-* METADATA _index
+| WHERE event.dataset == "registry.batch"
+| EVAL key_lower = TO_LOWER(COALESCE(registry.key, ""))
+| EVAL vname = TO_LOWER(COALESCE(registry.value, ""))
+| EVAL vdata = TRIM(TO_LOWER(COALESCE(MV_CONCAT(registry.data.strings, " "), "")))
+| EVAL kind = CASE(
+    key_lower RLIKE ".*\\\\services\\\\portproxy\\\\(v4tov4|v4tov6|v6tov4|v6tov6)\\\\tcp(\\\\.*)?", "netsh portproxy rule",
+    key_lower RLIKE ".*\\\\control\\\\terminal server" AND vname == "fdenytsconnections" AND vdata RLIKE "0|0x0+|0[ ].*", "RDP enabled (fDenyTSConnections=0)",
+    key_lower RLIKE ".*\\\\terminal server\\\\winstations\\\\rdp-tcp" AND vname == "userauthentication" AND vdata RLIKE "0|0x0+|0[ ].*", "RDP Network Level Authentication disabled",
+    key_lower RLIKE ".*\\\\terminal server\\\\winstations\\\\rdp-tcp" AND vname == "portnumber" AND NOT vdata RLIKE "3389.*|0x0*d3d.*", "RDP listening on non-default port",
+    key_lower RLIKE ".*\\\\control\\\\terminal server" AND vname == "fsinglesessionperuser" AND vdata RLIKE "0|0x0+|0[ ].*", "Multiple RDP sessions per user allowed",
+    key_lower RLIKE ".*\\\\policies\\\\system" AND vname == "localaccounttokenfilterpolicy" AND vdata RLIKE "1|0x0*1|1[ ].*", "Remote UAC filtering disabled (LocalAccountTokenFilterPolicy=1)",
+    key_lower RLIKE ".*\\\\terminal server client\\\\(servers|default)(\\\\.*)?", "Outbound RDP history (client MRU)",
+    null)
+| WHERE kind IS NOT NULL
+| EVAL is_pp = kind == "netsh portproxy rule"
+| EVAL listen_addr = CASE(is_pp, MV_FIRST(SPLIT(vname, "/")), null)
+| EVAL listen_port = CASE(is_pp, MV_LAST(SPLIT(vname, "/")), null)
+| EVAL connect_addr = CASE(is_pp, MV_FIRST(SPLIT(vdata, "/")), null)
+| EVAL connect_port = CASE(is_pp, MV_LAST(SPLIT(vdata, "/")), null)
+| EVAL f_lateral_port = COALESCE(connect_port IN ("22", "135", "139", "445", "1433", "3306", "3389", "5900", "5985", "5986"), false)
+| EVAL f_listen_all = COALESCE(listen_addr IN ("0.0.0.0", "*", "::"), false)
+| EVAL f_internal_target = COALESCE(connect_addr RLIKE "10[.].*|192[.]168[.].*|172[.](1[6-9]|2[0-9]|3[01])[.].*", false)
+| EVAL score = CASE(is_pp, 5, 0)
+    + CASE(f_lateral_port, 2, 0)
+    + CASE(f_internal_target, 1, 0)
+    + CASE(f_listen_all, 1, 0)
+    + CASE(kind LIKE "RDP Network*", 3, 0)
+    + CASE(kind LIKE "Remote UAC*", 3, 0)
+    + CASE(kind LIKE "RDP enabled*", 2, 0)
+    + CASE(kind LIKE "RDP listening*", 2, 0)
+    + CASE(kind LIKE "Multiple RDP*", 1, 0)
+    + CASE(kind LIKE "Outbound RDP*", 1, 0)
+| KEEP
+    _index,
+    registry.last_write,
+    score,
+    kind,
+    user.name,
+    listen_addr,
+    listen_port,
+    connect_addr,
+    connect_port,
+    registry.value,
+    vdata,
+    registry.key,
+    kape.source_hive,
+    kape.source_file
+| SORT score DESC, registry.last_write DESC
+| LIMIT 10000

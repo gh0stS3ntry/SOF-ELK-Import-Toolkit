@@ -1,0 +1,26 @@
+// EXF-03 | Network bytes sent and received per application and user (SRUM)
+// Tactic: TA0010 Exfiltration | ATT&CK: T1041, T1567, T1048
+// Indexes: srum-* | Needs: SrumECmd NetworkUsages output
+FROM srum-* METADATA _index
+| WHERE event.dataset == "srum.network_usages"
+| EVAL app = TO_LOWER(COALESCE(process.executable, srum.exe_info, ""))
+| WHERE app != ""
+| STATS
+    sent_bytes = SUM(srum.bytes_sent),
+    received_bytes = SUM(srum.bytes_received),
+    records = COUNT(*),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    users = VALUES(user.name)
+  BY _index, app
+| EVAL sent_mb = ROUND(TO_DOUBLE(COALESCE(sent_bytes, 0)) / 1048576.0, 1)
+| EVAL received_mb = ROUND(TO_DOUBLE(COALESCE(received_bytes, 0)) / 1048576.0, 1)
+| EVAL upload_ratio = CASE(COALESCE(received_bytes, 0) > 0, ROUND(TO_DOUBLE(sent_bytes) / TO_DOUBLE(received_bytes), 2), null)
+| INLINE STATS app_hosts = COUNT_DISTINCT(_index) BY app
+| EVAL f_userpath = app RLIKE ".*\\\\(users|programdata|perflogs|temp|appdata|downloads)\\\\.*"
+| EVAL f_tool = app RLIKE ".*(rclone|megasync|megacmd|winscp|filezilla|pscp|psftp|curl|wget|restic|azcopy|gsutil|aws|s3browser|cyberduck|freefilesync|syncthing|dropbox|onedrive|googledrivesync|insync|anydesk|teamviewer|screenconnect|7z|winrar|powershell|bitsadmin|certutil|ftp[.]exe).*"
+| EVAL f_upload_heavy = sent_mb >= 100 AND COALESCE(upload_ratio, 99.0) >= 2.0
+| EVAL score = CASE(f_upload_heavy, 3, 0) + CASE(f_tool, 2, 0) + CASE(f_userpath, 2, 0) + CASE(app_hosts <= 1, 1, 0) + CASE(sent_mb >= 1024, 2, 0)
+| KEEP _index, score, app, users, sent_mb, received_mb, upload_ratio, records, first_seen, last_seen, app_hosts, f_upload_heavy, f_tool, f_userpath
+| SORT score DESC, sent_mb DESC
+| LIMIT 5000

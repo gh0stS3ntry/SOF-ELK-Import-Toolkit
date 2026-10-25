@@ -1,0 +1,69 @@
+// PR-02 | Sensitive Active Directory and account-control changes (domain controllers)
+// Tactic: TA0004 Privilege Escalation | ATT&CK: T1098, T1484, T1558.004, T1134.005, T1556
+// Indexes: evtxlogs-* | Needs: Security 4738/4742 ("Audit User/Computer Account Management"); 4739, 4765, 4766, 4780, 4794, 4706, 4707, 4716 add when present
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE TO_STRING(winlog.channel) == "Security"
+    AND eid IN ("4720", "4738", "4741", "4742", "4739", "4765", "4766", "4780", "4794", "4706", "4707", "4716", "4713", "4717", "4718")
+| EVAL target = TO_STRING(winlog.payload.event_data.TargetUserName)
+| EVAL actor = CONCAT(COALESCE(TO_STRING(winlog.payload.event_data.SubjectDomainName), ""), "\\", COALESCE(TO_STRING(winlog.payload.event_data.SubjectUserName), ""))
+| EVAL old_uac = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.OldUacValue), ""))
+| EVAL new_uac = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.NewUacValue), ""))
+// userAccountControl bits, read from the hex value: 0x20 PASSWD_NOTREQD, 0x10000 DONT_EXPIRE_PASSWORD,
+// 0x80000 TRUSTED_FOR_DELEGATION, 0x400000 DONT_REQ_PREAUTH, 0x1000000 TRUSTED_TO_AUTH_FOR_DELEGATION
+| EVAL n_pwnotreq = new_uac RLIKE "0x[0-9a-f]*[2367abef][0-9a-f]"
+| EVAL o_pwnotreq = old_uac RLIKE "0x[0-9a-f]*[2367abef][0-9a-f]"
+| EVAL n_noexpire = new_uac RLIKE "0x[0-9a-f]*[13579bdf][0-9a-f]{4}"
+| EVAL o_noexpire = old_uac RLIKE "0x[0-9a-f]*[13579bdf][0-9a-f]{4}"
+| EVAL n_deleg = new_uac RLIKE "0x[0-9a-f]*[89a-f][0-9a-f]{4}"
+| EVAL o_deleg = old_uac RLIKE "0x[0-9a-f]*[89a-f][0-9a-f]{4}"
+| EVAL n_nopreauth = new_uac RLIKE "0x[0-9a-f]*[4-7c-f][0-9a-f]{5}"
+| EVAL o_nopreauth = old_uac RLIKE "0x[0-9a-f]*[4-7c-f][0-9a-f]{5}"
+| EVAL n_t2a = new_uac RLIKE "0x[0-9a-f]*[13579bdf][0-9a-f]{6}"
+| EVAL o_t2a = old_uac RLIKE "0x[0-9a-f]*[13579bdf][0-9a-f]{6}"
+| EVAL f_nopreauth = n_nopreauth AND NOT o_nopreauth
+| EVAL f_deleg = (n_deleg AND NOT o_deleg) OR (n_t2a AND NOT o_t2a)
+| EVAL f_pwnotreq = n_pwnotreq AND NOT o_pwnotreq
+| EVAL f_noexpire = n_noexpire AND NOT o_noexpire
+| EVAL delegate_to = TO_STRING(winlog.payload.event_data.AllowedToDelegateTo)
+| EVAL f_constrained = eid IN ("4738", "4742") AND COALESCE(delegate_to, "-") NOT IN ("-", "")
+| EVAL sid_history = TO_STRING(winlog.payload.event_data.SidHistory)
+| EVAL f_sidhistory = eid IN ("4765", "4766") OR (eid IN ("4720", "4738") AND COALESCE(sid_history, "-") NOT IN ("-", ""))
+| EVAL change = CASE(
+    eid == "4794", "DSRM administrator password set",
+    eid == "4780", "ACL set on protected admin accounts (AdminSDHolder)",
+    eid == "4739", "Domain policy changed",
+    eid IN ("4765", "4766"), "SID History added (or attempt failed)",
+    eid IN ("4706", "4707", "4716"), "Domain trust created, removed or changed",
+    eid == "4713", "Kerberos policy changed",
+    eid IN ("4717", "4718"), "System security access (logon right) granted or removed",
+    f_nopreauth, "Kerberos pre-authentication disabled (AS-REP roastable)",
+    f_deleg, "Delegation enabled on account",
+    f_constrained, "Constrained delegation targets set",
+    f_sidhistory, "SID History set",
+    f_pwnotreq, "Password-not-required flag set",
+    f_noexpire, "Password set never to expire",
+    null)
+| WHERE change IS NOT NULL
+| EVAL score = CASE(
+    eid IN ("4794", "4765", "4766") OR f_sidhistory, 5,
+    eid IN ("4780", "4706", "4716") OR f_nopreauth OR f_deleg, 4,
+    f_constrained OR eid IN ("4707", "4713", "4717"), 3,
+    f_pwnotreq OR eid == "4739", 2,
+    1)
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    eid,
+    score,
+    change,
+    target,
+    actor,
+    old_uac,
+    new_uac,
+    delegate_to,
+    sid_history,
+    winlog.payload.event_data.SubjectLogonId
+| SORT @timestamp ASC
+| LIMIT 5000

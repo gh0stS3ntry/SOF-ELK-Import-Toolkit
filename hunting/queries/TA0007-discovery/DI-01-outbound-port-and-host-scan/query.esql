@@ -1,0 +1,49 @@
+// DI-01 | Outbound scanning from a host: many ports or many internal hosts (WFP 5156/5157)
+// Tactic: TA0007 Discovery | ATT&CK: T1046, T1018
+// Indexes: evtxlogs-* | Needs: Security 5156/5157 ("Audit Filtering Platform Connection")
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE TO_STRING(winlog.channel) == "Security" AND eid IN ("5156", "5157")
+// %%14593 = outbound. On WFP events Source* is always this host and Dest* the other side
+| WHERE TO_STRING(winlog.payload.event_data.Direction) == "%%14593"
+| EVAL dst = TO_STRING(winlog.payload.event_data.DestAddress)
+| EVAL dport = TO_STRING(winlog.payload.event_data.DestPort)
+| EVAL app = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.Application), ""))
+| EVAL dst_ip = TO_IP(dst)
+| WHERE CIDR_MATCH(dst_ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+| EVAL time_bucket = DATE_TRUNC(5 minutes, @timestamp)
+| STATS
+    connections = COUNT(*),
+    blocked = COUNT(*) WHERE eid == "5157",
+    distinct_ports = COUNT_DISTINCT(dport),
+    distinct_hosts = COUNT_DISTINCT(dst),
+    ports = VALUES(dport),
+    targets = VALUES(dst),
+    protocols = VALUES(winlog.payload.event_data.Protocol),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, app, time_bucket
+| EVAL pattern = CASE(
+    distinct_ports >= 10 AND distinct_hosts >= 10, "port sweep across hosts",
+    distinct_ports >= 10, "port scan of few hosts",
+    distinct_hosts >= 10, "host sweep on few ports",
+    null)
+| WHERE pattern IS NOT NULL AND connections >= 20
+| EVAL ports = MV_SLICE(ports, 0, 49)
+| EVAL targets = MV_SLICE(targets, 0, 49)
+| KEEP
+    _index,
+    time_bucket,
+    app,
+    pattern,
+    connections,
+    blocked,
+    distinct_ports,
+    distinct_hosts,
+    protocols,
+    first_seen,
+    last_seen,
+    ports,
+    targets
+| SORT time_bucket ASC
+| LIMIT 10000

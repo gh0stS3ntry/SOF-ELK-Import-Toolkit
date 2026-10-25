@@ -1,0 +1,50 @@
+// DE-04 | Defender, firewall, logging and security-tool settings in the registry
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1562.001, T1562.002, T1562.004, T1112
+// Indexes: registry-* | Needs: RECmd batch output (DFIRBatch dumps the Defender policy and exclusion keys)
+FROM registry-* METADATA _index
+| WHERE event.dataset == "registry.batch"
+| EVAL key_lower = TO_LOWER(COALESCE(registry.key, ""))
+| EVAL vname = TO_LOWER(COALESCE(registry.value, ""))
+| EVAL vdata = TRIM(COALESCE(MV_CONCAT(registry.data.strings, " "), ""))
+| EVAL vdata_l = TO_LOWER(vdata)
+| EVAL is_one = vdata_l RLIKE "1|0x0*1|1[ ].*"
+| EVAL is_zero = vdata_l RLIKE "0|0x0+|0[ ].*"
+| EVAL kind = CASE(
+    key_lower RLIKE ".*\\\\windows defender\\\\exclusions\\\\(paths|extensions|processes|ipaddresses|temporarypaths)", "Defender exclusion",
+    key_lower RLIKE ".*\\\\(policies\\\\microsoft\\\\)?windows defender(\\\\real-time protection)?" AND vname IN ("disableantispyware", "disableantivirus", "disablerealtimemonitoring", "disablebehaviormonitoring", "disableioavprotection", "disableonaccessprotection", "disablescanonrealtimeenable", "disableroutinelytakingaction", "disablescriptscanning") AND is_one, "Defender protection disabled",
+    key_lower RLIKE ".*\\\\windows defender\\\\spynet" AND vname IN ("spynetreporting", "submitsamplesconsent") AND is_zero, "Defender cloud protection off",
+    key_lower RLIKE ".*\\\\windows defender\\\\features" AND vname == "tamperprotection" AND vdata_l RLIKE "0|4|0x0*[04]|[04][ ].*", "Tamper Protection off",
+    key_lower RLIKE ".*\\\\services\\\\(windefend|wdboot|wdfilter|wdnisdrv|wdnissvc|sense|securityhealthservice|mpssvc|bfe|eventlog|sysmon[a-z0-9]*|sysmondrv)" AND vname == "start" AND vdata_l RLIKE "4|0x0*4|4[ ].*", "Security/logging service disabled (Start=4)",
+    key_lower RLIKE ".*\\\\firewallpolicy\\\\(standardprofile|domainprofile|publicprofile)" AND vname == "enablefirewall" AND is_zero, "Firewall profile disabled",
+    key_lower RLIKE ".*\\\\services\\\\eventlog\\\\[^\\\\]+" AND vname IN ("maxsize", "retention", "autobackuplogfiles", "file"), "Event log size/retention/file",
+    key_lower RLIKE ".*\\\\winevt\\\\channels\\\\.*" AND vname == "enabled" AND is_zero, "Event log channel disabled",
+    key_lower RLIKE ".*\\\\control\\\\wmi\\\\autologger\\\\(eventlog-[a-z]+|defenderapilogger|defenderauditlogger|sysmontrace|eventlog-security)(\\\\.*)?" AND vname IN ("start", "enabled") AND is_zero, "ETW autologger disabled",
+    key_lower RLIKE ".*\\\\powershell\\\\(scriptblocklogging|modulelogging|transcription)" AND vname IN ("enablescriptblocklogging", "enablemodulelogging", "enabletranscripting") AND is_zero, "PowerShell logging disabled",
+    key_lower RLIKE ".*\\\\control\\\\lsa" AND vname IN ("auditbaseobjects", "fullprivilegeauditing", "crashonauditfail") , "LSA audit setting",
+    key_lower RLIKE ".*\\\\policies\\\\system" AND vname == "enablelua" AND is_zero, "UAC disabled",
+    key_lower RLIKE ".*\\\\policies\\\\system" AND vname IN ("consentpromptbehavioradmin", "localaccounttokenfilterpolicy") , "UAC / remote token filter setting",
+    key_lower RLIKE ".*\\\\terminal server" AND vname == "fdenytsconnections" AND is_zero, "RDP enabled",
+    key_lower RLIKE ".*\\\\amsi\\\\providers(\\\\.*)?", "AMSI provider",
+    key_lower RLIKE ".*\\\\software\\\\microsoft\\\\amsi" AND vname IN ("amsienable") AND is_zero, "AMSI disabled",
+    null)
+| WHERE kind IS NOT NULL
+| EVAL score = CASE(
+    kind IN ("Tamper Protection off", "Defender protection disabled", "Security/logging service disabled (Start=4)", "ETW autologger disabled", "AMSI disabled"), 5,
+    kind IN ("Defender exclusion", "Firewall profile disabled", "Event log channel disabled", "PowerShell logging disabled", "Defender cloud protection off"), 4,
+    kind IN ("UAC disabled", "RDP enabled"), 3,
+    1)
+| EVAL f_excl_suspicious = kind == "Defender exclusion" AND (vname RLIKE ".*(\\\\users\\\\public|\\\\programdata|\\\\perflogs|\\\\windows\\\\temp|\\\\appdata|\\\\temp|\\\\downloads).*|[a-z]:\\\\?|[.]?(exe|dll|ps1|bat|cmd|vbs|js)")
+| EVAL score = score + CASE(f_excl_suspicious, 2, 0)
+| KEEP
+    _index,
+    score,
+    kind,
+    f_excl_suspicious,
+    registry.last_write,
+    registry.key,
+    registry.value,
+    vdata,
+    registry.hive_path,
+    kape.source_hive
+| SORT score DESC, registry.last_write DESC
+| LIMIT 5000

@@ -1,0 +1,32 @@
+// EX-11 | ShimCache executables by rarity (long tail by path)
+// Tactic: TA0002 Execution | ATT&CK: T1204.002, T1036
+// Indexes: shimcache-* | Needs: AppCompatCacheParser
+FROM shimcache-* METADATA _index
+| WHERE file.path IS NOT NULL AND file.path != ""
+| EVAL exe_path_norm = REPLACE(file.path, "^(\\\\device\\\\harddiskvolume[0-9]+|[a-z]:|\\\\[?][?]\\\\[a-z]:)", "")
+| EVAL exe_name = COALESCE(file.name, REPLACE(exe_path_norm, "^.*\\\\", ""))
+| WHERE exe_name LIKE "*.exe"
+| EVAL f_userpath = file.path RLIKE ".*\\\\(users|programdata|perflogs|temp|appdata|downloads|[$]recycle[.]bin)\\\\.*"
+| STATS
+    host_count = COUNT_DISTINCT(_index),
+    occurrences = COUNT(*),
+    executed_flags = VALUES(shimcache.executed),
+    newest_position = MIN(shimcache.cache_entry_position),
+    in_userpath = MAX(TO_INTEGER(f_userpath)),
+    first_mtime = MIN(file.mtime),
+    last_mtime = MAX(file.mtime),
+    source_indices = VALUES(_index)
+  BY exe_path_norm, exe_name
+| KEEP
+    source_indices,
+    host_count,
+    occurrences,
+    executed_flags,
+    newest_position,
+    in_userpath,
+    first_mtime,
+    last_mtime,
+    exe_name,
+    exe_path_norm
+| SORT host_count ASC, occurrences ASC, exe_path_norm ASC
+| LIMIT 10000

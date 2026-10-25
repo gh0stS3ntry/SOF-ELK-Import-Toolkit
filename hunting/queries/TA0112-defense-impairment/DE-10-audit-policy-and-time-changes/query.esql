@@ -1,0 +1,49 @@
+// DE-10 | Audit policy reduced, system time changed (Security 4719/4912/4715/4616) and auditpol commands
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1562.002, T1070.006
+// Indexes: evtxlogs-* | Needs: Security 4719 and 4616 (on by default); adds auditpol/Set-Date commands from 4688, Sysmon 1, 4104
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| EVAL txt = TO_LOWER(CONCAT(
+    COALESCE(TO_STRING(kape.executable_info), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.ScriptBlockText), "")))
+| EVAL f_policy = ch == "Security" AND eid IN ("4719", "4912", "4715", "4906")
+| EVAL f_time = ch == "Security" AND eid == "4616"
+| EVAL f_cmd = ch IN ("Security", "Microsoft-Windows-Sysmon/Operational", "Microsoft-Windows-PowerShell/Operational") AND eid IN ("4688", "1", "4104")
+    AND txt RLIKE ".*(auditpol(\\.exe)?.*/(set|clear|remove|restore)|set-date|w32tm(\\.exe)?.*/config|[ ]time[ ]+[0-9]|[ ]date[ ]+[0-9]|settimeofday|setsystemtime).*"
+| WHERE f_policy OR f_time OR f_cmd
+| EVAL audit_changes = TO_STRING(winlog.payload.event_data.AuditPolicyChanges)
+| EVAL f_audit_removed = COALESCE(audit_changes LIKE "*%%8448*" OR audit_changes LIKE "*%%8450*", false)
+| EVAL time_proc = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.ProcessName), ""))
+| EVAL prev_time = TO_DATETIME(winlog.payload.event_data.PreviousTime)
+| EVAL new_time = TO_DATETIME(winlog.payload.event_data.NewTime)
+| EVAL shift_minutes = CASE(f_time, DATE_DIFF("minutes", prev_time, new_time), null)
+// w32time and hypervisor tools make small corrections all day
+| WHERE NOT (f_time AND COALESCE(ABS(shift_minutes) < 5, false)
+    AND (time_proc == "" OR time_proc RLIKE ".*\\\\(svchost|vmtoolsd|vboxservice|xenguestagent|vmicguest)[.]exe"))
+| EVAL change = CASE(
+    eid == "4719" AND f_audit_removed, "Audit policy: success or failure auditing removed",
+    eid == "4719", "Audit policy changed",
+    eid == "4912", "Per-user audit policy changed",
+    eid == "4715", "Audit policy security descriptor changed",
+    eid == "4906", "CrashOnAuditFail changed",
+    f_time AND ABS(COALESCE(shift_minutes, 0)) >= 60, "System time moved by an hour or more",
+    f_time, "System time changed",
+    "Audit policy / time command")
+| EVAL user = COALESCE(TO_STRING(winlog.payload.event_data.SubjectUserName), TO_STRING(winlog.user.name), "")
+| EVAL detail = SUBSTRING(TRIM(CONCAT(
+    COALESCE(TO_STRING(winlog.payload.event_data.SubcategoryGuid), ""), " ",
+    COALESCE(audit_changes, ""), " ",
+    time_proc, " ", txt)), 1, 600)
+| KEEP
+    _index,
+    @timestamp,
+    eid,
+    change,
+    user,
+    prev_time,
+    new_time,
+    shift_minutes,
+    detail
+| SORT @timestamp ASC
+| LIMIT 10000

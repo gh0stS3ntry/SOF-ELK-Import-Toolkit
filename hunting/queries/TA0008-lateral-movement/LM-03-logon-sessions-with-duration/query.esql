@@ -1,0 +1,65 @@
+// LM-03 | Logon sessions with start, end, duration and admin rights (4624 / 4634 / 4647 / 4672 by logon ID)
+// Tactic: TA0008 Lateral Movement | ATT&CK: T1078, T1021
+// Indexes: evtxlogs-* | Needs: Security 4624 and 4634/4647; 4672 marks admin sessions
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE TO_STRING(winlog.channel) == "Security" AND eid IN ("4624", "4634", "4647", "4672")
+// 4672 names the session in SubjectLogonId, the others in TargetLogonId
+| EVAL lid = CASE(eid == "4672", TO_STRING(winlog.payload.event_data.SubjectLogonId), TO_STRING(winlog.payload.event_data.TargetLogonId))
+| WHERE lid IS NOT NULL AND lid NOT IN ("0x3e7", "0x3E7", "0x3e4", "0x3E4", "0x3e5", "0x3E5")
+| EVAL account = CASE(eid == "4672",
+    CONCAT(COALESCE(TO_STRING(winlog.payload.event_data.SubjectDomainName), ""), "\\", COALESCE(TO_STRING(winlog.payload.event_data.SubjectUserName), "")),
+    CONCAT(COALESCE(TO_STRING(winlog.payload.event_data.TargetDomainName), ""), "\\", COALESCE(TO_STRING(winlog.payload.event_data.TargetUserName), "")))
+| EVAL ip = REPLACE(COALESCE(TO_STRING(winlog.payload.event_data.IpAddress), ""), "^::ffff:", "")
+| STATS
+    logon_time = MIN(@timestamp) WHERE eid == "4624",
+    logoff_time = MAX(@timestamp) WHERE eid IN ("4634", "4647"),
+    accounts = VALUES(account),
+    logon_type = VALUES(winlog.payload.event_data.LogonType) WHERE eid == "4624",
+    source_ip = VALUES(ip) WHERE eid == "4624",
+    workstation = VALUES(winlog.payload.event_data.WorkstationName) WHERE eid == "4624",
+    auth_package = VALUES(winlog.payload.event_data.AuthenticationPackageName) WHERE eid == "4624",
+    logon_process = VALUES(winlog.payload.event_data.LogonProcessName) WHERE eid == "4624",
+    elevated = VALUES(winlog.payload.event_data.ElevatedToken) WHERE eid == "4624",
+    restricted_admin = VALUES(winlog.payload.event_data.RestrictedAdminMode) WHERE eid == "4624",
+    linked_logon = VALUES(winlog.payload.event_data.TargetLinkedLogonId) WHERE eid == "4624",
+    admin_privs = COUNT(*) WHERE eid == "4672",
+    user_initiated_logoff = COUNT(*) WHERE eid == "4647"
+  BY _index, lid
+| WHERE logon_time IS NOT NULL
+| EVAL acct_l = TO_LOWER(MV_CONCAT(accounts, " "))
+// hide machine accounts, font-driver/window-manager sessions and anonymous logons (remove to see them)
+| WHERE NOT acct_l LIKE "*$*" AND NOT acct_l LIKE "*umfd-*" AND NOT acct_l LIKE "*dwm-*" AND NOT acct_l LIKE "*anonymous logon*"
+| EVAL duration_min = ROUND(TO_DOUBLE(DATE_DIFF("seconds", logon_time, logoff_time)) / 60.0, 1)
+| EVAL is_admin = admin_privs > 0
+| EVAL ltype = MV_FIRST(logon_type)
+| EVAL logon_kind = CASE(
+    ltype == "2", "interactive (console)",
+    ltype == "3", "network (SMB, WMI, WinRM, PsExec)",
+    ltype == "4", "batch (scheduled task)",
+    ltype == "5", "service",
+    ltype == "7", "unlock",
+    ltype == "8", "network cleartext (IIS basic, PowerShell CredSSP)",
+    ltype == "9", "new credentials (runas /netonly)",
+    ltype == "10", "remote interactive (RDP)",
+    ltype == "11", "cached interactive",
+    CONCAT("type ", COALESCE(ltype, "?")))
+| KEEP
+    _index,
+    logon_time,
+    logoff_time,
+    duration_min,
+    accounts,
+    logon_kind,
+    is_admin,
+    source_ip,
+    workstation,
+    auth_package,
+    logon_process,
+    elevated,
+    restricted_admin,
+    user_initiated_logoff,
+    linked_logon,
+    lid
+| SORT logon_time ASC
+| LIMIT 10000

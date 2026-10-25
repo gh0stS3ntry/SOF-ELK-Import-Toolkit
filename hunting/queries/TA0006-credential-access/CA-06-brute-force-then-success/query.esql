@@ -1,0 +1,54 @@
+// CA-06 | Brute force against an account followed by a successful logon, and account lockouts
+// Tactic: TA0006 Credential Access | ATT&CK: T1110.001, T1078
+// Indexes: evtxlogs-* | Needs: Security 4624 and 4625; 4740/4767 on domain controllers
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE TO_STRING(winlog.channel) == "Security" AND eid IN ("4624", "4625", "4740", "4767")
+| EVAL account = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.TargetUserName), ""))
+| WHERE account != "" AND account != "-" AND NOT account LIKE "*$"
+| EVAL ltype = TO_STRING(winlog.payload.event_data.LogonType)
+// interactive, network, unlock, network cleartext, remote interactive, cached
+| WHERE eid != "4624" OR ltype IN ("2", "3", "7", "8", "10", "11")
+| INLINE STATS fails_for_account = COUNT(*) WHERE eid == "4625" BY _index, account
+| WHERE fails_for_account >= 10 OR eid IN ("4740", "4767")
+| EVAL ip = REPLACE(COALESCE(TO_STRING(winlog.payload.event_data.IpAddress), "-"), "^::ffff:", "")
+| EVAL src = CASE(ip NOT IN ("-", "", "::1", "127.0.0.1"), ip, COALESCE(TO_STRING(winlog.payload.event_data.WorkstationName), "(local)"))
+| STATS
+    failures = COUNT(*) WHERE eid == "4625",
+    successes = COUNT(*) WHERE eid == "4624",
+    lockouts = COUNT(*) WHERE eid == "4740",
+    unlocks = COUNT(*) WHERE eid == "4767",
+    first_failure = MIN(@timestamp) WHERE eid == "4625",
+    last_failure = MAX(@timestamp) WHERE eid == "4625",
+    first_success_any = MIN(@timestamp) WHERE eid == "4624",
+    last_success = MAX(@timestamp) WHERE eid == "4624",
+    fail_sources = VALUES(src) WHERE eid == "4625",
+    success_sources = VALUES(src) WHERE eid == "4624",
+    success_types = VALUES(ltype) WHERE eid == "4624",
+    lockout_callers = VALUES(winlog.payload.event_data.TargetDomainName) WHERE eid == "4740"
+  BY _index, account
+// a success after the first failure, from one of the failing sources, is the strongest sign
+| EVAL f_success_after = COALESCE(last_success > first_failure, false)
+| EVAL f_same_source = COALESCE(MV_COUNT(MV_DEDUPE(MV_APPEND(fail_sources, success_sources))) < MV_COUNT(fail_sources) + MV_COUNT(success_sources), false)
+| EVAL score = CASE(f_success_after AND f_same_source, 5, f_success_after, 3, 0)
+    + CASE(failures >= 100, 2, failures >= 10, 1, 0)
+    + CASE(lockouts > 0, 1, 0)
+| KEEP
+    _index,
+    account,
+    score,
+    failures,
+    first_failure,
+    last_failure,
+    fail_sources,
+    successes,
+    last_success,
+    success_sources,
+    success_types,
+    f_success_after,
+    f_same_source,
+    lockouts,
+    lockout_callers,
+    unlocks
+| SORT score DESC, failures DESC
+| LIMIT 5000

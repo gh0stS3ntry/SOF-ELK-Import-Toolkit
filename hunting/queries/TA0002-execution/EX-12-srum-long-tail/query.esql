@@ -1,0 +1,39 @@
+// EX-12 | SRUM applications by rarity, with resource use
+// Tactic: TA0002 Execution | ATT&CK: T1204.002
+// Indexes: srum-* | Needs: SrumECmd AppResourceUseInfo
+FROM srum-* METADATA _index
+| WHERE event.dataset == "srum.app_resource_use_info"
+| WHERE process.executable IS NOT NULL AND process.executable != ""
+| EVAL exe_path_norm = REPLACE(process.executable, "^(\\\\device\\\\harddiskvolume[0-9]+|[a-z]:)", "")
+| EVAL exe_name = COALESCE(process.name, REPLACE(exe_path_norm, "^.*\\\\", ""))
+| WHERE exe_name LIKE "*.exe"
+| EVAL f_userpath = process.executable RLIKE ".*\\\\(users|programdata|perflogs|temp|appdata|downloads|[$]recycle[.]bin)\\\\.*"
+| STATS
+    host_count = COUNT_DISTINCT(_index),
+    records = COUNT(*),
+    users = VALUES(user.name),
+    fg_bytes_read = SUM(srum.foreground_bytes_read),
+    fg_bytes_written = SUM(srum.foreground_bytes_written),
+    bg_bytes_read = SUM(srum.background_bytes_read),
+    bg_bytes_written = SUM(srum.background_bytes_written),
+    in_userpath = MAX(TO_INTEGER(f_userpath)),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    source_indices = VALUES(_index)
+  BY exe_path_norm, exe_name
+| KEEP
+    source_indices,
+    host_count,
+    records,
+    users,
+    in_userpath,
+    fg_bytes_read,
+    fg_bytes_written,
+    bg_bytes_read,
+    bg_bytes_written,
+    first_seen,
+    last_seen,
+    exe_name,
+    exe_path_norm
+| SORT host_count ASC, records ASC, exe_path_norm ASC
+| LIMIT 10000

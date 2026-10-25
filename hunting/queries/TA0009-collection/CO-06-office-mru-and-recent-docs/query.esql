@@ -1,0 +1,28 @@
+// CO-06 | Recently opened documents (RECmd OfficeMRU and RecentDocs plugins)
+// Tactic: TA0009 Collection | ATT&CK: T1005, T1039, T1213
+// Indexes: registry-* | Needs: RECmd OfficeMRU and/or RecentDocs plugin output
+FROM registry-* METADATA _index
+| WHERE event.dataset IN ("registry.officemru", "registry.recentdocs")
+| EVAL doc = COALESCE(registry.plugin.file_name, registry.plugin.target_name, registry.value, "")
+| WHERE doc != ""
+| EVAL d = TO_LOWER(doc)
+| EVAL opened = COALESCE(registry.plugin.last_opened, registry.plugin.opened_on, registry.plugin.extension_last_opened)
+| EVAL source = CASE(event.dataset == "registry.officemru", "Office MRU", "Explorer RecentDocs")
+| EVAL f_network = d RLIKE ".*\\\\\\\\.*" OR d RLIKE "https?://.*"
+| EVAL f_archive = d RLIKE ".*[.](zip|rar|7z|tar|gz|pst)"
+| EVAL f_sensitive = d RLIKE ".*(password|passwd|credential|secret|confidential|payroll|salary|finance|hr|vpn|backup|invoice|contract|[.]kdbx|[.]pem|[.]pfx|[.]ppk|[.]rdp).*"
+| KEEP
+    _index,
+    opened,
+    source,
+    user.name,
+    doc,
+    f_network,
+    f_archive,
+    f_sensitive,
+    registry.plugin.extension,
+    registry.plugin.mru_position,
+    registry.plugin.last_closed,
+    registry.key
+| SORT opened DESC
+| LIMIT 10000

@@ -1,0 +1,54 @@
+// EX-10 | Amcache executables by rarity (long tail by SHA-1)
+// Tactic: TA0002 Execution | ATT&CK: T1204.002, T1036
+// Indexes: amcache-* | Needs: AmcacheParser file entries
+FROM amcache-* METADATA _index
+| WHERE event.dataset IN ("amcache.unassociated_file_entries", "amcache.associated_file_entries", "amcache.file_entries")
+| WHERE file.path IS NOT NULL AND file.path != ""
+| WHERE COALESCE(file.extension, "") == "exe" OR file.path LIKE "*.exe"
+// Windows Update staging
+| WHERE NOT file.path RLIKE ".*\\\\windows\\\\softwaredistribution\\\\download\\\\.*"
+// known-good Microsoft binaries that are unique per update (extend per engagement)
+| WHERE file.hash.sha1 IS NULL OR file.hash.sha1 NOT IN (
+    // FixSqlRegistryKey.exe
+    "ca59dfaa9c3db8a3d011d9bff6cdf1e2fe20ad47", "0a9efde5ab50247291b2d54ae6b32d83791b67cd",
+    // ScenarioEngine.exe
+    "c6bd76a34d8d0474b8c30db830aacc0a7cfee22f", "0f29f1f79e3f18e2925ab2bc05ec4f351131fcdc",
+    "e3a55704ca72a37abd7c50405fb14a2ca02f8012", "56a75a009d3443fc0926791bb4c1ef8e8e75ebb8",
+    "1d8b6c6c3c0554ec6a1147594135163d2c3fbdeb", "3baa0fb11d96e996f4e6036583d48f5d5c4d45d8",
+    "ae45ad33c0557c5b6b3903132248fa58e068c78c",
+    // dismhost.exe
+    "519c1a21cac1c1bc0ebf9cec20761aef4e5ed335")
+// collapse drive letters and \Device\HarddiskVolumeN so one binary counts once
+| EVAL exe_path_norm = REPLACE(file.path, "^(\\\\device\\\\harddiskvolume[0-9]+|[a-z]:)", "")
+| EVAL sha1 = COALESCE(file.hash.sha1, "(no hash)")
+| EVAL f_userpath = file.path RLIKE ".*\\\\(users|programdata|perflogs|temp|appdata|downloads|[$]recycle[.]bin)\\\\.*"
+| STATS
+    occurrences = COUNT(*),
+    host_count = COUNT_DISTINCT(_index),
+    fullpath_variants = COUNT_DISTINCT(exe_path_norm),
+    fullpaths = VALUES(exe_path_norm),
+    exe_names = VALUES(file.name),
+    products = VALUES(file.pe.product),
+    in_userpath = MAX(TO_INTEGER(f_userpath)),
+    os_component = MAX(TO_INTEGER(amcache.is_os_component)),
+    link_dates = VALUES(amcache.link_date),
+    first_seen = MIN(amcache.file_key_last_write),
+    last_seen = MAX(amcache.file_key_last_write),
+    source_indices = VALUES(_index)
+  BY sha1
+| KEEP
+    source_indices,
+    host_count,
+    occurrences,
+    fullpath_variants,
+    in_userpath,
+    os_component,
+    fullpaths,
+    exe_names,
+    products,
+    link_dates,
+    first_seen,
+    last_seen,
+    sha1
+| SORT host_count ASC, occurrences ASC, sha1 ASC
+| LIMIT 10000

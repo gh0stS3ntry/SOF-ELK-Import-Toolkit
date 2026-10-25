@@ -1,0 +1,26 @@
+// TRI-01 | Data coverage per index
+// Tactic: Triage (first cut) | ATT&CK: n/a
+// Indexes: every toolkit index family | Needs: nothing
+FROM filesystem-*, evtxlogs-*, lnkfiles-*, prefetch-*, amcache-*, shimcache-*, registry-*, jumplist-*, shellbag-*, recyclebin-*, browsinghistory-*, srum-*, activitiescache-*, clrusagelogs-*, recentfilecache-*, sqlitedb-*, sum-* METADATA _index
+| EVAL ts_source = COALESCE(TO_STRING(kape.timestamp_source), "")
+| STATS
+    docs = COUNT(*),
+    ingest_time_docs = COUNT(*) WHERE ts_source == "ingest_time",
+    first_event = MIN(@timestamp),
+    last_event = MAX(@timestamp)
+  BY _index
+// family is the index prefix, host is everything after the first "-" (host names may contain "-")
+| EVAL family = REPLACE(_index, "-.*$", "")
+| EVAL host = REPLACE(_index, "^[a-z]+-", "")
+| EVAL ingest_time_pct = ROUND(TO_DOUBLE(ingest_time_docs) * 100.0 / TO_DOUBLE(docs), 1)
+| KEEP
+    host,
+    family,
+    _index,
+    docs,
+    ingest_time_docs,
+    ingest_time_pct,
+    first_event,
+    last_event
+| SORT host ASC, family ASC
+| LIMIT 10000

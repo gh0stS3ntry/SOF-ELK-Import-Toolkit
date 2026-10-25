@@ -1,0 +1,45 @@
+// CO-03 | Archiver tools in Amcache, ShimCache and SRUM, with bytes written
+// Tactic: TA0009 Collection | ATT&CK: T1560.001
+// Indexes: amcache-*, shimcache-*, srum-* | Needs: any of the three
+FROM amcache-*, shimcache-*, srum-* METADATA _index
+| EVAL exe_path = TO_LOWER(COALESCE(file.path, process.executable, ""))
+| WHERE exe_path RLIKE ".*\\\\(7z|7za|7zg|7zr|7zfm|rar|winrar|unrar|zip|tar|pigz|peazip|bandizip|bandizip64|wzzip|winzip32|winzip64|makecab|arj)[.]exe"
+| EVAL artifact = REPLACE(_index, "-.*$", "")
+| EVAL ts = COALESCE(amcache.file_key_last_write, file.mtime, srum.timestamp)
+| EVAL exe_name = REPLACE(exe_path, "^.*\\\\", "")
+| EVAL exe_norm = REPLACE(exe_path, "^(\\\\device\\\\harddiskvolume[0-9]+|[a-z]:)", "")
+| EVAL f_userpath = exe_path RLIKE ".*\\\\(users|programdata|perflogs|temp|appdata|downloads)\\\\.*"
+| EVAL f_standard = exe_path RLIKE ".*\\\\(program files|program files [(]x86[)]|windows\\\\system32)\\\\.*"
+| STATS
+    host_count = COUNT_DISTINCT(_index),
+    artifacts = VALUES(artifact),
+    users = VALUES(user.name),
+    fg_written = SUM(srum.foreground_bytes_written),
+    bg_written = SUM(srum.background_bytes_written),
+    fg_read = SUM(srum.foreground_bytes_read),
+    bg_read = SUM(srum.background_bytes_read),
+    in_userpath = MAX(TO_INTEGER(f_userpath)),
+    in_standard_dir = MAX(TO_INTEGER(f_standard)),
+    sha1_values = VALUES(file.hash.sha1),
+    first_seen = MIN(ts),
+    last_seen = MAX(ts),
+    source_indices = VALUES(_index)
+  BY exe_norm, exe_name
+| EVAL written_mb = ROUND((COALESCE(TO_DOUBLE(fg_written), 0.0) + COALESCE(TO_DOUBLE(bg_written), 0.0)) / 1048576.0, 1)
+| EVAL read_mb = ROUND((COALESCE(TO_DOUBLE(fg_read), 0.0) + COALESCE(TO_DOUBLE(bg_read), 0.0)) / 1048576.0, 1)
+| KEEP
+    source_indices,
+    host_count,
+    artifacts,
+    users,
+    written_mb,
+    read_mb,
+    in_userpath,
+    in_standard_dir,
+    sha1_values,
+    first_seen,
+    last_seen,
+    exe_name,
+    exe_norm
+| SORT in_userpath DESC, in_standard_dir ASC, written_mb DESC, host_count ASC
+| LIMIT 500

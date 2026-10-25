@@ -1,0 +1,33 @@
+// EX-03 | Rare parent and child process pairs (Security 4688)
+// Tactic: TA0002 Execution | ATT&CK: T1059, T1204
+// Indexes: evtxlogs-* | Needs: Security 4688
+FROM evtxlogs-* METADATA _index
+| WHERE winlog.channel == "Security"
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE eid == "4688"
+| EVAL image = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.NewProcessName), ""))
+| EVAL parent = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.ParentProcessName), "(unknown)"))
+// collapse volume and user-profile differences so the same binary counts once across hosts
+| EVAL image_norm = REPLACE(REPLACE(image, "^([a-z]:|\\\\device\\\\harddiskvolume[0-9]+)", ""), "\\\\users\\\\[^\\\\]+\\\\", "\\\\users\\\\*\\\\")
+| EVAL parent_norm = REPLACE(REPLACE(parent, "^([a-z]:|\\\\device\\\\harddiskvolume[0-9]+)", ""), "\\\\users\\\\[^\\\\]+\\\\", "\\\\users\\\\*\\\\")
+| EVAL cmd = COALESCE(TO_STRING(kape.executable_info), "")
+| STATS
+    host_count = COUNT_DISTINCT(_index),
+    events = COUNT(*),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    sample_cmds = VALUES(cmd),
+    source_indices = VALUES(_index)
+  BY parent_norm, image_norm
+| EVAL sample_cmds = MV_SLICE(sample_cmds, 0, 4)
+| KEEP
+    source_indices,
+    host_count,
+    events,
+    first_seen,
+    last_seen,
+    parent_norm,
+    image_norm,
+    sample_cmds
+| SORT host_count ASC, events ASC, first_seen ASC
+| LIMIT 10000

@@ -1,0 +1,36 @@
+// C2-02 | Files downloaded from the internet: Zone.Identifier streams (Mark of the Web) in the $MFT
+// Tactic: TA0011 Command and Control | ATT&CK: T1105, T1566.002, T1204
+// Indexes: filesystem-* | Needs: MFTECmd $MFT output (Zone.Identifier contents need MFTECmd 1.2+)
+FROM filesystem-* METADATA _index
+| EVAL stream = TO_LOWER(COALESCE(TO_STRING(file.stream_name), TO_STRING(file.fork_name), ""))
+| EVAL fname = COALESCE(TO_STRING(file.name), "")
+| EVAL fpath = COALESCE(TO_STRING(file.path), "")
+| WHERE stream == "zone.identifier"
+     OR TO_LOWER(fname) LIKE "*:zone.identifier*"
+     OR TO_LOWER(fpath) LIKE "*:zone.identifier*"
+| EVAL contents = COALESCE(TO_STRING(file.fork_contents), "")
+| EVAL zone_id = CASE(contents LIKE "*ZoneId=*", REPLACE(contents, "(?s)^.*ZoneId=(\\d+).*$", "$1"), null)
+| EVAL host_url = CASE(contents LIKE "*HostUrl=*", REPLACE(contents, "(?s)^.*HostUrl=([^\\r\\n]*).*$", "$1"), null)
+| EVAL referrer_url = CASE(contents LIKE "*ReferrerUrl=*", REPLACE(contents, "(?s)^.*ReferrerUrl=([^\\r\\n]*).*$", "$1"), null)
+| EVAL downloaded_file = REPLACE(fname, "(?i):zone\\.identifier.*$", "")
+| EVAL downloaded_path = REPLACE(fpath, "(?i):zone\\.identifier.*$", "")
+// 3 = Internet, 4 = Restricted sites
+| WHERE zone_id IN ("3", "4")
+| KEEP
+    _index,
+    file.stdinfo.created,
+    file.filename.created,
+    file.stdinfo.mtime,
+    @timestamp,
+    downloaded_path,
+    downloaded_file,
+    zone_id,
+    host_url,
+    referrer_url,
+    file.size,
+    kape.mft.inuse,
+    kape.mft.isads,
+    file.name,
+    file.stream_name
+| SORT file.stdinfo.created ASC
+| LIMIT 10000

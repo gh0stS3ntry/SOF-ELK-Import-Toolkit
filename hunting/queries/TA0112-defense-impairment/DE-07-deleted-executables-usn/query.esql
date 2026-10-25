@@ -1,0 +1,39 @@
+// DE-07 | Executables and scripts deleted (USN $J)
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1070.004
+// Indexes: filesystem-* | Needs: MFTECmd $J output
+FROM filesystem-* METADATA _index
+| WHERE file.update_reasons IS NOT NULL
+| EVAL reasons = MV_CONCAT(TO_UPPER(TO_STRING(file.update_reasons)), ",")
+| WHERE reasons LIKE "*DELETE*"
+| EVAL fname = TO_LOWER(COALESCE(TO_STRING(file.name), ""))
+| WHERE fname RLIKE ".*\\.(exe|dll|sys|scr|cpl|ocx|drv|efi|com|msi|msp|ps1|psm1|bat|cmd|vbs|vbe|js|jse|wsf|wsh|hta|sct|jar|py|lnk)"
+| EVAL file_type = CASE(
+    fname RLIKE ".*\\.(exe|dll|sys|scr|cpl|ocx|drv|efi|com)", "PE / binary",
+    fname RLIKE ".*\\.(msi|msp)", "Installer",
+    fname RLIKE ".*\\.(lnk)", "Shortcut",
+    "Script"
+  )
+| EVAL full_path = COALESCE(TO_STRING(file.path), TO_STRING(file.directory), "")
+| EVAL p = TO_LOWER(full_path)
+| EVAL f_userpath = p RLIKE ".*(users\\\\public|programdata|perflogs|windows\\\\temp|\\\\temp|appdata|downloads|desktop|[$]recycle[.]bin).*"
+| INLINE STATS deletes_of_name = COUNT(*), name_hosts = COUNT_DISTINCT(_index) BY fname
+| KEEP
+    _index,
+    @timestamp,
+    file_type,
+    f_userpath,
+    name_hosts,
+    deletes_of_name,
+    reasons,
+    file.name,
+    full_path,
+    file.directory,
+    file.extension,
+    file.inode,
+    file.sequence_number,
+    file.parent.inode,
+    file.parent.sequence_number,
+    file.update_sequence_number,
+    file.source_file
+| SORT @timestamp ASC, file.update_sequence_number ASC
+| LIMIT 10000

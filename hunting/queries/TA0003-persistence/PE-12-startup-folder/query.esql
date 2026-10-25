@@ -1,0 +1,67 @@
+// PE-12 | Files in Startup folders ($MFT and $J), scored
+// Tactic: TA0003 Persistence | ATT&CK: T1547.001
+// Indexes: filesystem-* | Needs: MFTECmd $MFT and/or $J output
+FROM filesystem-* METADATA _index
+| EVAL p = TO_LOWER(COALESCE(TO_STRING(file.path), TO_STRING(file.directory), ""))
+| WHERE p RLIKE ".*\\\\start menu\\\\programs\\\\startup(\\\\.*)?"
+| EVAL fname = TO_LOWER(COALESCE(TO_STRING(file.name), ""))
+| WHERE fname != "" AND fname != "desktop.ini" AND COALESCE(TO_STRING(file.type), "") != "dir"
+| EVAL record_type = CASE(file.update_reasons IS NOT NULL, "USN $J", "$MFT")
+| EVAL reasons = MV_CONCAT(TO_UPPER(TO_STRING(file.update_reasons)), ",")
+| EVAL scope = CASE(
+    p RLIKE ".*\\\\programdata\\\\microsoft\\\\windows\\\\start menu\\\\programs\\\\startup(\\\\.*)?", "All users",
+    p RLIKE ".*\\\\users\\\\[^\\\\]+\\\\appdata\\\\roaming\\\\microsoft\\\\windows\\\\start menu\\\\programs\\\\startup(\\\\.*)?", "Per-user",
+    "Other/redirected")
+| EVAL profile = CASE(scope == "Per-user", REPLACE(p, "^.*\\\\users\\\\([^\\\\]+)\\\\appdata.*$", "$1"), null)
+| WHERE record_type == "USN $J" OR file.size != 0
+// @timestamp is the USN update time on $J rows
+| EVAL event_time = CASE(record_type == "USN $J", @timestamp, COALESCE(file.stdinfo.created, file.filename.created, @timestamp))
+| EVAL si_fn_gap_sec = DATE_DIFF("seconds", file.stdinfo.created, file.filename.created)
+| EVAL f_exec = fname RLIKE ".*[.](exe|dll|scr|com|pif|cpl|msi|jar|py|ps1|bat|cmd|vbs|vbe|js|jse|wsf|wsh|hta|sct|reg)"
+| EVAL f_shortcut = fname RLIKE ".*[.](lnk|url)"
+| EVAL f_doubleext = fname RLIKE ".*[.](pdf|docx?|xlsx?|pptx?|txt|jpe?g|png|zip)[.](exe|scr|com|bat|cmd|lnk|js|vbs|hta)"
+| EVAL f_hidden = COALESCE(file.attributes.hidden, false) OR COALESCE(file.attributes.system, false)
+| EVAL f_noext = NOT fname LIKE "*.*"
+| EVAL f_timestomp = COALESCE(si_fn_gap_sec > 60, false)
+| EVAL f_deleted = (record_type == "$MFT" AND NOT COALESCE(kape.mft.inuse, true)) OR COALESCE(reasons LIKE "*FILE_DELETE*", false)
+| EVAL score = CASE(f_exec, 3, 0)
+    + CASE(f_doubleext, 3, 0)
+    + CASE(scope == "Other/redirected", 3, 0)
+    + CASE(f_shortcut, 2, 0)
+    + CASE(f_hidden, 2, 0)
+    + CASE(f_timestomp, 2, 0)
+    + CASE(f_noext, 1, 0)
+    + CASE(f_deleted, 1, 0)
+    + CASE(scope == "All users", 1, 0)
+| EVAL flags = REPLACE(CONCAT(
+    CASE(f_exec, "executable/script/installer; ", ""),
+    CASE(f_doubleext, "double extension; ", ""),
+    CASE(scope == "Other/redirected", "non-standard startup path; ", ""),
+    CASE(f_shortcut, "shortcut (.lnk/.url); ", ""),
+    CASE(f_hidden, "hidden/system attribute; ", ""),
+    CASE(f_timestomp, "$SI earlier than $FN (possible timestomp); ", ""),
+    CASE(f_noext, "no file extension; ", ""),
+    CASE(f_deleted, "deleted; ", ""),
+    CASE(scope == "All users", "all-users folder (admin write); ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    record_type,
+    event_time,
+    score,
+    flags,
+    scope,
+    profile,
+    file.name,
+    file.path,
+    file.size,
+    reasons,
+    file.inode,
+    file.parent.inode,
+    file.stdinfo.created,
+    file.stdinfo.mtime,
+    file.filename.created,
+    si_fn_gap_sec,
+    kape.mft.inuse
+| SORT score DESC, event_time ASC
+| LIMIT 10000

@@ -1,0 +1,39 @@
+// DI-02 | Inbound scan probes: one remote address hitting many local ports (WFP 5156/5157)
+// Tactic: TA0007 Discovery | ATT&CK: T1046
+// Indexes: evtxlogs-* | Needs: Security 5156/5157 ("Audit Filtering Platform Connection")
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE TO_STRING(winlog.channel) == "Security" AND eid IN ("5156", "5157")
+// %%14592 = inbound: Source* is this host (local port), Dest* is the remote peer
+| WHERE TO_STRING(winlog.payload.event_data.Direction) == "%%14592"
+| EVAL remote = TO_STRING(winlog.payload.event_data.DestAddress)
+| EVAL local_port = TO_STRING(winlog.payload.event_data.SourcePort)
+| WHERE remote IS NOT NULL AND NOT remote IN ("127.0.0.1", "::1", "0.0.0.0", "::")
+| EVAL time_bucket = DATE_TRUNC(5 minutes, @timestamp)
+| STATS
+    connections = COUNT(*),
+    blocked = COUNT(*) WHERE eid == "5157",
+    distinct_local_ports = COUNT_DISTINCT(local_port),
+    local_ports = VALUES(local_port),
+    apps = VALUES(winlog.payload.event_data.Application),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, remote, time_bucket
+| WHERE distinct_local_ports >= 10 AND connections >= 20
+| EVAL remote_ip = TO_IP(remote)
+| EVAL scope = CASE(CIDR_MATCH(remote_ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7", "fe80::/10"), "internal", "external")
+| EVAL local_ports = MV_SLICE(local_ports, 0, 49)
+| KEEP
+    _index,
+    time_bucket,
+    remote,
+    scope,
+    connections,
+    blocked,
+    distinct_local_ports,
+    first_seen,
+    last_seen,
+    local_ports,
+    apps
+| SORT time_bucket ASC
+| LIMIT 10000

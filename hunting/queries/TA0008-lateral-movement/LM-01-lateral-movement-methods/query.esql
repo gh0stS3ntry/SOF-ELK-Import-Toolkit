@@ -1,0 +1,130 @@
+// LM-01 | Lateral movement via RDP, SMB, PsExec-style services, WinRM and WMI (inbound and outbound)
+// Tactic: TA0008 Lateral Movement | ATT&CK: T1021.001, T1021.002, T1021.006, T1047, T1569.002, T1550
+// Indexes: evtxlogs-* | Needs: Security 4624/4648/5140; RDP, WinRM and WMI-Activity Operational logs as available
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| WHERE (ch == "Security" AND eid IN ("4624", "4648", "4778", "4779", "5140", "5145"))
+     OR (ch == "Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational" AND eid == "1149")
+     OR (ch == "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational" AND eid IN ("21", "22", "25"))
+     OR (ch == "Microsoft-Windows-RemoteDesktopServices-RdpCoreTS/Operational" AND eid == "131")
+     OR (ch == "Microsoft-Windows-TerminalServices-RDPClient/Operational" AND eid IN ("1024", "1102"))
+     OR (ch == "Microsoft-Windows-WinRM/Operational" AND eid IN ("6", "91", "169"))
+     OR (ch == "Windows PowerShell" AND eid == "400")
+     OR (ch == "Microsoft-Windows-WMI-Activity/Operational" AND eid IN ("5858", "5860", "5861"))
+     OR (ch == "System" AND eid == "7045")
+     OR (ch == "Security" AND eid == "4697")
+| EVAL txt = TO_LOWER(CONCAT(
+    COALESCE(TO_STRING(message), ""), " ",
+    COALESCE(TO_STRING(kape.executable_info), ""), " ",
+    COALESCE(TO_STRING(kape.map_description), ""), " ",
+    COALESCE(TO_STRING(`winlog.payload.event_data.ServiceName`), ""), " ",
+    COALESCE(TO_STRING(`winlog.payload.event_data.ServiceFileName`), ""), " ",
+    COALESCE(TO_STRING(`winlog.payload.user_data.Operation_ClientFailure.Operation`), "")))
+// 7045 ExecutableInfo is the service binary; 4697 is added for hosts with Security System Extension auditing
+| EVAL lt = TO_STRING(`winlog.payload.event_data.LogonType`)
+| EVAL auth_pkg = TO_LOWER(COALESCE(TO_STRING(`winlog.payload.event_data.AuthenticationPackageName`), ""))
+| EVAL acct = COALESCE(TO_STRING(`winlog.payload.event_data.TargetUserName`), TO_STRING(`winlog.payload.user_data.EventXML.User`), TO_STRING(`winlog.payload.user_data.EventXML.Param1`), "")
+| EVAL actor = COALESCE(TO_STRING(`winlog.payload.event_data.SubjectUserName`), "")
+| EVAL src_ip = COALESCE(TO_STRING(`winlog.payload.event_data.IpAddress`), TO_STRING(`winlog.payload.event_data.ClientIP`), TO_STRING(`winlog.payload.user_data.EventXML.Address`), TO_STRING(remote.ip), "")
+| EVAL tgt = TO_LOWER(COALESCE(TO_STRING(`winlog.payload.event_data.TargetServerName`), TO_STRING(`winlog.payload.user_data.EventXML.ServerName`),TO_STRING(`winlog.payload.event_data.Value`), ""))
+| EVAL share = TO_LOWER(COALESCE(TO_STRING(`winlog.payload.event_data.ShareName`), ""))
+| EVAL client_machine = TO_LOWER(COALESCE(TO_STRING(`winlog.payload.user_data.Operation_ClientFailure.ClientMachine`), ""))
+| EVAL comp = TO_LOWER(MV_FIRST(SPLIT(COALESCE(TO_STRING(winlog.computer_name), ""), ".")))
+| EVAL f_remote_src = src_ip != ""
+    AND NOT TO_LOWER(src_ip) IN ("-", "::1", "127.0.0.1", "local", "localhost")
+    AND NOT TO_LOWER(src_ip) LIKE "::ffff:127.*"
+| EVAL f_machine_or_anon = acct LIKE "*$" OR TO_LOWER(acct) == "anonymous logon"
+| EVAL f_logon_rdp = eid == "4624" AND lt == "10" AND f_remote_src
+| EVAL f_logon_net = eid == "4624" AND lt == "3" AND f_remote_src
+| EVAL f_logon_ntlm = f_logon_net AND auth_pkg == "ntlm"
+| EVAL f_explicit_remote = eid == "4648" AND tgt != "" AND tgt != "localhost" AND tgt != "-"
+    AND NOT (comp != "" AND STARTS_WITH(tgt, comp))
+| EVAL f_rdp_in = ch LIKE "*RemoteConnectionManager*" AND eid == "1149"
+| EVAL f_rdp_session = ch LIKE "*LocalSessionManager*" AND f_remote_src
+| EVAL f_rdp_net = ch LIKE "*RdpCoreTS*"
+| EVAL f_rdp_out = ch LIKE "*RDPClient*"
+| EVAL f_admin_share = eid IN ("5140", "5145") AND share RLIKE ".*(admin[$]|[\\\\][a-z][$])"
+| EVAL f_pipe = eid == "5145" AND txt RLIKE ".*(svcctl|atsvc|psexesvc|remcom|paexec|csexec|winreg|samr|lsarpc).*"
+| EVAL f_psexec_svc = eid IN ("7045", "4697")
+    AND txt RLIKE ".*(psexesvc|paexec|remcomsvc|csexec|winexesvc|[\\\\][\\\\]127[.]0[.]0[.]1[\\\\]admin[$]|%comspec%).*"
+| EVAL f_winrm_srv = ch == "Microsoft-Windows-WinRM/Operational" AND eid IN ("91", "169")
+| EVAL f_winrm_cli = ch == "Microsoft-Windows-WinRM/Operational" AND eid == "6"
+    AND NOT txt RLIKE ".*(localhost|127[.]0[.]0[.]1).*"
+| EVAL f_ps_remote = ch == "Windows PowerShell" AND eid == "400" AND txt RLIKE ".*(wsmprovhost|serverremotehost).*"
+| EVAL f_wmi_remote = eid == "5858" AND client_machine != "" AND client_machine != comp
+    AND client_machine != "localhost" AND client_machine != "-"
+| EVAL f_wmi_sub = eid IN ("5860", "5861")
+| EVAL f_wmi_proc = ch == "Microsoft-Windows-WMI-Activity/Operational"
+    AND txt RLIKE ".*(win32_process|win32_service|win32_scheduledjob|__eventfilter|commandlineeventconsumer).*"
+| EVAL score = CASE(f_rdp_out, 3, 0)
+    + CASE(f_rdp_in, 2, 0)
+    + CASE(f_rdp_session, 2, 0)
+    + CASE(f_rdp_net, 1, 0)
+    + CASE(f_logon_rdp, 3, 0)
+    + CASE(f_logon_net, 1, 0)
+    + CASE(f_logon_ntlm, 1, 0)
+    + CASE(f_explicit_remote, 3, 0)
+    + CASE(f_admin_share, 3, 0)
+    + CASE(f_pipe, 3, 0)
+    + CASE(f_psexec_svc, 4, 0)
+    + CASE(f_winrm_srv, 2, 0)
+    + CASE(f_winrm_cli, 3, 0)
+    + CASE(f_ps_remote, 2, 0)
+    + CASE(f_wmi_remote, 3, 0)
+    + CASE(f_wmi_sub, 2, 0)
+    + CASE(f_wmi_proc, 1, 0)
+    + CASE(f_machine_or_anon AND eid IN ("4624", "5140", "5145"), -2, 0)
+| WHERE score >= 3
+| EVAL method = CASE(
+    ch LIKE "*TerminalServices*" OR ch LIKE "*RdpCoreTS*" OR eid IN ("4778", "4779") OR (eid == "4624" AND lt == "10"), "RDP",
+    eid IN ("5140", "5145"), "SMB",
+    ch == "Microsoft-Windows-WinRM/Operational" OR (ch == "Windows PowerShell" AND eid == "400"), "WinRM",
+    ch == "Microsoft-Windows-WMI-Activity/Operational", "WMI",
+    eid IN ("7045", "4697"), "SMB/SCM (PsExec-style service)",
+    eid == "4648", "Explicit credentials (outbound)",
+    eid == "4624", "Network logon (SMB/WMI/WinRM/other)",
+    "Other"
+  )
+| EVAL direction = CASE(f_rdp_out OR eid == "4648" OR f_winrm_cli, "Outbound (from this host)", "Inbound (to this host)")
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_rdp_out, "outbound RDP client connection; ", ""),
+    CASE(f_rdp_in, "RDP user authenticated (1149); ", ""),
+    CASE(f_rdp_session, "RDP session from remote address; ", ""),
+    CASE(f_rdp_net, "RDP TCP connection accepted; ", ""),
+    CASE(f_logon_rdp, "remote interactive logon (type 10); ", ""),
+    CASE(f_logon_net, "network logon from remote IP (type 3); ", ""),
+    CASE(f_logon_ntlm, "NTLM network logon; ", ""),
+    CASE(f_explicit_remote, "explicit credentials to another server; ", ""),
+    CASE(f_admin_share, "admin share (ADMIN$/C$) access; ", ""),
+    CASE(f_pipe, "service/registry/SAM named pipe over SMB; ", ""),
+    CASE(f_psexec_svc, "PsExec-style service install; ", ""),
+    CASE(f_winrm_srv, "WinRM session on this host; ", ""),
+    CASE(f_winrm_cli, "outbound WinRM session; ", ""),
+    CASE(f_ps_remote, "PowerShell remoting host (wsmprovhost); ", ""),
+    CASE(f_wmi_remote, "remote WMI client machine; ", ""),
+    CASE(f_wmi_sub, "WMI event subscription; ", ""),
+    CASE(f_wmi_proc, "WMI process/service/subscription class; ", "")
+  ), "; $", "")
+| EVAL detail = COALESCE(TO_STRING(kape.executable_info),TO_STRING(message), "")
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    direction,
+    method,
+    winlog.channel,
+    eid,
+    score,
+    reasons,
+    acct,
+    actor,
+    src_ip,
+    tgt,
+    share,
+    lt,
+    auth_pkg,
+    client_machine,
+    detail
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

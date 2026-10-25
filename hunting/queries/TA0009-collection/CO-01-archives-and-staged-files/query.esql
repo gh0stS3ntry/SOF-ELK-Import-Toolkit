@@ -1,0 +1,74 @@
+// CO-01 | Archives and large staged files in user-writable and staging folders ($MFT)
+// Tactic: TA0009 Collection | ATT&CK: T1074.001, T1560.001
+// Indexes: filesystem-* | Needs: MFTECmd $MFT output
+FROM filesystem-* METADATA _index
+| WHERE file.update_reasons IS NULL
+| WHERE COALESCE(TO_STRING(file.type), "") != "dir"
+| EVAL fname = TO_LOWER(COALESCE(TO_STRING(file.name), ""))
+| WHERE fname != ""
+| EVAL p = TO_LOWER(COALESCE(TO_STRING(file.path), TO_STRING(file.directory), ""))
+| EVAL tier = CASE(
+    p RLIKE ".*\\\\(users\\\\public|programdata|perflogs|windows\\\\temp|[$]recycle[.]bin|windows\\\\debug|windows\\\\tasks|windows\\\\tracing|spool\\\\drivers\\\\color)\\\\.*", "high-risk staging dir",
+    p RLIKE ".*\\\\users\\\\[^\\\\]+\\\\(appdata\\\\(local|roaming)|downloads|desktop|music|pictures|videos|onedrive)(\\\\.*)?", "user-writable dir",
+    null
+  )
+| WHERE tier IS NOT NULL
+| WHERE NOT p RLIKE ".*(package cache|softwaredistribution|\\\\winsxs|\\\\servicing|windowsapps|\\\\microsoft\\\\edge|\\\\google\\\\chrome|\\\\mozilla|\\\\windows\\\\installer|\\\\windows\\\\wer\\\\|\\\\appdata\\\\local\\\\packages|\\\\appdata\\\\local\\\\microsoft).*"
+| EVAL is_archive = fname RLIKE ".*[.](zip|zipx|rar|7z|tar|gz|tgz|bz2|xz|zst|cab|arj|lzh|ace|001|pst)"
+| EVAL is_disguised = fname RLIKE ".*[.](dat|bin|tmp|db|bak|log|sys|cfg)"
+    AND tier == "high-risk staging dir"
+    AND COALESCE(file.size >= 104857600, false)
+| WHERE is_archive OR is_disguised
+| EVAL size_mb = ROUND(TO_DOUBLE(file.size) / 1048576.0, 1)
+| EVAL event_time = COALESCE(file.filename.created, file.stdinfo.created, @timestamp)
+| EVAL si_fn_gap_sec = DATE_DIFF("seconds", file.stdinfo.created, file.filename.created)
+| EVAL f_big = COALESCE(file.size >= 52428800, false)
+| EVAL f_huge = COALESCE(file.size >= 524288000, false)
+| EVAL f_high_dir = tier == "high-risk staging dir"
+| EVAL f_generic = fname RLIKE "(a|b|c|d|x|y|z|1|2|3|out|tmp|temp|data|backup|bak|files|file|docs|doc|dump|archive|new|test|stuff|all|collected|upload)[.](zip|rar|7z|tar|gz|tgz|cab)"
+| EVAL f_pst = fname RLIKE ".*[.]pst"
+| EVAL f_deleted = NOT COALESCE(kape.mft.inuse, true)
+| EVAL f_hidden = COALESCE(file.attributes.hidden, false) OR COALESCE(file.attributes.system, false)
+| EVAL f_timestomp = COALESCE(si_fn_gap_sec > 60, false)
+| EVAL score = CASE(is_archive, 2, 0)
+    + CASE(is_disguised, 3, 0)
+    + CASE(f_high_dir, 3, 0)
+    + CASE(f_huge, 3, f_big, 2, 0)
+    + CASE(f_generic, 2, 0)
+    + CASE(f_pst, 2, 0)
+    + CASE(f_hidden, 2, 0)
+    + CASE(f_deleted, 1, 0)
+    + CASE(f_timestomp, 1, 0)
+| WHERE score >= 6
+| EVAL flags = REPLACE(CONCAT(
+    CASE(is_disguised, "large data-like file in staging dir; ", ""),
+    CASE(f_high_dir, "high-risk staging directory; ", ""),
+    CASE(f_huge, "very large (500MB+); ", f_big, "large (50MB+); ", ""),
+    CASE(f_generic, "generic archive name; ", ""),
+    CASE(f_pst, "Outlook data file outside default location; ", ""),
+    CASE(f_hidden, "hidden/system attribute; ", ""),
+    CASE(f_deleted, "deleted after creation; ", ""),
+    CASE(f_timestomp, "$SI earlier than $FN (possible timestomp); ", "")
+  ), "; $", "")
+//Filter out noise
+| WHERE NOT p LIKE "*assets*javascript*pages*" AND NOT p LIKE "*.min.*.gz"
+| KEEP
+    _index,
+    event_time,
+    score,
+    flags,
+    tier,
+    size_mb,
+    file.size,
+    file.name,
+    file.path,
+    file.stdinfo.created,
+    file.stdinfo.mtime,
+    file.filename.created,
+    si_fn_gap_sec,
+    kape.mft.inuse,
+    file.inode,
+    file.sequence_number,
+    file.parent.inode
+| SORT score DESC, event_time ASC
+| LIMIT 5000

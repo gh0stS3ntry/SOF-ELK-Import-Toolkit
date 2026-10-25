@@ -1,0 +1,64 @@
+// EXF-01 | USB and removable storage devices in the SYSTEM hive, scored (USBSTOR, USB, SCSI)
+// Tactic: TA0010 Exfiltration | ATT&CK: T1052.001, T1091, T1200
+// Indexes: registry-* | Needs: RECmd batch or USB/USBSTOR/SCSI plugin output for the SYSTEM hive
+FROM registry-* METADATA _index
+| EVAL key_lower = TO_LOWER(COALESCE(registry.key, ""))
+| WHERE key_lower RLIKE ".*\\\\enum\\\\(usbstor|usb|scsi)\\\\.*"
+| EVAL source_type = REPLACE(key_lower, "^.*\\\\enum\\\\(usbstor|usb|scsi)\\\\.*$", "$1")
+| EVAL dev_class = REPLACE(key_lower, "^.*\\\\enum\\\\(usbstor|usb|scsi)\\\\([^\\\\]*).*$", "$2")
+| EVAL instance_id = CASE(
+    key_lower RLIKE ".*\\\\enum\\\\(usbstor|usb|scsi)\\\\[^\\\\]+\\\\[^\\\\]+.*",
+    REPLACE(key_lower, "^.*\\\\enum\\\\(usbstor|usb|scsi)\\\\[^\\\\]*\\\\([^\\\\]*).*$", "$2"),
+    null)
+| EVAL vendor = CASE(dev_class RLIKE ".*ven_[^&]*.*", REPLACE(dev_class, "^.*ven_([^&]*).*$", "$1"), null)
+| EVAL product = CASE(dev_class RLIKE ".*prod_[^&]*.*", REPLACE(dev_class, "^.*prod_([^&]*).*$", "$1"), null)
+| EVAL vid = CASE(dev_class RLIKE "vid_[0-9a-f]{4}.*", REPLACE(dev_class, "^vid_([0-9a-f]{4}).*$", "$1"), null)
+| EVAL serial = REPLACE(COALESCE(TO_LOWER(registry.plugin.serial_number), instance_id, ""), "&[0-9]+$", "")
+| WHERE serial != ""
+| EVAL device_name = COALESCE(registry.plugin.device_name, registry.plugin.title, registry.description)
+| EVAL connected = COALESCE(registry.plugin.last_connected, registry.last_write)
+| EVAL f_no_unique_serial = COALESCE(instance_id RLIKE "[^&][&].*", false)
+| EVAL f_badusb = COALESCE(dev_class RLIKE ".*(rubber|ducky|teensy|digispark|arduino|leonardo|promicro|pro_micro|malduino|bashbunny|bash_bunny|hak5|o[.]mg|flipper|attiny).*", false)
+    OR COALESCE(vid IN ("16c0", "2341", "1b4f", "239a", "2e8a", "1209"), false)
+| EVAL f_encrypted = COALESCE(dev_class RLIKE ".*(ironkey|kanguru|apricorn|datalocker|aegis|datashur|cryptr|encrypt).*", false)
+| EVAL f_generic = COALESCE(vendor LIKE "generic*", false)
+| STATS
+    host_count = COUNT_DISTINCT(_index),
+    first_seen = MIN(COALESCE(registry.plugin.first_installed, connected)),
+    last_seen = MAX(connected),
+    device_names = VALUES(device_name),
+    source_types = VALUES(source_type),
+    f_no_unique_serial = MAX(TO_INTEGER(f_no_unique_serial)),
+    f_badusb = MAX(TO_INTEGER(f_badusb)),
+    f_encrypted = MAX(TO_INTEGER(f_encrypted)),
+    f_generic = MAX(TO_INTEGER(f_generic)),
+    source_indices = VALUES(_index)
+  BY serial, vendor, product, vid
+| EVAL f_multi_host = host_count > 1
+| EVAL score = COALESCE(f_badusb, 0) * 3
+    + COALESCE(f_no_unique_serial, 0) * 2
+    + CASE(f_multi_host, 2, 0)
+    + COALESCE(f_encrypted, 0)
+    + COALESCE(f_generic, 0)
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(COALESCE(f_badusb, 0) == 1, "BadUSB/dev-board name or vendor ID; ", ""),
+    CASE(COALESCE(f_no_unique_serial, 0) == 1, "no unique serial; ", ""),
+    CASE(f_multi_host, "same device on multiple hosts; ", ""),
+    CASE(COALESCE(f_encrypted, 0) == 1, "encrypted-drive brand; ", ""),
+    CASE(COALESCE(f_generic, 0) == 1, "generic vendor string; ", "")
+  ), "; $", "")
+| KEEP
+    source_indices,
+    host_count,
+    score,
+    reasons,
+    first_seen,
+    last_seen,
+    vendor,
+    product,
+    vid,
+    serial,
+    device_names,
+    source_types
+| SORT last_seen DESC
+| LIMIT 10000

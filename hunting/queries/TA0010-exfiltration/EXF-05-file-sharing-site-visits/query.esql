@@ -1,0 +1,31 @@
+// EXF-05 | Visits to file-sharing, paste and personal cloud storage sites (browser history)
+// Tactic: TA0010 Exfiltration | ATT&CK: T1567.002, T1567
+// Indexes: browsinghistory-* | Needs: BrowsingHistoryView output
+FROM browsinghistory-* METADATA _index
+| EVAL u = TO_LOWER(COALESCE(url.original, ""))
+| WHERE u != ""
+| EVAL host_name = COALESCE(TO_LOWER(url.domain), REPLACE(u, "^[a-z][a-z0-9+.\\-]*://([^/?#@]*@)?([^/?#:]+).*$", "$2"))
+| EVAL service = CASE(
+    host_name RLIKE "(.*[.])?(mega[.]nz|mega[.]io)", "MEGA",
+    host_name RLIKE "(.*[.])?(wetransfer[.]com|we[.]tl)", "WeTransfer",
+    host_name RLIKE "(.*[.])?(sendspace[.]com|transfer[.]sh|file[.]io|gofile[.]io|anonfiles[.]com|temp[.]sh|0x0[.]st|catbox[.]moe|filetransfer[.]io|uploadfiles[.]io|ufile[.]io|bashupload[.]com|oshi[.]at)", "anonymous file drop",
+    host_name RLIKE "(.*[.])?(pastebin[.]com|paste[.]ee|hastebin[.]com|ghostbin[.]com|privatebin[.]net|rentry[.]co)", "paste site",
+    host_name RLIKE "(.*[.])?(dropbox[.]com|drive[.]google[.]com|docs[.]google[.]com|onedrive[.]live[.]com|1drv[.]ms|box[.]com|pcloud[.]com|icloud[.]com|mediafire[.]com|4shared[.]com|zippyshare[.]com)", "personal cloud storage",
+    host_name RLIKE "(.*[.])?(ngrok[.]io|ngrok-free[.]app|trycloudflare[.]com)", "tunnel endpoint",
+    null)
+| WHERE service IS NOT NULL
+| EVAL f_upload = u RLIKE ".*(upload|/u/|/send|/new|/share|/file/|/folder/).*"
+| STATS
+    visits = COUNT(*),
+    upload_like = COUNT(*) WHERE f_upload,
+    first_visit = MIN(browsinghistory.visit_time),
+    last_visit = MAX(browsinghistory.visit_time),
+    titles = VALUES(browsinghistory.title),
+    sample_urls = VALUES(url.original),
+    browsers = VALUES(browsinghistory.web_browser)
+  BY _index, user.name, service, host_name
+| EVAL sample_urls = MV_SLICE(sample_urls, 0, 9)
+| EVAL titles = MV_SLICE(titles, 0, 9)
+| KEEP _index, user.name, service, host_name, visits, upload_like, first_visit, last_visit, browsers, titles, sample_urls
+| SORT last_visit DESC
+| LIMIT 5000

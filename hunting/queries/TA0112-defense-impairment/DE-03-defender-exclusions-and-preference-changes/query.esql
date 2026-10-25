@@ -1,0 +1,49 @@
+// DE-03 | Defender exclusions and protection settings changed (5007 and Set/Add-MpPreference)
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1562.001
+// Indexes: evtxlogs-* | Needs: Defender Operational 5007; adds 4688, Sysmon 1, 4104
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| WHERE (ch == "Microsoft-Windows-Windows Defender/Operational" AND eid IN ("5007", "5001", "5010", "5012", "5013"))
+     OR (ch IN ("Security", "Microsoft-Windows-Sysmon/Operational", "Microsoft-Windows-PowerShell/Operational") AND eid IN ("4688", "1", "4104"))
+| EVAL old_value = TO_STRING(`winlog.payload.event_data.Old Value`)
+| EVAL new_value = TO_STRING(`winlog.payload.event_data.New Value`)
+| EVAL txt = TO_LOWER(CONCAT(
+    COALESCE(TO_STRING(kape.executable_info), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.ScriptBlockText), ""), " ",
+    COALESCE(new_value, ""), " ", COALESCE(old_value, "")))
+| EVAL f_cfg = eid == "5007"
+| EVAL change = CASE(
+    f_cfg AND txt LIKE "*\\\\exclusions\\\\*" AND COALESCE(new_value, "") != "", "Exclusion added",
+    f_cfg AND txt LIKE "*\\\\exclusions\\\\*", "Exclusion removed",
+    f_cfg AND txt RLIKE ".*(disablerealtimemonitoring|disablebehaviormonitoring|disableioavprotection|disableonaccessprotection|disablescriptscanning|disableantispyware|disableantivirus|disableblockatfirstseen|disableintrusionpreventionsystem)[ ]*=[ ]*0x1.*", "Protection feature disabled",
+    f_cfg AND txt RLIKE ".*(spynetreporting|submitsamplesconsent|mapsreporting)[ ]*=[ ]*0x0.*", "Cloud protection / sample submission off",
+    f_cfg AND txt RLIKE ".*(tamperprotection)[ ]*=[ ]*0x(0|4).*", "Tamper Protection off",
+    f_cfg AND txt RLIKE ".*threats\\\\threatidefaultaction.*|.*threatseveritydefaultaction.*", "Default threat action changed",
+    f_cfg AND txt RLIKE ".*(asr|attack surface|controlled folder|networkprotection|enablenetworkprotection|exploitguard).*", "ASR / CFA / Network Protection changed",
+    f_cfg, null,
+    eid == "5001", "Real-time protection disabled (5001)",
+    eid == "5010", "Antispyware scanning disabled (5010)",
+    eid == "5012", "Antivirus scanning disabled (5012)",
+    eid == "5013", "Tamper Protection blocked a change (5013)",
+    txt RLIKE ".*(add|set)-mppreference.*-exclusion(path|extension|process|ipaddress).*", "Exclusion added (command)",
+    txt RLIKE ".*set-mppreference.*-disable(realtimemonitoring|behaviormonitoring|ioavprotection|scriptscanning|blockatfirstseen|intrusionpreventionsystem|archivescanning)[ ]+([$]true|1).*", "Protection feature disabled (command)",
+    txt RLIKE ".*set-mppreference.*-(maps|submitsamplesconsent|mapsreporting)[ ]+(0|2|[$]false|disabled|neversend).*", "Cloud protection off (command)",
+    txt RLIKE ".*(remove-mppreference|mpcmdrun(\\.exe)?.*-removedefinitions).*", "Definitions or preferences removed (command)",
+    txt RLIKE ".*(reg(\\.exe)?[ ]+(add|delete)|set-itemproperty|new-itemproperty).*windows defender.*", "Defender registry changed (command)",
+    txt RLIKE ".*(sc(\\.exe)?[ ]+(stop|config|delete)[ ]+(windefend|wdboot|wdfilter|wdnisdrv|wdnissvc|sense)|net[ ]+stop[ ]+windefend).*", "Defender service stopped/changed (command)",
+    null)
+| WHERE change IS NOT NULL
+| EVAL setting = CASE(f_cfg, COALESCE(new_value, old_value), SUBSTRING(TRIM(txt), 1, 600))
+| EVAL f_excl_suspicious = change LIKE "Exclusion added*" AND txt RLIKE ".*(\\\\users\\\\public|\\\\programdata|\\\\perflogs|\\\\windows\\\\temp|\\\\appdata|\\\\temp|\\\\downloads|exclusions\\\\paths\\\\[a-z]:\\\\?[ ]*=|exclusions\\\\extensions\\\\[.]?(exe|dll|ps1|bat|vbs|js)[ ]*=|exclusionpath[ ]+[\"']?[a-z]:\\\\?[\"']?([ ]|,).*|[.](exe|dll|ps1|bat)).*"
+| KEEP
+    _index,
+    @timestamp,
+    ch,
+    eid,
+    change,
+    f_excl_suspicious,
+    setting,
+    old_value
+| SORT @timestamp ASC
+| LIMIT 10000

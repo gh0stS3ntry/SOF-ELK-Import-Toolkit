@@ -1,0 +1,33 @@
+// CO-04 | Folders browsed on network shares, removable drives, other users' profiles and sensitive paths (ShellBags)
+// Tactic: TA0009 Collection | ATT&CK: T1039, T1025, T1005, T1083
+// Indexes: shellbag-* | Needs: SBECmd output (NTUSER.DAT and UsrClass.dat)
+FROM shellbag-* METADATA _index
+| EVAL p = TO_LOWER(COALESCE(shellbag.absolute_path, ""))
+| WHERE p != ""
+| EVAL owner = TO_LOWER(COALESCE(user.name, ""))
+| EVAL other_profile = REPLACE(p, "^.*\\\\users\\\\([^\\\\]+).*$", "$1")
+| EVAL kind = CASE(
+    p RLIKE "\\\\\\\\.*" OR p RLIKE ".*(my network places|network)\\\\.*", "network share",
+    p RLIKE ".*\\\\[a-z]:\\\\.*" AND p RLIKE ".*(removable|usb|portable devices).*", "removable / portable device",
+    p RLIKE ".*(portable devices|this pc\\\\[^\\\\]*phone|mtp).*", "removable / portable device",
+    p RLIKE ".*\\\\users\\\\[^\\\\]+(\\\\.*)?" AND other_profile != owner AND other_profile NOT IN ("public", "default", "all users"), "another user's profile",
+    p RLIKE ".*(finance|payroll|hr|human resources|legal|confidential|secret|backup|password|credential|vpn|admin|it\\\\|sql|database|customer|contract|board|merger).*", "sensitive-sounding folder",
+    p RLIKE ".*\\\\(windows\\\\ntds|windows\\\\system32\\\\config|programdata\\\\microsoft\\\\crypto|appdata\\\\roaming\\\\microsoft\\\\(credentials|protect)).*", "credential store folder",
+    null)
+| WHERE kind IS NOT NULL
+| EVAL last_interacted = COALESCE(shellbag.last_interacted, shellbag.last_write)
+| KEEP
+    _index,
+    last_interacted,
+    shellbag.first_interacted,
+    kind,
+    user.name,
+    shellbag.absolute_path,
+    shellbag.shell_type,
+    shellbag.has_explored,
+    shellbag.hive,
+    shellbag.bag_path,
+    file.created,
+    file.mtime
+| SORT last_interacted DESC
+| LIMIT 10000

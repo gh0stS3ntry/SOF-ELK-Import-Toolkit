@@ -1,0 +1,26 @@
+// PE-11 | Scheduled task XML files on disk ($MFT), outside the \Microsoft\ tree
+// Tactic: TA0003 Persistence | ATT&CK: T1053.005
+// Indexes: filesystem-* | Needs: MFTECmd $MFT output
+FROM filesystem-* METADATA _index
+| WHERE file.update_reasons IS NULL
+| EVAL fpath = TO_LOWER(COALESCE(TO_STRING(file.path), ""))
+| WHERE fpath RLIKE ".*\\\\windows\\\\(system32|syswow64)\\\\tasks\\\\.*" OR fpath RLIKE ".*\\\\windows\\\\tasks\\\\.*"
+| WHERE NOT fpath RLIKE ".*\\\\tasks\\\\microsoft\\\\.*"
+| WHERE COALESCE(TO_STRING(file.type), "") != "dir" AND file.size != 0
+// files copied out by the collection itself
+| WHERE NOT fpath LIKE "*kape*output*"
+| EVAL si_fn_gap_sec = DATE_DIFF("seconds", file.stdinfo.created, file.filename.created)
+| EVAL deleted = NOT COALESCE(kape.mft.inuse, true)
+| KEEP
+    _index,
+    file.stdinfo.created,
+    file.filename.created,
+    file.stdinfo.mtime,
+    si_fn_gap_sec,
+    deleted,
+    file.name,
+    file.path,
+    file.size,
+    file.inode
+| SORT file.stdinfo.created ASC
+| LIMIT 5000

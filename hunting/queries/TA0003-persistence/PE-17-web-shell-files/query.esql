@@ -1,0 +1,57 @@
+// PE-17 | Script files in web roots ($MFT and $J): possible web shells
+// Tactic: TA0003 Persistence | ATT&CK: T1505.003, T1190
+// Indexes: filesystem-* | Needs: MFTECmd $MFT and/or $J output for the web server
+FROM filesystem-* METADATA _index
+| EVAL p = TO_LOWER(COALESCE(TO_STRING(file.path), CONCAT(COALESCE(TO_STRING(file.directory), ""), "\\", COALESCE(TO_STRING(file.name), ""))))
+| EVAL fname = TO_LOWER(COALESCE(TO_STRING(file.name), ""))
+| WHERE fname RLIKE ".*[.](aspx|ashx|asmx|asax|asp|cer|cshtml|svc|soap|jsp|jspx|jspf|war|php[0-9]?|phtml|cfm|cfc|py|pl|cgi|config)"
+| EVAL web_root = CASE(
+    p RLIKE ".*\\\\inetpub\\\\.*", "IIS inetpub",
+    p RLIKE ".*\\\\microsoft\\\\exchange server\\\\v1[45]\\\\(frontend\\\\httpproxy|clientaccess)\\\\.*", "Exchange OWA/ECP",
+    p RLIKE ".*\\\\(tomcat[^\\\\]*|jboss[^\\\\]*|wildfly[^\\\\]*|weblogic[^\\\\]*)\\\\.*(webapps|deploy|deployments)\\\\.*", "Java app server",
+    p RLIKE ".*\\\\(xampp|wamp[0-9]*|apache[^\\\\]*|nginx[^\\\\]*)\\\\.*(htdocs|www|html)\\\\.*", "Apache/nginx/PHP",
+    p RLIKE ".*\\\\(sharepoint|web server extensions)\\\\.*\\\\(layouts|template)\\\\.*", "SharePoint",
+    p RLIKE ".*\\\\(wwwroot|webroot|htdocs|public_html)\\\\.*", "Other web root",
+    null)
+| WHERE web_root IS NOT NULL
+| EVAL record_type = CASE(file.update_reasons IS NOT NULL, "USN $J", "$MFT")
+| EVAL reasons_usn = MV_CONCAT(TO_UPPER(TO_STRING(file.update_reasons)), ",")
+| WHERE record_type == "$MFT" OR reasons_usn LIKE "*FILE_CREATE*" OR reasons_usn LIKE "*RENAME_NEW_NAME*"
+| EVAL event_time = CASE(record_type == "USN $J", @timestamp, COALESCE(file.filename.created, file.stdinfo.created))
+| EVAL si_fn_gap_sec = DATE_DIFF("seconds", file.stdinfo.created, file.filename.created)
+// how many files of this name exist across the loaded hosts (default and product pages repeat)
+| INLINE STATS name_count = COUNT_DISTINCT(_index) BY fname
+| EVAL f_known_shell = fname RLIKE ".*(cmd|shell|exec|upload|up|eval|c99|r57|b374k|wso|china|chopper|aspxspy|antsword|behinder|godzilla|regeorg|tunnel|neoreg|help|error2|errorfe|xx|test[0-9]*|[0-9a-f]{8})[.].*"
+| EVAL f_auth_path = p RLIKE ".*\\\\(owa\\\\auth|ecp\\\\auth|aspnet_client)\\\\.*"
+| EVAL f_timestomp = COALESCE(si_fn_gap_sec > 60, false)
+| EVAL f_rare = name_count <= 1
+| EVAL f_tiny = file.size > 0 AND file.size < 4096 AND NOT fname LIKE "*.config"
+| EVAL score = CASE(f_known_shell, 3, 0) + CASE(f_auth_path, 3, 0) + CASE(f_timestomp, 2, 0)
+    + CASE(f_rare, 1, 0) + CASE(f_tiny, 1, 0) + CASE(record_type == "USN $J", 1, 0)
+| EVAL flags = REPLACE(CONCAT(
+    CASE(f_known_shell, "web-shell-like name; ", ""),
+    CASE(f_auth_path, "Exchange auth / aspnet_client folder; ", ""),
+    CASE(f_timestomp, "$SI earlier than $FN (possible timestomp); ", ""),
+    CASE(f_rare, "name on one host only; ", ""),
+    CASE(f_tiny, "small script (< 4 KB); ", ""),
+    CASE(record_type == "USN $J", "created in $J window; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    record_type,
+    event_time,
+    score,
+    flags,
+    web_root,
+    file.name,
+    p,
+    file.size,
+    reasons_usn,
+    file.stdinfo.created,
+    file.stdinfo.mtime,
+    file.filename.created,
+    si_fn_gap_sec,
+    kape.mft.inuse,
+    file.inode
+| SORT score DESC, event_time DESC
+| LIMIT 10000

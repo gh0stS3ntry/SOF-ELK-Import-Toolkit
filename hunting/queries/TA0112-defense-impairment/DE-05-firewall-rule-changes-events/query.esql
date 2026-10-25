@@ -1,0 +1,36 @@
+// DE-05 | Windows Firewall rules and settings changed (Security 4946-4950, Firewall channel 2004-2097)
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1562.004
+// Indexes: evtxlogs-* | Needs: Security "Audit MPSSVC Rule-Level Policy Change" and/or the Firewall With Advanced Security channel; adds netsh/NetFirewall commands
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| EVAL txt = TO_LOWER(CONCAT(
+    COALESCE(TO_STRING(kape.executable_info), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.ScriptBlockText), "")))
+| EVAL f_sec = ch == "Security" AND eid IN ("4946", "4947", "4948", "4950", "4954", "4956")
+| EVAL f_fw = ch LIKE "Microsoft-Windows-Windows Firewall With Advanced Security*" AND eid IN ("2003", "2004", "2005", "2006", "2033", "2052", "2059", "2071", "2072", "2097", "2099")
+| EVAL f_cmd = ch IN ("Security", "Microsoft-Windows-Sysmon/Operational", "Microsoft-Windows-PowerShell/Operational") AND eid IN ("4688", "1", "4104")
+    AND txt RLIKE ".*(netsh(\\.exe)?.*(advfirewall|firewall).*(add|set|delete|reset|off|disable)|(new|set|remove|disable)-netfirewall(rule|profile)|set-netfirewallprofile.*-enabled[ ]+(false|0)|netsh(\\.exe)?.*portproxy).*"
+| WHERE f_sec OR f_fw OR f_cmd
+| EVAL rule = TO_STRING(winlog.payload.event_data.RuleName)
+| EVAL change = CASE(
+    eid IN ("4946", "2004", "2071", "2097"), "Rule added",
+    eid IN ("4947", "2005", "2072", "2099"), "Rule modified",
+    eid IN ("4948", "2006", "2033", "2052", "2059"), "Rule deleted",
+    eid IN ("4950", "2003"), "Firewall setting / profile changed",
+    eid IN ("4954", "4956"), "Group Policy firewall settings changed",
+    "Firewall command")
+| EVAL detail = SUBSTRING(TRIM(CONCAT(COALESCE(rule, ""), " ", txt)), 1, 600)
+| EVAL f_any_rule = COALESCE(TO_LOWER(detail) RLIKE ".*(any|allow all|rdp|3389|445|5985|5986|22|remote desktop|anydesk|teamviewer|ngrok|tunnel|\\\\users\\\\|\\\\temp\\\\|\\\\programdata\\\\|profile.*off|state[ ]+off|enabled[ ]+(false|0)).*", false)
+| KEEP
+    _index,
+    @timestamp,
+    ch,
+    eid,
+    change,
+    f_any_rule,
+    rule,
+    winlog.user.name,
+    detail
+| SORT @timestamp ASC
+| LIMIT 10000

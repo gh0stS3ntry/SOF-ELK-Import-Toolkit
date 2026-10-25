@@ -1,0 +1,42 @@
+// EX-04 | Rare binaries by hash (Sysmon 1)
+// Tactic: TA0002 Execution | ATT&CK: T1204.002, T1036
+// Indexes: evtxlogs-* | Needs: Sysmon event 1 with Hashes
+FROM evtxlogs-* METADATA _index
+| WHERE winlog.channel == "Microsoft-Windows-Sysmon/Operational"
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE eid == "1"
+| EVAL hashes = TO_UPPER(COALESCE(TO_STRING(winlog.payload.event_data.Hashes), ""))
+| EVAL sha256 = CASE(hashes LIKE "*SHA256=*", TO_LOWER(REPLACE(hashes, "^.*SHA256=([0-9A-F]{64}).*$", "$1")), null)
+| EVAL sha1 = CASE(hashes LIKE "*SHA1=*", TO_LOWER(REPLACE(hashes, "^.*SHA1=([0-9A-F]{40}).*$", "$1")), null)
+| EVAL md5 = CASE(hashes LIKE "*MD5=*", TO_LOWER(REPLACE(hashes, "^.*MD5=([0-9A-F]{32}).*$", "$1")), null)
+| EVAL hash_key = COALESCE(sha256, sha1, md5, "(no hash)")
+| EVAL image = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.Image), ""))
+| EVAL image_norm = REPLACE(REPLACE(image, "^([a-z]:|\\\\device\\\\harddiskvolume[0-9]+)", ""), "\\\\users\\\\[^\\\\]+\\\\", "\\\\users\\\\*\\\\")
+| EVAL company = COALESCE(TO_STRING(winlog.payload.event_data.Company), "")
+| EVAL proc_user = COALESCE(TO_STRING(winlog.payload.event_data.User), "")
+| STATS
+    host_count = COUNT_DISTINCT(_index),
+    executions = COUNT(*),
+    paths = VALUES(image_norm),
+    companies = VALUES(company),
+    users = VALUES(proc_user),
+    sha1_values = VALUES(sha1),
+    md5_values = VALUES(md5),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    source_indices = VALUES(_index)
+  BY hash_key
+| KEEP
+    source_indices,
+    host_count,
+    executions,
+    first_seen,
+    last_seen,
+    paths,
+    companies,
+    users,
+    hash_key,
+    sha1_values,
+    md5_values
+| SORT host_count ASC, executions ASC
+| LIMIT 10000

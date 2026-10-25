@@ -1,0 +1,71 @@
+// PE-15 | Permanent WMI event subscriptions (WMI-Activity 5861, Sysmon 19/20/21)
+// Tactic: TA0003 Persistence | ATT&CK: T1546.003
+// Indexes: evtxlogs-* | Needs: WMI-Activity Operational 5861 (Sysmon 19-21 are added when present)
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| WHERE (ch == "Microsoft-Windows-WMI-Activity/Operational" AND eid == "5861")
+     OR (ch == "Microsoft-Windows-Sysmon/Operational" AND eid IN ("19", "20", "21"))
+// 5861 keeps the filter in ESS and the consumer definition in CONSUMER; Sysmon 19-21 put theirs in ExecutableInfo
+| EVAL filter_name = TO_STRING(winlog.payload.user_data.Operation_ESStoConsumerBinding.ESS)
+| EVAL consumer = TO_STRING(winlog.payload.user_data.Operation_ESStoConsumerBinding.CONSUMER)
+| EVAL txt = TO_LOWER(CONCAT(
+    COALESCE(consumer, ""), " ",
+    COALESCE(TO_STRING(winlog.payload.user_data.Operation_ESStoConsumerBinding.PossibleCause), ""), " ",
+    COALESCE(TO_STRING(kape.executable_info), "")))
+| EVAL f_cmd = txt LIKE "*commandlineeventconsumer*"
+| EVAL f_script = txt LIKE "*activescripteventconsumer*"
+| EVAL f_smtp = txt LIKE "*smtpeventconsumer*"
+| EVAL f_nt = txt LIKE "*nteventlogeventconsumer*"
+// Windows ships one binding: "SCM Event Log Filter" -> NTEventLogEventConsumer "SCM Event Log Consumer"
+| EVAL f_default_scm = TO_LOWER(COALESCE(filter_name, "")) == "scm event log filter" AND NOT (f_cmd OR f_script OR f_smtp)
+| EVAL f_lolbin = txt RLIKE ".*(powershell|pwsh|cmd[.]exe|cmd /|mshta|wscript|cscript|rundll32|regsvr32|msiexec|certutil|bitsadmin|wmic|msbuild|installutil|curl[.]exe).*"
+| EVAL f_userpath = txt RLIKE ".*\\\\(users|programdata|perflogs|temp|appdata|downloads)\\\\.*"
+| EVAL f_encoded = txt RLIKE ".*(-enc|-encodedcommand|frombase64string|-w hidden|-windowstyle hidden|iex[ (]|invoke-expression|downloadstring).*"
+| EVAL f_net = txt RLIKE ".*(http://|https://|ftp://).*"
+| EVAL f_script_ext = txt RLIKE ".*[.](ps1|vbs|vbe|js|jse|wsf|hta|bat|cmd|sct|py)([^a-z0-9].*)?"
+| EVAL f_trigger = txt RLIKE ".*(systemuptime|win32_localtime|__timerevent|__intervaltimerinstruction|win32_logonsession|win32_processstarttrace|win32_perfformatteddata_perfos_system).*"
+| EVAL score = 2
+    + CASE(f_cmd, 3, 0)
+    + CASE(f_script, 3, 0)
+    + CASE(f_smtp, 2, 0)
+    + CASE(f_lolbin, 2, 0)
+    + CASE(f_userpath, 2, 0)
+    + CASE(f_encoded, 2, 0)
+    + CASE(f_net, 2, 0)
+    + CASE(f_trigger, 1, 0)
+    + CASE(f_script_ext, 1, 0)
+    + CASE(f_default_scm, -2, 0)
+| WHERE score >= 1
+| EVAL consumer_type = CASE(
+    f_cmd, "CommandLineEventConsumer",
+    f_script, "ActiveScriptEventConsumer",
+    f_smtp, "SMTPEventConsumer",
+    f_nt, "NTEventLogEventConsumer",
+    "Unknown / other")
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_default_scm, "default Windows SCM binding; ", "permanent WMI binding registered; "),
+    CASE(f_cmd, "command-line consumer; ", ""),
+    CASE(f_script, "script consumer (runs via scrcons.exe); ", ""),
+    CASE(f_smtp, "SMTP consumer; ", ""),
+    CASE(f_lolbin, "interpreter/LOLBin in definition; ", ""),
+    CASE(f_userpath, "user-writable path; ", ""),
+    CASE(f_encoded, "encoded/hidden/download cradle; ", ""),
+    CASE(f_net, "network URL; ", ""),
+    CASE(f_trigger, "boot/timer/logon-style trigger; ", ""),
+    CASE(f_script_ext, "script file referenced; ", "")
+  ), "; $", "")
+| EVAL definition = SUBSTRING(COALESCE(consumer, TO_STRING(kape.executable_info), ""), 1, 2000)
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    ch,
+    eid,
+    score,
+    consumer_type,
+    reasons,
+    filter_name,
+    definition
+| SORT score DESC, @timestamp ASC
+| LIMIT 2000

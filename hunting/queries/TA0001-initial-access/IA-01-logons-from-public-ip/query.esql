@@ -1,0 +1,51 @@
+// IA-01 | Logons and failed logons from public IP addresses
+// Tactic: TA0001 Initial Access | ATT&CK: T1133, T1078, T1110
+// Indexes: evtxlogs-* | Needs: Security 4624/4625
+FROM evtxlogs-* METADATA _index
+| WHERE winlog.channel == "Security"
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE eid IN ("4624", "4625")
+| EVAL src = TRIM(COALESCE(TO_STRING(winlog.payload.event_data.IpAddress), ""))
+| WHERE src NOT IN ("", "-", "::1", "127.0.0.1")
+| EVAL src_ip = TO_IP(REPLACE(src, "^::ffff:", ""))
+| WHERE src_ip IS NOT NULL
+| WHERE NOT CIDR_MATCH(src_ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10", "fc00::/7", "fe80::/10")
+| EVAL lt = COALESCE(TO_STRING(winlog.payload.event_data.LogonType), "?")
+| EVAL logon_type = CASE(
+    lt == "2", "2 interactive", lt == "3", "3 network", lt == "4", "4 batch", lt == "5", "5 service",
+    lt == "7", "7 unlock", lt == "8", "8 network cleartext", lt == "9", "9 new credentials",
+    lt == "10", "10 remote interactive (RDP)", lt == "11", "11 cached interactive", lt)
+| EVAL account = TO_LOWER(CONCAT(COALESCE(TO_STRING(winlog.payload.event_data.TargetDomainName), ""), "\\", COALESCE(TO_STRING(winlog.payload.event_data.TargetUserName), "")))
+| EVAL auth = COALESCE(TO_STRING(winlog.payload.event_data.AuthenticationPackageName), "")
+| EVAL fail_status = COALESCE(TO_STRING(winlog.payload.event_data.SubStatus), TO_STRING(winlog.payload.event_data.Status), "")
+| STATS
+    successes = COUNT(*) WHERE eid == "4624",
+    failures = COUNT(*) WHERE eid == "4625",
+    accounts_ok = VALUES(account) WHERE eid == "4624",
+    accounts_failed = COUNT_DISTINCT(account) WHERE eid == "4625",
+    logon_types = VALUES(logon_type),
+    auth_packages = VALUES(auth),
+    fail_status_codes = VALUES(fail_status) WHERE eid == "4625",
+    first_seen = MIN(@timestamp),
+    first_success = MIN(@timestamp) WHERE eid == "4624",
+    last_seen = MAX(@timestamp)
+  BY _index, src
+| EVAL f_success_after_failures = successes > 0 AND failures > 0
+| EVAL f_rdp = MV_COUNT(logon_types) > 0 AND MV_CONCAT(logon_types, ",") LIKE "*RDP*"
+| KEEP
+    _index,
+    src,
+    successes,
+    failures,
+    f_success_after_failures,
+    f_rdp,
+    accounts_ok,
+    accounts_failed,
+    logon_types,
+    auth_packages,
+    fail_status_codes,
+    first_seen,
+    first_success,
+    last_seen
+| SORT successes DESC, failures DESC
+| LIMIT 10000

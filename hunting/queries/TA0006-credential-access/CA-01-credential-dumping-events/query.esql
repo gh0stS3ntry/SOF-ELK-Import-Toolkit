@@ -1,0 +1,89 @@
+// CA-01 | OS credential dumping signs in the event logs
+// Tactic: TA0006 Credential Access | ATT&CK: T1003.001, T1003.002, T1003.003, T1003.006, T1547.005, T1068
+// Indexes: evtxlogs-* | Needs: Security, System, Application, Defender and PowerShell Operational 4104 on at least one host
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| WHERE (ch == "Microsoft-Windows-Windows Defender/Operational" AND eid IN ("1006", "1116", "1117", "1121", "1122"))
+     OR (ch == "Security" AND eid IN ("4614", "4622", "4656", "4663", "4662", "4697", "4688"))
+     OR (ch == "Microsoft-Windows-Sysmon/Operational" AND eid IN ("1", "10"))
+     OR (ch == "Microsoft-Windows-PowerShell/Operational" AND eid == "4104")
+     OR (ch == "Microsoft-Windows-CodeIntegrity/Operational" AND eid IN ("3033", "3063"))
+     OR (ch == "System" AND eid == "7045")
+     OR (ch == "Application" AND eid IN ("1000", "1001"))
+| EVAL txt = TO_LOWER(CONCAT(
+    COALESCE(TO_STRING(kape.executable_info), ""), " ",
+    COALESCE(MV_CONCAT(winlog.payload.event_data.string, " "), ""), " ",
+    COALESCE(TO_STRING(`winlog.payload.event_data.Threat Name`), ""), " ",
+    COALESCE(TO_STRING(`winlog.payload.event_data.Process Name`), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.Path), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.ObjectName), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.ProcessName), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.NotificationPackageName), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.SecurityPackageName), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.ServiceFileName), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.ScriptBlockText), "")))
+| EVAL subject = COALESCE(TO_STRING(winlog.payload.event_data.SubjectUserName), "")
+| EVAL f_def_cred = ch LIKE "*Defender*" AND eid IN ("1006", "1116", "1117")
+    AND txt RLIKE ".*(mimikatz|mikatz|mimilib|lsassdump|lsadump|dumpcreds|credentialdump|credentialtheft|pwdump|fgdump|gsecdump|wce[.]exe|wceaux|procdump|nanodump|dumpert|safetykatz|lazagne|rubeus|impacket|secretsdump|kerberoast|dcsync|sekurlsa|passview|pswtool|lsass).*"
+| EVAL f_asr_lsass = ch LIKE "*Defender*" AND eid IN ("1121", "1122") AND txt LIKE "*lsass*"
+| EVAL f_lsass_obj = ch == "Security" AND eid IN ("4656", "4663") AND txt LIKE "*lsass.exe*"
+    AND NOT txt RLIKE ".*(msmpeng|csrss|wininit|svchost|services[.]exe|lsm[.]exe|wmiprvse|vmtoolsd|csfalcon|sentinel|mssense|senseir|nissrv).*"
+| EVAL f_ssp = ch == "Security" AND eid IN ("4614", "4622")
+| EVAL f_ssp_bad = f_ssp AND txt RLIKE ".*(mimilib|mimikatz|mimilsa|memssp|kiwissp|mimi).*"
+| EVAL f_ssp_unknown = f_ssp
+    AND NOT txt RLIKE ".*(kerberos|msv1_0|schannel|wdigest|tspkg|pku2u|cloudap|negotiate|negoexts|livessp|scecli|rassfm|credssp|credsspsvc|ntlm).*"
+| EVAL f_driver = ((ch == "Security" AND eid == "4697") OR (ch == "System" AND eid == "7045"))
+    AND txt RLIKE ".*(mimidrv|mimikatz|dumpert|nanodump|physmem|winpmem|dumpit|kdmapper|gdrv|rtcore64|dbutil|iqvw64|procexp152|pmdump).*"
+| EVAL f_cmd_dump = txt RLIKE ".*(invoke-mimikatz|sekurlsa|lsadump|privilege::debug|kerberos::(ptt|golden|list)|minidumpwritedump|out-minidump|comsvcs[.]dll.*minidump|procdump.*lsass|get-process[ ]+lsass|ntds[.]dit|ntdsutil.*(ifm|create full)|diskshadow|vssadmin.*create|esentutl.*/vss|secretsdump|invoke-dcsync|dumpcreds|nanodump|safetykatz|lazagne|invoke-kerberoast|invoke-powerdump|dpapi::|vault::|harddiskvolumeshadowcopy|reg(.exe)?[ ]+save[ ]+hklm.(sam|system|security)).*"
+| EVAL f_ci_lsass = ch LIKE "*CodeIntegrity*" AND txt LIKE "*lsass*"
+| EVAL f_lsass_crash = ch == "Application" AND txt LIKE "*lsass.exe*"
+| EVAL f_sysmon_lsass = ch == "Microsoft-Windows-Sysmon/Operational" AND eid == "10" AND txt LIKE "*lsass*"
+| EVAL f_dcsync = ch == "Security" AND eid == "4662"
+    AND txt RLIKE ".*(1131f6aa-9c07-11d1-f79f-00c04fc2dcd2|1131f6ad-9c07-11d1-f79f-00c04fc2dcd2|89e95b76-444d-4c62-991a-0facbeda640c).*"
+    AND NOT subject LIKE "*$"
+| EVAL score = CASE(f_def_cred, 5, 0)
+    + CASE(f_asr_lsass, 5, 0)
+    + CASE(f_ssp_bad, 5, f_ssp_unknown, 4, 0)
+    + CASE(f_driver, 5, 0)
+    + CASE(f_cmd_dump, 5, 0)
+    + CASE(f_dcsync, 5, 0)
+    + CASE(f_sysmon_lsass, 2, 0)
+    + CASE(f_ci_lsass, 4, 0)
+    + CASE(f_lsass_crash, 3, 0)
+    + CASE(f_lsass_obj, 3, 0)
+| WHERE score >= 3
+| EVAL technique = CASE(
+    f_dcsync, "DCSync (replication rights abuse)",
+    f_ssp_bad OR f_ssp_unknown, "LSA security/notification package loaded",
+    f_asr_lsass OR f_lsass_obj OR f_sysmon_lsass OR f_ci_lsass OR f_lsass_crash, "LSASS access, injection or crash",
+    f_def_cred, "Credential tool detected by Defender",
+    f_driver, "Dump / BYOVD driver installed as a service",
+    f_cmd_dump, "Credential dumping command or script",
+    "Other")
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_def_cred, "Defender detection of credential tool; ", ""),
+    CASE(f_asr_lsass, "ASR rule block/audit involving LSASS; ", ""),
+    CASE(f_lsass_obj, "handle/access to lsass.exe by non-system process; ", ""),
+    CASE(f_sysmon_lsass, "Sysmon process access to lsass; ", ""),
+    CASE(f_ssp_bad, "known malicious SSP name; ", f_ssp_unknown, "non-default LSA package; ", ""),
+    CASE(f_ci_lsass, "code integrity violation involving lsass.exe; ", ""),
+    CASE(f_lsass_crash, "lsass.exe crash report; ", ""),
+    CASE(f_driver, "dump/BYOVD driver service install; ", ""),
+    CASE(f_cmd_dump, "dump keywords in command line or script; ", ""),
+    CASE(f_dcsync, "directory replication GUID from a non-machine account; ", "")
+  ), "; $", "")
+| EVAL detail = SUBSTRING(TRIM(txt), 1, 1500)
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    technique,
+    ch,
+    eid,
+    score,
+    reasons,
+    subject,
+    detail
+| SORT score DESC, @timestamp ASC
+| LIMIT 5000

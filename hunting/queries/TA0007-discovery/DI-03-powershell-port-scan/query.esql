@@ -1,0 +1,27 @@
+// DI-03 | Port scanning and network probing with PowerShell or command-line tools
+// Tactic: TA0007 Discovery | ATT&CK: T1046, T1018, T1059.001
+// Indexes: evtxlogs-* | Needs: PowerShell Operational 4104 on at least one host; adds 4688 / Sysmon 1
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| WHERE (ch == "Microsoft-Windows-PowerShell/Operational" AND eid == "4104")
+     OR (ch == "Security" AND eid == "4688")
+     OR (ch == "Microsoft-Windows-Sysmon/Operational" AND eid == "1")
+| EVAL cmd = CONCAT(
+    COALESCE(TO_STRING(kape.executable_info), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.ScriptBlockText), ""))
+| EVAL c = TO_LOWER(cmd)
+| WHERE c LIKE "*test-netconnection*" OR c LIKE "*tcpclient*" OR c LIKE "*system.net.sockets*"
+   OR c LIKE "*connectasync*" OR c LIKE "*beginconnect*" OR c LIKE "*test-connection*"
+   OR c LIKE "*portqry*" OR c LIKE "*nmap*" OR c LIKE "*masscan*" OR c LIKE "*netcat*" OR c LIKE "*nc.exe*" OR c LIKE "*ncat*"
+   OR c LIKE "*advanced_ip_scanner*" OR c LIKE "*advanced port scanner*" OR c LIKE "*netscan*" OR c LIKE "*angryip*"
+   OR c LIKE "*invoke-portscan*" OR c LIKE "*1..1024*" OR c LIKE "*1..65535*" OR c LIKE "*1..254*"
+// Microsoft's own module definitions match on 'tcpclient'; drop function definitions
+| WHERE NOT c LIKE "*function test-netconnection*"
+| EVAL f_tool = c RLIKE ".*(nmap|masscan|netscan|advanced_ip_scanner|advanced port scanner|angryip|portqry|invoke-portscan).*"
+| EVAL f_loop = c RLIKE ".*(1[.][.](254|255|1024|65535)|foreach|for[ ]*[(]).*"
+| EVAL score = CASE(f_tool, 3, 0) + CASE(f_loop, 2, 0) + 1
+| EVAL cmd_preview = SUBSTRING(TRIM(cmd), 1, 1500)
+| KEEP @timestamp, _index, winlog.computer_name, ch, eid, score, f_tool, f_loop, winlog.payload.event_data.SubjectUserName, user.id, cmd_preview
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

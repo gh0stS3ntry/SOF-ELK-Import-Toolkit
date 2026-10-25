@@ -1,0 +1,32 @@
+// DI-05 | User, group, domain and trust discovery in PowerShell and command lines
+// Tactic: TA0007 Discovery | ATT&CK: T1087.001, T1087.002, T1069, T1482, T1033
+// Indexes: evtxlogs-* | Needs: PowerShell Operational 4104 on at least one host; adds 4688 / Sysmon 1
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| WHERE (ch == "Microsoft-Windows-PowerShell/Operational" AND eid == "4104")
+     OR (ch == "Security" AND eid == "4688")
+     OR (ch == "Microsoft-Windows-Sysmon/Operational" AND eid == "1")
+| EVAL cmd = CONCAT(
+    COALESCE(TO_STRING(kape.executable_info), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.ScriptBlockText), ""))
+| EVAL c = TO_LOWER(cmd)
+| EVAL f_ps_ad = c RLIKE ".*(get-aduser|get-adgroup|get-adgroupmember|get-adprincipalgroupmembership|get-adcomputer|get-adobject|get-addomain|get-adtrust|get-adforest|get-domaincontroller|get-netuser|get-netgroup|get-netcomputer|get-netdomain|get-domainuser|get-domaingroup|get-domaincomputer|get-domaintrust|invoke-userhunter|find-localadminaccess|invoke-sharefinder|directorysearcher|\\[adsisearcher\\]).*"
+| EVAL f_ps_local = c RLIKE ".*(get-localuser|get-localgroup|get-localgroupmember|win32_useraccount|win32_group).*"
+| EVAL f_cmd = c RLIKE ".*(net(1)?[.]exe.*[ ](user|group|localgroup|accounts)|net[ ]+(user|group|localgroup|accounts)|whoami|nltest.*(/domain_trusts|/dclist|/dsgetdc)|dsquery|adfind|query[ ]+user|quser|cmdkey[ ]+/list|klist).*"
+| EVAL f_tool = c RLIKE ".*(sharphound|bloodhound|adfind|adrecon|pingcastle|invoke-bloodhound|powerview|adexplorer).*"
+| WHERE f_ps_ad OR f_ps_local OR f_cmd OR f_tool
+| WHERE NOT c LIKE "*function get-localuser*"
+| EVAL f_priv_target = c RLIKE ".*(domain admins|enterprise admins|administrators|schema admins|backup operators|remote desktop users|dnsadmins|krbtgt).*"
+| EVAL score = CASE(f_tool, 4, 0) + CASE(f_ps_ad, 2, 0) + CASE(f_cmd, 1, 0) + CASE(f_ps_local, 1, 0) + CASE(f_priv_target, 2, 0)
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_tool, "AD recon tool; ", ""),
+    CASE(f_ps_ad, "AD / PowerView query; ", ""),
+    CASE(f_cmd, "net / whoami / nltest / dsquery; ", ""),
+    CASE(f_ps_local, "local user/group cmdlets; ", ""),
+    CASE(f_priv_target, "privileged group or krbtgt named; ", "")
+  ), "; $", "")
+| EVAL cmd_preview = SUBSTRING(TRIM(cmd), 1, 1500)
+| KEEP @timestamp, _index, winlog.computer_name, ch, eid, score, reasons, winlog.payload.event_data.SubjectUserName, user.id, cmd_preview
+| SORT @timestamp ASC
+| LIMIT 10000

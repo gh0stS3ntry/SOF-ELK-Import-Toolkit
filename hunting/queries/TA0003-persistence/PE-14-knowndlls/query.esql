@@ -1,0 +1,44 @@
+// PE-14 | KnownDLLs tampering (DllDirectory redirect, ExcludeFromKnownDlls, unusual values)
+// Tactic: TA0003 Persistence | ATT&CK: T1574.001
+// Indexes: registry-* | Needs: RECmd batch output that dumps Session Manager\KnownDLLs
+FROM registry-* METADATA _index
+| WHERE event.dataset == "registry.batch"
+| EVAL key_lower = TO_LOWER(COALESCE(registry.key, ""))
+| EVAL vname = TO_LOWER(COALESCE(registry.value, ""))
+| EVAL vdata_raw = COALESCE(MV_CONCAT(registry.data.strings, " "), "")
+| EVAL vdata = TRIM(TO_LOWER(vdata_raw))
+| EVAL is_kd = key_lower RLIKE ".*\\\\session manager\\\\knowndlls(32)?"
+| EVAL is_exclude = key_lower RLIKE ".*\\\\session manager" AND vname == "excludefromknowndlls"
+| WHERE is_kd OR is_exclude
+| EVAL is_dlldir = is_kd AND vname IN ("dlldirectory", "dlldirectory32")
+| EVAL f_dlldir_changed = is_dlldir
+    AND NOT vdata IN ("%systemroot%\\system32", "%systemroot%\\syswow64", "c:\\windows\\system32", "c:\\windows\\syswow64")
+| EVAL f_exclude_set = is_exclude AND vdata != ""
+| EVAL f_path_in_value = is_kd AND NOT is_dlldir AND vdata RLIKE ".*[\\\\/].*"
+| EVAL f_not_dll = is_kd AND NOT is_dlldir AND vdata != "" AND NOT vdata RLIKE ".*[.]dll"
+| EVAL f_name_mismatch = is_kd AND NOT is_dlldir AND vdata != "" AND vdata != CONCAT(vname, ".dll")
+| EVAL score = CASE(f_dlldir_changed, 5, 0)
+    + CASE(f_exclude_set, 4, 0)
+    + CASE(f_path_in_value, 4, 0)
+    + CASE(f_not_dll, 2, 0)
+    + CASE(f_name_mismatch, 1, 0)
+| WHERE score > 0
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_dlldir_changed, "DllDirectory redirected from System32/SysWOW64; ", ""),
+    CASE(f_exclude_set, "ExcludeFromKnownDlls populated; ", ""),
+    CASE(f_path_in_value, "path or separator in KnownDLLs value; ", ""),
+    CASE(f_not_dll, "value is not a .dll; ", ""),
+    CASE(f_name_mismatch, "value data does not match value name; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    registry.last_write,
+    score,
+    reasons,
+    registry.value,
+    vdata_raw,
+    registry.key,
+    registry.hive_path,
+    kape.source_file
+| SORT score DESC, registry.last_write DESC
+| LIMIT 5000

@@ -1,0 +1,54 @@
+// EX-07 | Suspicious PowerShell script blocks (4104)
+// Tactic: TA0002 Execution | ATT&CK: T1059.001, T1027, T1562.001, T1105
+// Indexes: evtxlogs-* | Needs: PowerShell Operational 4104
+FROM evtxlogs-* METADATA _index
+| WHERE winlog.channel == "Microsoft-Windows-PowerShell/Operational"
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE eid == "4104"
+| EVAL sb = COALESCE(TO_STRING(winlog.payload.event_data.ScriptBlockText), "")
+| WHERE sb != ""
+| EVAL t = TO_LOWER(sb)
+| EVAL f_amsi = t RLIKE ".*(amsiutils|amsiinitfailed|amsiscanbuffer|amsicontext|amsi[.]dll).*"
+| EVAL f_etw = t RLIKE ".*(etweventwrite|psetwlogprovider|eventprovider.*m_enabled).*"
+| EVAL f_reflection = t RLIKE ".*(reflection[.]assembly.*load|::load[(]|virtualalloc|virtualprotect|createthread|getprocaddress|getdelegateforfunctionpointer|marshal.*copy|add-type.*dllimport).*"
+| EVAL f_cradle = t RLIKE ".*(downloadstring|downloadfile|downloaddata|invoke-webrequest|invoke-restmethod|iwr |net[.]webclient|start-bitstransfer|system[.]net[.]http).*"
+| EVAL f_exec = t RLIKE ".*(iex[ (]|invoke-expression|scriptblock.*create|[&][ ]*[(]).*"
+| EVAL f_encoded = t RLIKE ".*(frombase64string|-enc |-encodedcommand|io[.]compression[.](gzipstream|deflatestream)|-bxor|\\[char\\][ ]*[0-9]).*"
+| EVAL f_tool = t RLIKE ".*(invoke-mimikatz|sekurlsa|invoke-kerberoast|invoke-bloodhound|sharphound|powerview|get-domaintrust|invoke-sharefinder|invoke-userhunter|powerup|invoke-allchecks|nishang|powercat|invoke-dcsync|invoke-smbexec|invoke-wmiexec|invoke-thehash|empire|covenant|out-minidump|minidumpwritedump).*"
+| EVAL f_defender = t RLIKE ".*(set-mppreference|add-mppreference).*(disable|exclusion).*"
+| EVAL f_logs = t RLIKE ".*(clear-eventlog|wevtutil[^a-z]+cl |remove-eventlog|limit-eventlog).*"
+| EVAL f_shadow = t RLIKE ".*(win32_shadowcopy|vssadmin|shadowcopy[ ]+delete).*"
+| EVAL f_obfuscated = t RLIKE ".*(`[a-z]`[a-z]|[(]['\"][a-z]{1,3}['\"][ ]*[+][ ]*['\"]).*"
+| EVAL score = CASE(f_amsi, 4, 0) + CASE(f_etw, 3, 0) + CASE(f_tool, 4, 0) + CASE(f_reflection, 3, 0)
+    + CASE(f_defender, 3, 0) + CASE(f_logs, 3, 0) + CASE(f_shadow, 3, 0)
+    + CASE(f_cradle AND f_exec, 3, f_cradle, 1, 0) + CASE(f_encoded, 2, 0) + CASE(f_exec, 1, 0)
+    + CASE(f_obfuscated, 2, 0)
+| WHERE score >= 3
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_amsi, "AMSI bypass; ", ""),
+    CASE(f_etw, "ETW / script logging tampering; ", ""),
+    CASE(f_tool, "offensive PowerShell tooling; ", ""),
+    CASE(f_reflection, "reflective loading / Win32 API; ", ""),
+    CASE(f_defender, "Defender disabled or excluded; ", ""),
+    CASE(f_logs, "event log clearing; ", ""),
+    CASE(f_shadow, "shadow copy manipulation; ", ""),
+    CASE(f_cradle AND f_exec, "download and execute; ", f_cradle, "web download; ", ""),
+    CASE(f_encoded, "encoding / compression / XOR; ", ""),
+    CASE(f_exec, "dynamic code execution; ", ""),
+    CASE(f_obfuscated, "tick or string-concatenation obfuscation; ", "")
+  ), "; $", "")
+| EVAL script_preview = SUBSTRING(sb, 1, 2000)
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    user.id,
+    score,
+    reasons,
+    winlog.payload.event_data.ScriptBlockId,
+    winlog.payload.event_data.MessageNumber,
+    winlog.payload.event_data.MessageTotal,
+    winlog.payload.event_data.Path,
+    script_preview
+| SORT score DESC, @timestamp ASC
+| LIMIT 5000

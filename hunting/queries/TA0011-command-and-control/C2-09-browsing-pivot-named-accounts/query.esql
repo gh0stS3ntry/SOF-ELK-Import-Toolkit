@@ -1,0 +1,31 @@
+// C2-09 | Browsing history of named accounts (pivot)
+// Tactic: TA0011 Command and Control | ATT&CK: T1071.001, T1105
+// Indexes: browsinghistory-* | Needs: BrowsingHistoryView output
+FROM browsinghistory-* METADATA _index
+| WHERE url.original IS NOT NULL AND url.original != ""
+| EVAL user_l = TO_LOWER(COALESCE(user.name, ""))
+| EVAL profile_l = TO_LOWER(CONCAT(COALESCE(browsinghistory.user_profile, ""), " ", COALESCE(browsinghistory.history_file, "")))
+// EDIT: the accounts you are pivoting on (lower case), in both places
+| WHERE user_l IN ("kaspersky", "guest")
+     OR profile_l RLIKE ".*\\\\users\\\\(kaspersky|guest)(\\\\| ).*"
+| EVAL account = CASE(
+    user_l IN ("kaspersky", "guest"), user_l,
+    REPLACE(profile_l, "(?s)^.*\\\\users\\\\(kaspersky|guest)(\\\\| ).*$", "$1"))
+| KEEP
+    _index,
+    browsinghistory.visit_time,
+    browsinghistory.visit_time_local,
+    account,
+    user.name,
+    browsinghistory.web_browser,
+    browsinghistory.browser_profile,
+    url.original,
+    url.domain,
+    browsinghistory.title,
+    browsinghistory.visit_type,
+    browsinghistory.visited_from,
+    browsinghistory.visit_count,
+    browsinghistory.typed_count,
+    browsinghistory.history_file
+| SORT browsinghistory.visit_time ASC, _index ASC
+| LIMIT 10000

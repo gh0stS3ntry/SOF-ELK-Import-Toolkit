@@ -1,0 +1,49 @@
+// IM-01 | Shadow copy, backup and recovery tampering (vssadmin, wbadmin, bcdedit, wmic)
+// Tactic: TA0040 Impact | ATT&CK: T1490, T1485, T1489
+// Indexes: evtxlogs-* | Needs: Security 4688, Sysmon 1 or PowerShell 4104; adds VSS/backup service and Application events
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| WHERE (ch == "Security" AND eid == "4688")
+     OR (ch == "Microsoft-Windows-Sysmon/Operational" AND eid == "1")
+     OR (ch == "Microsoft-Windows-PowerShell/Operational" AND eid == "4104")
+     OR (ch == "Application" AND eid IN ("524", "8193", "8194"))
+     OR (ch == "Microsoft-Windows-Backup" AND eid IN ("4", "5", "14", "49", "517", "561"))
+| EVAL txt = TO_LOWER(CONCAT(
+    COALESCE(TO_STRING(kape.executable_info), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.ScriptBlockText), "")))
+| EVAL kind = CASE(
+    txt RLIKE ".*vssadmin.*delete[ ]+shadows.*", "vssadmin delete shadows",
+    txt RLIKE ".*vssadmin.*resize[ ]+shadowstorage.*", "vssadmin resize shadowstorage",
+    txt RLIKE ".*(wmic|win32_shadowcopy|get-wmiobject|get-ciminstance|gwmi).*shadowcopy.*(delete|remove).*" OR txt RLIKE ".*win32_shadowcopy.*[.]delete[(].*", "WMI shadow copy delete",
+    txt RLIKE ".*wbadmin.*delete[ ]+(catalog|systemstatebackup|backup).*", "wbadmin delete catalog/backup",
+    txt RLIKE ".*wbadmin.*disable[ ]+backup.*", "wbadmin disable backup",
+    txt RLIKE ".*bcdedit.*recoveryenabled[ ]+(no|off|0).*", "bcdedit recovery disabled",
+    txt RLIKE ".*bcdedit.*bootstatuspolicy[ ]+ignoreallfailures.*", "bcdedit ignore boot failures",
+    txt RLIKE ".*reagentc.*/disable.*", "Windows RE disabled (reagentc)",
+    txt RLIKE ".*(diskshadow).*delete[ ]+shadows.*", "diskshadow delete shadows",
+    txt RLIKE ".*(sc|sc[.]exe)[ ]+(stop|config|delete)[ ]+(vss|swprv|wbengine|sdrsvc|veeam[a-z]*|backupexec[a-z]*|sql[a-z]*|msexchange[a-z]*).*" OR txt RLIKE ".*net[1]?[.]?(exe)?[ ]+stop[ ]+[\"]?(vss|swprv|wbengine|sdrsvc|veeam[a-z]*|backupexec[a-z]*|sql[a-z]*|msexchange[a-z]*).*", "backup/database service stopped or disabled",
+    txt RLIKE ".*(taskkill|stop-process).*(sql|oracle|ocssd|dbsnmp|synctime|agntsvc|isqlplussvc|xfssvccon|mydesktopservice|ocautoupds|encsvc|tbirdconfig|mydesktopqos|ocomm|dbeng50|sqbcoreservice|msaccess|mspub|thebat|veeam|backup|vee).*", "database/backup process kill (ransomware pre-encryption list)",
+    txt RLIKE ".*cipher(\\.exe)?[ ]+/w.*", "cipher /w free-space wipe",
+    txt RLIKE ".*(sdelete|sdelete64)(\\.exe)?[ ].*", "SDelete",
+    txt RLIKE ".*fsutil.*usn[ ]+deletejournal.*", "USN journal deleted",
+    ch == "Application" AND eid == "524", "System Catalog deleted (Application 524)",
+    ch == "Microsoft-Windows-Backup" AND eid IN ("517", "561"), "Backup catalog deleted / cleared",
+    ch == "Microsoft-Windows-Backup" AND eid IN ("5", "49"), "Backup failed",
+    ch == "Application" AND eid IN ("8193", "8194"), "VSS error",
+    null)
+| WHERE kind IS NOT NULL
+| EVAL user = COALESCE(TO_STRING(winlog.payload.event_data.SubjectUserName), TO_STRING(winlog.payload.event_data.User), TO_STRING(winlog.user.name), "")
+| EVAL detail = SUBSTRING(TRIM(COALESCE(NULLIF(TRIM(txt), ""), TO_STRING(message), "")), 1, 600)
+| EVAL f_cmd = NOT (ch IN ("Application", "Microsoft-Windows-Backup"))
+| KEEP
+    _index,
+    @timestamp,
+    ch,
+    eid,
+    kind,
+    f_cmd,
+    user,
+    detail
+| SORT @timestamp ASC
+| LIMIT 10000

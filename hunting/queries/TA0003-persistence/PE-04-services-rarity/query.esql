@@ -1,0 +1,76 @@
+// PE-04 | Services by rarity across hosts (RECmd Services plugin)
+// Tactic: TA0003 Persistence | ATT&CK: T1543.003
+// Indexes: registry-* | Needs: RECmd Services plugin output for two or more hosts
+FROM registry-* METADATA _index
+| WHERE event.dataset == "registry.services"
+| EVAL svc_name = COALESCE(registry.plugin.name, "")
+| WHERE svc_name != ""
+| EVAL img_l = TO_LOWER(COALESCE(registry.plugin.image_path, ""))
+| EVAL dll_l = TO_LOWER(COALESCE(registry.plugin.service_dll, ""))
+| WHERE img_l != "" OR dll_l != ""
+| EVAL svc_l = TO_LOWER(svc_name)
+| EVAL start_s = TO_LOWER(COALESCE(registry.plugin.start_mode, ""))
+| EVAL f_driver_outside = img_l RLIKE ".*[.]sys.*"
+    AND NOT img_l RLIKE ".*(system32\\\\drivers|systemroot|syswow64|program files|windows defender).*"
+| EVAL f_dll_outside = dll_l != ""
+    AND NOT dll_l RLIKE ".*(system32|syswow64|%systemroot%|program files|winsxs|microsoft[.]net).*"
+| EVAL f_tool = CONCAT(svc_l, " ", img_l) RLIKE ".*(psexesvc|paexec|remcomsvc|csexec|winexesvc|wceservice|fgexec|mimidrv|mimikatz|ngrok|anydesk|screenconnect|atera|splashtop|rclone|gotoassist|teamviewer|netsupport|rustdesk|meshagent|tacticalrmm).*"
+| EVAL f_lolbin = img_l RLIKE ".*(cmd[.]exe|cmd /|%comspec%|powershell|pwsh|mshta|wscript|cscript|rundll32|regsvr32|msiexec|certutil|bitsadmin|wmic|installutil|msbuild|curl[.]exe).*"
+| EVAL f_userpath = img_l RLIKE ".*\\\\(users|programdata|perflogs|temp|appdata)\\\\.*"
+    OR dll_l RLIKE ".*\\\\(users|programdata|perflogs|temp|appdata)\\\\.*"
+| EVAL f_encoded = img_l RLIKE ".*(-enc|-encodedcommand|frombase64string|-w hidden|-windowstyle hidden|iex[ (]|invoke-expression|downloadstring).*"
+| EVAL f_net = img_l RLIKE ".*(http://|https://|ftp://).*"
+| EVAL f_unc = img_l RLIKE ".*[\\\\][\\\\][a-z0-9.\\-]+[\\\\].*"
+| EVAL f_auto = start_s IN ("0", "1", "2") OR start_s LIKE "auto*" OR start_s LIKE "boot*" OR start_s LIKE "system*"
+| EVAL f_nodesc = COALESCE(registry.plugin.description, "") == "" AND COALESCE(registry.plugin.display_name, "") == ""
+| EVAL f_random = svc_l RLIKE "[a-z]{8}|[a-z0-9]{16,}" AND NOT svc_l RLIKE ".*(service|svc|update|driver|agent|helper|manager|host|mpksl).*"
+| EVAL score = CASE(f_driver_outside, 3, 0)
+    + CASE(f_dll_outside, 3, 0)
+    + CASE(f_tool, 3, 0)
+    + CASE(f_lolbin, 3, 0)
+    + CASE(f_userpath, 3, 0)
+    + CASE(f_encoded, 2, 0)
+    + CASE(f_net, 2, 0)
+    + CASE(f_unc, 2, 0)
+    + CASE(f_auto, 1, 0)
+    + CASE(f_nodesc, 1, 0)
+    + CASE(f_random, 1, 0)
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_driver_outside, "kernel driver outside system drivers dir; ", ""),
+    CASE(f_dll_outside, "ServiceDll outside system dirs; ", ""),
+    CASE(f_tool, "remote-exec / RMM / attack tool service; ", ""),
+    CASE(f_lolbin, "interpreter/LOLBin in ImagePath; ", ""),
+    CASE(f_userpath, "user-writable path; ", ""),
+    CASE(f_encoded, "encoded/hidden/download cradle; ", ""),
+    CASE(f_net, "network URL; ", ""),
+    CASE(f_unc, "UNC path; ", ""),
+    CASE(f_auto, "starts automatically; ", ""),
+    CASE(f_nodesc, "no display name or description; ", ""),
+    CASE(f_random, "random-looking service name; ", "")
+  ), "; $", "")
+| STATS
+    host_count = COUNT_DISTINCT(_index),
+    max_score = MAX(score),
+    reasons = VALUES(reasons),
+    service_names = VALUES(svc_name),
+    display_names = VALUES(registry.plugin.display_name),
+    start_modes = VALUES(registry.plugin.start_mode),
+    first_write = MIN(registry.plugin.name_key_last_write),
+    last_write = MAX(registry.plugin.name_key_last_write),
+    source_indices = VALUES(_index)
+  BY img_l, dll_l
+| WHERE host_count <= 3
+| KEEP
+    source_indices,
+    host_count,
+    max_score,
+    reasons,
+    service_names,
+    display_names,
+    start_modes,
+    img_l,
+    dll_l,
+    first_write,
+    last_write
+| SORT host_count ASC, max_score DESC
+| LIMIT 10000

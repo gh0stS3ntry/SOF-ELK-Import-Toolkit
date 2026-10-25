@@ -1,0 +1,29 @@
+// EX-17 | Commands typed in the Run dialog (RunMRU)
+// Tactic: TA0002 Execution | ATT&CK: T1059, T1204.004
+// Indexes: registry-* | Needs: RECmd RunMRU plugin output
+FROM registry-* METADATA _index
+| WHERE event.dataset == "registry.runmru"
+| EVAL command = COALESCE(registry.plugin.executable, registry.data.strings, "")
+| WHERE command != ""
+| EVAL c = TO_LOWER(command)
+| EVAL f_shell = c RLIKE ".*(cmd|powershell|pwsh|mshta|wscript|cscript|rundll32|regsvr32|certutil|bitsadmin|curl|wmic).*"
+| EVAL f_encoded = c RLIKE ".*(-enc|-e [a-z0-9+/=]{20,}|frombase64string|iex|invoke-expression|downloadstring|-w hidden|-windowstyle hidden).*"
+| EVAL f_net = c RLIKE ".*(http://|https://|ftp://|\\\\\\\\[a-z0-9.\\-]+\\\\.*).*"
+| EVAL f_admin = c RLIKE ".*(regedit|gpedit|lusrmgr|compmgmt|services[.]msc|taskschd|mstsc|eventvwr|secpol|control userpasswords2).*"
+| EVAL score = CASE(f_encoded, 4, 0) + CASE(f_shell AND f_net, 3, 0) + CASE(f_shell, 1, 0) + CASE(f_net, 1, 0) + CASE(f_admin, 1, 0)
+| KEEP
+    _index,
+    registry.plugin.opened_on,
+    user.name,
+    score,
+    f_encoded,
+    f_shell,
+    f_net,
+    f_admin,
+    command,
+    registry.plugin.mru_position,
+    registry.value,
+    registry.key,
+    kape.source_hive
+| SORT score DESC, registry.plugin.opened_on DESC
+| LIMIT 5000
