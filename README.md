@@ -316,6 +316,8 @@ The wrapper can identify this output from its filename and the characteristic fi
 
 The four importers under `Windows/json_importers/` implement the main field transformations in the corresponding SOF-ELK Logstash filters and shared preprocessing/postprocessing rules. In current versions they can ingest both the original JSON/JSON.GZ exports and corresponding CSV outputs. JSON input is parsed incrementally, so a whole export does not need to be loaded into memory. Keep `sof_elk_json_bulk_common.py` alongside all four scripts in `Windows/json_importers/`.
 
+[`docs/sofelk-native-field-reference.md`](docs/sofelk-native-field-reference.md) lists the native SOF-ELK field names and types for these four indexes, and the known differences between them and these importers.
+
 Accepted JSON data files are `.json` and `.json.gz`. JSON input may be a top-level JSON array, a single JSON object, or a sequence of whitespace-separated/NDJSON objects. For CSV input, the scripts read rows with `iter_csv_records` in `sof_elk_json_bulk_common.py` and apply the same transformation, index, and host conventions as their JSON path. When a directory is supplied, a tool-specific filename pattern is used for JSON files; CSV discovery is format-aware and header-aware. PECmd timeline JSON is excluded.
 
 The four importers support `--hostname`, `--case`, `--es`, `--user`, `--password`, `--insecure`, `--batch-size`, `--workers`, `--dry-run`, `--sample-docs`, and the retry/logging options described under [Retries and logging](#retries-and-logging). They do not support `--local-tz` or `--index`, for either JSON or CSV input.

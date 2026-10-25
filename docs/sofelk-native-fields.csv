@@ -1,0 +1,128 @@
+index,field,source,native_type,toolkit_type,status,note
+filesystem,@timestamp,"LastModified0x10, else Created0x10, else UpdateTimestamp",date,date,match,"Falls back to ingest time when none parse ($Boot/$SDS rows; Python < 3.11, see 3.4)"
+filesystem,file.stdinfo.created,Created0x10,date,date,match,
+filesystem,file.stdinfo.mtime,LastModified0x10,date,date,match,
+filesystem,file.stdinfo.accessed,LastAccess0x10,date,date,match,
+filesystem,file.stdinfo.ctime,LastRecordChange0x10,date,date,match,"MFT record change time, not creation"
+filesystem,file.filename.created,Created0x30,date,date,match,
+filesystem,file.filename.mtime,LastModified0x30,date,date,match,
+filesystem,file.filename.accessed,LastAccess0x30,date,date,match,
+filesystem,file.filename.ctime,LastRecordChange0x30,date,date,match,
+filesystem,file.name,FileName ($MFT) / Name ($J),text+keyword,text+keyword,match,
+filesystem,file.directory,ParentPath,text+keyword,text+keyword,match,Removed when empty
+filesystem,file.path,file.directory + '\' + file.name,text+keyword,text+keyword,match,Built in 8005-postprocess-kape.conf
+filesystem,file.extension,Extension (leading dot removed),text+keyword,text+keyword,match,"For ADS rows, taken from file.name"
+filesystem,file.fork_name,ADS stream name parsed from file.name,text+keyword,text+keyword,match,Only when kape.mft.isads is true
+filesystem,file.inode,EntryNumber,long,long,match,
+filesystem,file.sequence_number,SequenceNumber,long,long,match,
+filesystem,file.parent.inode,ParentEntryNumber,long,long,match,
+filesystem,file.parent.sequence_number,ParentSequenceNumber,long,long,match,
+filesystem,file.size,FileSize,long,long,match,Set to 0 when missing
+filesystem,file.reference_count,ReferenceCount,long,long,match,
+filesystem,file.reparse.target,ReparseTarget,text+keyword,text+keyword,match,
+filesystem,file.uid,SecurityId,long,long,match,"Security descriptor ID, not a SID"
+filesystem,file.object_id,ObjectIdFileDroid,text+keyword,text+keyword,match,
+filesystem,file.stream_name,LoggedUtilStream,text+keyword,text+keyword,match,
+filesystem,file.fork_contents,ZoneIdContents,text+keyword,text+keyword,match,"Zone.Identifier text (ZoneId, ReferrerUrl, HostUrl)"
+filesystem,file.logfile.sequence_number,LogfileSequenceNumber,long,long,match,
+filesystem,file.update_sequence_number,UpdateSequenceNumber,long,long,match,$J USN
+filesystem,file.update_reasons,"UpdateReasons ($J), lowercased, split on |",text+keyword (array),text+keyword (array),match,
+filesystem,file.update_timestamp,UpdateTimestamp ($J),date (dynamic date detection on ISO string),text+keyword,differs,Not converted in place by either; toolkit disables date_detection
+filesystem,file.offset_to_data,OffsetToData ($J),long,long,match,
+filesystem,file.source_file,SourceFile,text+keyword,text+keyword,match,
+filesystem,file.attributes.<flag>,"SiFlags ($MFT, integer) / FileAttributes ($J, names joined by |)",boolean x19,boolean x19,broken (CSV),"$MFT CSV gives names, not an integer; toolkit sets every flag false"
+filesystem,file.type,isDirectory -> dir / file,text+keyword,text+keyword,broken (CSV),"CSV header is IsDirectory; toolkit reads isDirectory, so every row is 'file'"
+filesystem,kape.mft.inuse,InUse,boolean,boolean,match,
+filesystem,kape.mft.hasads,HasAds,boolean,boolean,match,
+filesystem,kape.mft.isads,IsAds,boolean,boolean,match,
+filesystem,kape.mft.copied,Copied,boolean,boolean,match,
+filesystem,kape.mft.timestomped,Timestomped,boolean,(absent),lost (both),Current MFTECmd emits SI<FN and uSecZeros instead; neither pipeline keeps them
+filesystem,kape.mft.name_type,NameType,text+keyword,text+keyword,match,Windows / DosWindows / Posix / Dos
+filesystem,tags,filesystem_mft or filesystem_j,text+keyword,keyword,match,
+evtxlogs,@timestamp,TimeCreated,date,date,match,Falls back to ingest time silently if TimeCreated does not parse
+evtxlogs,winlog.time_created,TimeCreated,date (dynamic),date,match,
+evtxlogs,winlog.event_id,EventId,long,long,match,TO_STRING before IN (...) in ES|QL
+evtxlogs,winlog.record_id,RecordNumber,long,long,match,
+evtxlogs,winlog.channel,Channel,text+keyword,text+keyword,match,
+evtxlogs,winlog.provider_name,Provider,text+keyword,text+keyword,match,
+evtxlogs,winlog.computer_name,Computer,text+keyword,text+keyword,match,"FQDN from the event, e.g. rd01.shieldbase.com"
+evtxlogs,winlog.user.identifier,UserId,text+keyword,(written as winlog.user.identifer),differs,Toolkit misspells the field name
+evtxlogs,user.id,copy of winlog.user.identifier,(never set),text+keyword,differs,"Native copy reads a misspelled source field, so it is always empty natively"
+evtxlogs,winlog.user.name,UserName,text+keyword,text+keyword,match,
+evtxlogs,winlog.process.pid,ProcessId,long,long,match,"Process that logged the event, not the subject process"
+evtxlogs,winlog.process.thread.id,ThreadId,long,long,match,
+evtxlogs,winlog.remote_host,RemoteHost,text+keyword,text+keyword,match,
+evtxlogs,remote.ip,IP part of RemoteHost,"text+keyword (+ remote.geo.*, remote.as.*)",text+keyword,differs,Toolkit adds no GeoIP/ASN enrichment
+evtxlogs,remote.port,port part of RemoteHost,text+keyword,keyword,differs,Minor: keyword only
+evtxlogs,winlog.keywords,"Keywords split on ', '",text+keyword (array),text+keyword (array),match,
+evtxlogs,kape.log_level,Level,text+keyword,text+keyword,match,
+evtxlogs,kape.map_description,MapDescription,text+keyword,text+keyword,match,
+evtxlogs,kape.executable_info,ExecutableInfo,text+keyword,text+keyword,match,
+evtxlogs,file.source_file,SourceFile,text+keyword,text+keyword,match,Source .evtx path
+evtxlogs,winlog.payload.event_data.<Name>,Payload EventData.Data[@Name] = #text,text+keyword,text+keyword,match,295 distinct names on RD01; all strings
+evtxlogs,winlog.payload.event_data.SystemTime/LoaderTime/OldTime/NewTime,Payload EventData.Data,"date (space replaced by T, then date detection)",text+keyword,differs,Toolkit skips the 8005 space-to-T fix
+evtxlogs,winlog.payload.event_data.string,"EventData.Data when it is a plain string, split on ', '",text+keyword (array),text+keyword (array),match,
+evtxlogs,winlog.payload.event_data.binary,EventData.Binary,text+keyword,text+keyword,match,
+evtxlogs,winlog.payload.user_data.*,Payload UserData,object (dynamic),object; user_data.EventData forced to text,differs,Toolkit flattens UserData.EventData to a JSON string to avoid object/text conflicts
+evtxlogs,winlog.event_data.<ActionName|TaskName|Path|...>,Payload root keys (13 named in 6504),text+keyword,text+keyword,match,
+evtxlogs,winlog.payload_data.<Name>,PayloadData1-6 'Name: value',text+keyword,text+keyword,differs,"Native grok is unanchored; toolkit regex is anchored, see 3.3"
+evtxlogs,message,'KAPE map used: ' + MapDescription,text+keyword,text+keyword,match,
+evtxlogs,tags,_grokparsefail_6504-0N on PayloadData parse failures,text+keyword,keyword,match,
+lnkfiles,@timestamp,SourceModified,date,date,match,
+lnkfiles,file.created,SourceCreated,date,date,match,.lnk file itself
+lnkfiles,file.mtime,SourceModified,date,date,match,
+lnkfiles,file.accessed,SourceAccessed,date,date,match,
+lnkfiles,file.path,SourceFile,text+keyword,text+keyword,match,
+lnkfiles,file.directory / file.name,split from file.path,text+keyword,text+keyword,match,
+lnkfiles,file.extension,constant 'lnk',text+keyword,text+keyword,match,
+lnkfiles,file.size,FileSize,long,long,match,Target size recorded in the .lnk
+lnkfiles,file.target.created,TargetCreated,date,date,match,Removed when empty
+lnkfiles,file.target.mtime,TargetModified,date,date,match,
+lnkfiles,file.target.accessed,TargetAccessed,date,date,match,
+lnkfiles,file.target.path,"copy of local_path, else absolute_path",text+keyword,text (no .keyword),differs,"Toolkit maps text only, so no file.target.path.keyword"
+lnkfiles,file.target.local_path,LocalPath,text+keyword,text+keyword,match,
+lnkfiles,file.target.absolute_path,TargetIDAbsolutePath,text+keyword,text+keyword,match,
+lnkfiles,file.target.network_path,NetworkPath,text+keyword,text+keyword,match,
+lnkfiles,file.target.common_path,CommonPath,text+keyword,text+keyword,match,
+lnkfiles,file.target.relative_path,RelativePath,text+keyword,text+keyword,match,
+lnkfiles,file.target.working_directory,WorkingDirectory,text+keyword,text+keyword,match,
+lnkfiles,file.target.path.arguments,Arguments,(lost),(lost),lost (both),"Overwritten by the file.target.path copy, see 3.5"
+lnkfiles,file.target.drivetype,DriveType,text+keyword,text+keyword,match,Removed when '(None)'
+lnkfiles,file.target.volume.label,VolumeLabel,text+keyword,text+keyword,match,
+lnkfiles,volume.serial_number,VolumeSerialNumber,text+keyword,text+keyword,match,Pivot to prefetch volume.serial_number
+lnkfiles,file.target.inode,TargetMFTEntryNumber,long,(dropped),broken (CSV),Value is hex (0x44EF2); toolkit int() fails and drops it
+lnkfiles,file.target.sequence_number,TargetMFTSequenceNumber,long,(dropped),broken (CSV),Same hex problem
+lnkfiles,file.tracker.machine_id,MachineID,text+keyword,text+keyword,match,NetBIOS name of the creating machine
+lnkfiles,file.tracker.mac,MachineMACAddress,text+keyword,text+keyword,match,
+lnkfiles,file.tracker.mac_vendor,MACVendor,text+keyword,text+keyword,match,
+lnkfiles,file.tracker.creation,TrackerCreatedOn,"date if ISO (dynamic detection), else text",text+keyword,differs,"Native date{} targets a misspelled field, so neither converts it"
+lnkfiles,file.header_flags.<flag>,HeaderFlags,boolean x27,boolean x27,match,
+lnkfiles,file.attributes.<flag>,FileAttributes,boolean x19,boolean x19,match,
+lnkfiles,file.extra_blocks,ExtraBlocks_Present (JSON) / ExtraBlocksPresent (CSV),text+keyword (array),(absent),broken (CSV),Toolkit only knows the JSON column name
+prefetch,@timestamp,"LastRun, else SourceModified",date,date,match,
+prefetch,file.path,SourceFilename,text+keyword,text+keyword,match,.pf path
+prefetch,file.directory / file.name,split from file.path,text+keyword,text+keyword,match,
+prefetch,file.extension,constant 'pf',text+keyword,text+keyword,match,
+prefetch,file.stdinfo.ctime,SourceCreated,date,date,match,"Native puts the .pf creation time in ctime, not created"
+prefetch,file.stdinfo.mtime,SourceModified,date,date,match,
+prefetch,file.stdinfo.accessed,SourceAccessed,date,date,match,
+prefetch,file.target.path,ExecutableName,text+keyword,text+keyword,match,"Executable name only, no directory"
+prefetch,file.size,Size,long,long,match,
+prefetch,kape.prefetch.hash,Hash,text+keyword,text+keyword,match,
+prefetch,kape.prefetch.version,Version,text+keyword,text+keyword,match,
+prefetch,kape.prefetch.run_count,RunCount,long,long,match,
+prefetch,kape.prefetch.last_run,LastRun,date,date,match,0001-01-01 sentinel removed
+prefetch,prefetch.previous_runs,PreviousRun0-7,date (array),date (array),match,"Top-level prefetch.*, not kape.prefetch.*"
+prefetch,kape.prefetch.volume.name,Volume0Name,text+keyword,text+keyword,match,Volume1+ columns are dropped by both
+prefetch,kape.prefetch.volume.created,Volume0Created,date,date,match,
+prefetch,volume.serial_number,Volume0Serial,text+keyword,text+keyword,match,
+prefetch,kape.prefetch.directories,"Directories split on ', '",text+keyword (array),text+keyword (array),match,
+prefetch,kape.prefetch.files_loaded,"FilesLoaded split on ', '",text+keyword (array),text+keyword (array),match,
+prefetch,kape.prefetch.parsing_error,ParsingError,boolean,boolean,match,
+prefetch,message,'Prefetch: <exe> executed <n> time(s)',text+keyword,text+keyword,match,
+all four,labels.type,kape_filesystem / kape_evtxlogs / kape_lnkfiles / kape_prefetch,text+keyword,keyword,match,Filebeat label; toolkit sets the same values
+all four,log.file.path,Filebeat source path,text+keyword,keyword,match,Toolkit writes the importer's input path
+all four,sof-elk.path,'filebeat: <path>',keyword,keyword,match,
+all four,host.name,Filebeat host (removed in 1000-preprocess-all.conf),(never set),keyword,differs,Toolkit-only; added by the bulk-hardening change
+all four,case,-,(never set),keyword,differs,Toolkit-only; added by the bulk-hardening change
+all four,"@version, sof-elk.base_index, sof-elk.processing_time, agent.*, ecs.version, input.type, log.offset",Logstash / Filebeat metadata,various,(absent),differs,Pipeline bookkeeping; not useful for hunting
