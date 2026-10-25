@@ -1,0 +1,49 @@
+// PE-07 | Task Scheduler Operational log summarised per host and task
+// Tactic: TA0003 Persistence | ATT&CK: T1053.005
+// Indexes: evtxlogs-* | Needs: Microsoft-Windows-TaskScheduler/Operational
+FROM evtxlogs-* METADATA _index
+| WHERE TO_STRING(winlog.channel) == "Microsoft-Windows-TaskScheduler/Operational"
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE eid IN ("100", "102", "106", "129", "140", "141", "142", "200", "201")
+| EVAL task = TO_STRING(winlog.payload.event_data.TaskName)
+| WHERE task IS NOT NULL
+// 129 (process created) and 200 (action started) carry the program in ExecutableInfo
+| EVAL launched = CASE(eid IN ("129", "200"), TO_LOWER(TRIM(TO_STRING(kape.executable_info))), null)
+| EVAL changed_by = CASE(eid IN ("106", "140", "141", "142"),
+    COALESCE(TO_STRING(winlog.payload.event_data.UserContext), TO_STRING(winlog.payload.event_data.UserName)), null)
+| EVAL registered_at = CASE(eid == "106", @timestamp, null)
+| EVAL updated_at = CASE(eid == "140", @timestamp, null)
+| EVAL deleted_at = CASE(eid == "141", @timestamp, null)
+| EVAL f_susp = launched RLIKE ".*\\\\(appdata|temp|users\\\\public|programdata|perflogs|downloads)\\\\.*"
+    OR launched RLIKE ".*(powershell|pwsh|cmd[.]exe|mshta|rundll32|regsvr32|wscript|cscript|certutil|bitsadmin).*"
+| STATS
+    events = COUNT(*),
+    registered = MIN(registered_at),
+    last_updated = MAX(updated_at),
+    deleted = MAX(deleted_at),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    launched_programs = VALUES(launched),
+    changed_by = VALUES(changed_by),
+    suspicious_action = MAX(TO_INTEGER(f_susp)),
+    event_ids = VALUES(eid)
+  BY _index, task
+| EVAL f_not_ms = NOT STARTS_WITH(TO_LOWER(task), "\\microsoft\\")
+// Uncomment to hide Microsoft's built-in tasks:
+// | WHERE f_not_ms
+| KEEP
+    _index,
+    task,
+    f_not_ms,
+    suspicious_action,
+    registered,
+    last_updated,
+    deleted,
+    first_seen,
+    last_seen,
+    events,
+    launched_programs,
+    changed_by,
+    event_ids
+| SORT suspicious_action DESC, registered DESC NULLS LAST, first_seen DESC
+| LIMIT 10000

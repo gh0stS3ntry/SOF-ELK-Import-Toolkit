@@ -1,0 +1,46 @@
+// CA-07 | Kerberoasting (RC4 service tickets) and AS-REP roasting (no pre-authentication)
+// Tactic: TA0006 Credential Access | ATT&CK: T1558.003, T1558.004
+// Indexes: evtxlogs-* | Needs: Security 4768/4769 on domain controllers ("Audit Kerberos Authentication Service / Service Ticket Operations")
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE TO_STRING(winlog.channel) == "Security" AND eid IN ("4768", "4769")
+| EVAL enc = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.TicketEncryptionType), ""))
+| EVAL status = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.Status), ""))
+| EVAL service = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.ServiceName), ""))
+| EVAL preauth = COALESCE(TO_STRING(winlog.payload.event_data.PreAuthType), "")
+| EVAL requester = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.TargetUserName), ""))
+| EVAL ip = REPLACE(COALESCE(TO_STRING(winlog.payload.event_data.IpAddress), "-"), "^::ffff:", "")
+// 4769 with RC4 (0x17) or DES for a user service account (not krbtgt, not a machine account)
+| EVAL f_roast = eid == "4769" AND status == "0x0" AND enc IN ("0x17", "0x18", "0x1", "0x3")
+    AND NOT service LIKE "*$" AND service != "krbtgt" AND NOT service LIKE "krbtgt/*"
+// 4768 issued without pre-authentication (PreAuthType 0)
+| EVAL f_asrep = eid == "4768" AND status == "0x0" AND preauth == "0"
+| WHERE f_roast OR f_asrep
+| EVAL technique = CASE(f_roast, "Kerberoasting (RC4/DES service ticket)", "AS-REP roasting (no pre-auth)")
+| EVAL time_bucket = DATE_TRUNC(1 hour, @timestamp)
+| STATS
+    tickets = COUNT(*),
+    distinct_services = COUNT_DISTINCT(service),
+    services = VALUES(service),
+    accounts = VALUES(requester),
+    enc_types = VALUES(enc),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, technique, ip, time_bucket
+| EVAL score = CASE(technique LIKE "AS-REP*", 4, distinct_services >= 5, 5, distinct_services >= 2, 3, 1)
+| EVAL services = MV_SLICE(services, 0, 49)
+| KEEP
+    _index,
+    time_bucket,
+    technique,
+    score,
+    ip,
+    tickets,
+    distinct_services,
+    services,
+    accounts,
+    enc_types,
+    first_seen,
+    last_seen
+| SORT score DESC, time_bucket ASC
+| LIMIT 5000

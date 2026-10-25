@@ -1,0 +1,36 @@
+// CO-05 | Files and folders opened, per application (jump lists)
+// Tactic: TA0009 Collection | ATT&CK: T1005, T1039, T1025
+// Indexes: jumplist-* | Needs: JLECmd output
+FROM jumplist-* METADATA _index
+| EVAL target = COALESCE(file.path, TO_LOWER(jumplist.target_id_absolute_path), TO_LOWER(jumplist.path), "")
+| WHERE target != ""
+| EVAL app = COALESCE(jumplist.app_id_description, jumplist.app_id)
+| EVAL drive = TO_LOWER(COALESCE(jumplist.drive_type, ""))
+| EVAL f_network = target RLIKE "\\\\\\\\.*" OR COALESCE(jumplist.common_path, "") != ""
+| EVAL f_removable = drive LIKE "*removable*"
+| EVAL f_other_host = COALESCE(jumplist.hostname, "") != "" AND TO_LOWER(jumplist.hostname) != TO_LOWER(REPLACE(_index, "^[^-]+-", ""))
+| EVAL f_archive = target RLIKE ".*[.](zip|rar|7z|tar|gz|cab|pst|bak)"
+| EVAL f_sensitive = target RLIKE ".*(password|passwd|credential|secret|confidential|payroll|salary|finance|hr|vpn|backup|[.]kdbx|[.]pem|[.]pfx|[.]ppk|[.]rdp|[.]ovpn).*"
+| EVAL f_tool_app = TO_LOWER(COALESCE(app, "")) RLIKE ".*(remote desktop|mstsc|winscp|filezilla|putty|7-zip|winrar|powershell|cmd|notepad[+][+]|everything).*"
+| EVAL score = CASE(f_network, 2, 0) + CASE(f_removable, 2, 0) + CASE(f_other_host, 1, 0) + CASE(f_archive, 2, 0) + CASE(f_sensitive, 2, 0) + CASE(f_tool_app, 1, 0)
+| EVAL opened = COALESCE(jumplist.entry_last_modified, jumplist.source.modified)
+| KEEP
+    _index,
+    opened,
+    score,
+    user.name,
+    app,
+    target,
+    f_network,
+    f_removable,
+    f_archive,
+    f_sensitive,
+    jumplist.interaction_count,
+    jumplist.drive_type,
+    jumplist.volume_label,
+    jumplist.volume_serial_number,
+    jumplist.hostname,
+    jumplist.arguments,
+    event.dataset
+| SORT score DESC, opened DESC
+| LIMIT 10000

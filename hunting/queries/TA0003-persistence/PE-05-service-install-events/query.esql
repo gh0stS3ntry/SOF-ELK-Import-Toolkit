@@ -1,0 +1,50 @@
+// PE-05 | Service installation events (System 7045, Security 4697), scored
+// Tactic: TA0003 Persistence | ATT&CK: T1543.003, T1569.002, T1021.002
+// Indexes: evtxlogs-* | Needs: System 7045 and/or Security 4697 ("Audit Security System Extension")
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| WHERE (ch == "System" AND eid == "7045") OR (ch == "Security" AND eid == "4697")
+| EVAL svc_name = TO_STRING(winlog.payload.event_data.ServiceName)
+// 4697 calls it ServiceFileName, 7045 ImagePath. Delete the one no loaded host has (see README)
+| EVAL svc_cmd = COALESCE(
+    TO_STRING(winlog.payload.event_data.ServiceFileName),
+    TO_STRING(winlog.payload.event_data.ImagePath),
+    TO_STRING(kape.executable_info), "")
+| EVAL txt = TO_LOWER(CONCAT(COALESCE(svc_name, ""), " ", svc_cmd))
+| EVAL f_userpath = txt RLIKE ".*\\\\(users|programdata|perflogs|temp|appdata|windows\\\\temp)\\\\.*"
+| EVAL f_lolbin = txt RLIKE ".*(cmd[.]exe|cmd /|%comspec%|powershell|pwsh|mshta|wscript|cscript|rundll32|regsvr32|msiexec|certutil|bitsadmin|wmic|installutil|msbuild).*"
+| EVAL f_encoded = txt RLIKE ".*(-enc|-encodedcommand|frombase64string|-w hidden|-windowstyle hidden|iex[ (]|invoke-expression|downloadstring|echo .*[|]).*"
+| EVAL f_tool = txt RLIKE ".*(psexesvc|paexec|remcomsvc|csexec|winexesvc|wceservice|fgexec|mimidrv|mimikatz|ngrok|anydesk|screenconnect|atera|splashtop|rustdesk|meshagent|netsupport|teamviewer).*"
+| EVAL f_unc = txt RLIKE ".*[\\\\][\\\\][a-z0-9.\\-]+[\\\\].*"
+| EVAL f_admin_share = txt RLIKE ".*(admin[$]|c[$]|\\\\windows\\\\[a-z0-9]{6,12}[.]exe).*"
+| EVAL f_random = TO_LOWER(COALESCE(svc_name, "")) RLIKE "[a-z]{8}|[a-z0-9]{16,}"
+    AND NOT TO_LOWER(COALESCE(svc_name, "")) RLIKE "mpksl.*"
+| EVAL f_defender_update = txt RLIKE ".*\\\\windows defender\\\\definition updates\\\\.*"
+| EVAL score = CASE(f_tool, 3, 0) + CASE(f_lolbin, 3, 0) + CASE(f_userpath, 3, 0)
+    + CASE(f_encoded, 2, 0) + CASE(f_unc, 2, 0) + CASE(f_admin_share, 2, 0) + CASE(f_random, 1, 0)
+    - CASE(f_defender_update, 3, 0)
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_tool, "remote-exec / RMM / attack tool; ", ""),
+    CASE(f_lolbin, "interpreter/LOLBin in service command; ", ""),
+    CASE(f_userpath, "user-writable path; ", ""),
+    CASE(f_encoded, "encoded/hidden/piped command; ", ""),
+    CASE(f_unc, "UNC path; ", ""),
+    CASE(f_admin_share, "admin share or random exe in \\Windows; ", ""),
+    CASE(f_random, "random-looking service name; ", ""),
+    CASE(f_defender_update, "Defender definition update driver (benign); ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    ch,
+    eid,
+    score,
+    reasons,
+    svc_name,
+    svc_cmd,
+    winlog.payload.event_data.SubjectUserName,
+    user.id
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

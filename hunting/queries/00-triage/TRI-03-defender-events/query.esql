@@ -1,0 +1,55 @@
+// TRI-03 | Microsoft Defender detections, failures and tampering
+// Tactic: Triage (first cut) | ATT&CK: T1562.001 (tampering events)
+// Indexes: evtxlogs-* | Needs: Microsoft-Windows-Windows Defender/Operational
+FROM evtxlogs-* METADATA _index
+| WHERE winlog.channel == "Microsoft-Windows-Windows Defender/Operational"
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL category = CASE(
+    eid IN ("1006", "1116"), "Malware / PUA detected",
+    eid IN ("1007", "1117"), "Action taken on detected threat",
+    eid IN ("1008", "1118"), "Action on threat FAILED",
+    eid == "1119", "Critical failure acting on threat",
+    eid == "1009", "Item restored from quarantine",
+    eid == "1015", "Suspicious behavior detected",
+    eid IN ("1121", "1122"), "Attack Surface Reduction rule block/audit",
+    eid IN ("1123", "1124", "1127", "1128"), "Controlled Folder Access block/audit",
+    eid IN ("1125", "1126"), "Network Protection block/audit",
+    eid IN ("5001", "5010", "5012"), "Protection or scanning DISABLED",
+    eid == "5004", "Real-time protection configuration changed",
+    eid == "5007", "Defender configuration changed",
+    eid == "5013", "Tamper Protection blocked a change",
+    eid == "5008", "Defender engine failure",
+    eid == "3002", "Real-time protection feature failed",
+    eid == "1013", "Malware protection history deleted"
+  )
+| WHERE category IS NOT NULL
+| EVAL severity = CASE(
+    eid IN ("1008", "1118", "1119", "5001", "5010", "5012", "5013", "1013", "1015"), "High",
+    "Medium"
+  )
+| EVAL old_value = TO_LOWER(COALESCE(TO_STRING(`winlog.payload.event_data.Old Value`), "")),
+       new_value = TO_LOWER(COALESCE(TO_STRING(`winlog.payload.event_data.New Value`), ""))
+// 5007 is very noisy; keep only the changes that touch exclusions
+| EVAL exclusion_related = eid == "5007" AND (old_value LIKE "*exclusion*" OR new_value LIKE "*exclusion*")
+| WHERE eid != "5007" OR exclusion_related == true
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    severity,
+    category,
+    eid,
+    exclusion_related,
+    `winlog.payload.event_data.Threat Name`,
+    `winlog.payload.event_data.Severity Name`,
+    `winlog.payload.event_data.Category Name`,
+    `winlog.payload.event_data.Action Name`,
+    `winlog.payload.event_data.Path`,
+    `winlog.payload.event_data.Process Name`,
+    `winlog.payload.event_data.Detection User`,
+    `winlog.payload.event_data.Detection Time`,
+    `winlog.payload.event_data.Error Description`,
+    `winlog.payload.event_data.Old Value`,
+    `winlog.payload.event_data.New Value`
+| SORT @timestamp ASC
+| LIMIT 10000

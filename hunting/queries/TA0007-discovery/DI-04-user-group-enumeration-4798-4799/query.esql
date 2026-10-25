@@ -1,0 +1,31 @@
+// DI-04 | Local user and group membership enumeration (Security 4798/4799)
+// Tactic: TA0007 Discovery | ATT&CK: T1087.001, T1069.001
+// Indexes: evtxlogs-* | Needs: Security 4798/4799 ("Audit Security Group Management" / "User Account Management", Windows 10+)
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE TO_STRING(winlog.channel) == "Security" AND eid IN ("4798", "4799")
+| EVAL actor = TO_STRING(winlog.payload.event_data.SubjectUserName)
+| WHERE NOT COALESCE(actor, "") LIKE "*$"
+| EVAL caller = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.CallerProcessName), ""))
+| EVAL caller_name = REPLACE(caller, "^.*\\\\", "")
+// processes that enumerate groups during normal logon and admin use
+| EVAL f_normal_caller = caller_name IN ("explorer.exe", "mmc.exe", "svchost.exe", "lsass.exe", "consent.exe", "vssvc.exe", "services.exe", "systemsettings.exe", "msiexec.exe", "dllhost.exe", "wmiprvse.exe", "searchindexer.exe")
+| EVAL f_recon_caller = caller_name IN ("net.exe", "net1.exe", "powershell.exe", "pwsh.exe", "cmd.exe", "whoami.exe", "wmic.exe", "rundll32.exe", "adfind.exe", "sharphound.exe")
+    OR caller RLIKE ".*\\\\(users|programdata|perflogs|temp|appdata)\\\\.*"
+| EVAL time_bucket = DATE_TRUNC(10 minutes, @timestamp)
+| STATS
+    events = COUNT(*),
+    targets = COUNT_DISTINCT(winlog.payload.event_data.TargetUserName),
+    target_names = VALUES(winlog.payload.event_data.TargetUserName),
+    callers = VALUES(caller),
+    recon_caller = MAX(TO_INTEGER(f_recon_caller)),
+    normal_only = MIN(TO_INTEGER(f_normal_caller)),
+    event_ids = VALUES(eid),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, actor, time_bucket
+| EVAL score = recon_caller * 3 + CASE(targets >= 5, 2, 0) + CASE(normal_only == 1, -2, 0)
+| EVAL target_names = MV_SLICE(target_names, 0, 29)
+| KEEP _index, time_bucket, actor, score, events, targets, callers, event_ids, first_seen, last_seen, target_names
+| SORT score DESC, time_bucket ASC
+| LIMIT 10000

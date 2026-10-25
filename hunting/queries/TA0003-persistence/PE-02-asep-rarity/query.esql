@@ -1,0 +1,89 @@
+// PE-02 | Autostart (ASEP) registry values by rarity across hosts
+// Tactic: TA0003 Persistence | ATT&CK: T1547.001, T1546.012, T1546.015
+// Indexes: registry-* | Needs: RECmd batch output for two or more hosts
+FROM registry-* METADATA _index
+| WHERE event.dataset == "registry.batch"
+| EVAL key_lower = TO_LOWER(COALESCE(registry.key, ""))
+| WHERE key_lower != ""
+| EVAL vname = TO_LOWER(COALESCE(registry.value, ""))
+| EVAL vdata = TRIM(TO_LOWER(COALESCE(MV_CONCAT(registry.data.strings, " "), "")))
+| EVAL val_raw = TRIM(CONCAT(
+    COALESCE(MV_CONCAT(registry.data.strings, " "), ""), " ",
+    COALESCE(registry.value_data2, ""), " ",
+    COALESCE(registry.value_data3, "")))
+| EVAL val = TO_LOWER(val_raw)
+| EVAL hive = TO_LOWER(COALESCE(kape.source_hive, registry.hive_path, kape.source_file, ""))
+| EVAL asep_type = CASE(
+    key_lower RLIKE ".*\\\\currentversion\\\\(run|runonce|runservices|runservicesonce|runonceex)(\\\\.*)?", "Run / RunOnce",
+    key_lower RLIKE ".*\\\\policies\\\\explorer\\\\run(\\\\.*)?", "Policies Explorer Run",
+    key_lower RLIKE ".*\\\\windows nt\\\\currentversion\\\\winlogon(\\\\.*)?" AND vname IN ("shell", "userinit", "taskman", "appsetup", "ginadll", "uihost", "vmapplet"), "Winlogon",
+    key_lower RLIKE ".*\\\\image file execution options\\\\.*" AND vname IN ("debugger", "verifierdlls", "globalflag"), "IFEO",
+    key_lower RLIKE ".*\\\\silentprocessexit\\\\.*" AND vname == "monitorprocess", "SilentProcessExit",
+    key_lower RLIKE ".*\\\\windows nt\\\\currentversion\\\\windows" AND vname IN ("appinit_dlls", "load", "run") AND vdata != "", "AppInit_DLLs / Load / Run",
+    key_lower RLIKE ".*\\\\session manager\\\\appcertdlls(\\\\.*)?", "AppCertDLLs",
+    key_lower RLIKE ".*\\\\session manager" AND vname IN ("bootexecute", "platformexecute", "setupexecute", "s0initialcommand") AND vdata != "" AND vdata != "autocheck autochk *", "Session Manager BootExecute",
+    key_lower RLIKE ".*\\\\control\\\\lsa" AND vname IN ("authentication packages", "notification packages", "security packages"), "LSA packages",
+    key_lower RLIKE ".*\\\\software\\\\(wow6432node\\\\)?microsoft\\\\netsh(\\\\.*)?", "Netsh helper DLL",
+    key_lower RLIKE ".*\\\\services\\\\w32time\\\\timeproviders\\\\.*" AND vname == "dllname", "Time provider DLL",
+    key_lower RLIKE ".*\\\\control\\\\print\\\\monitors\\\\.*" AND vname == "driver", "Print monitor DLL",
+    key_lower RLIKE ".*\\\\active setup\\\\installed components\\\\.*" AND vname == "stubpath", "Active Setup StubPath",
+    key_lower RLIKE ".*\\\\software\\\\(wow6432node\\\\)?microsoft\\\\command processor" AND vname == "autorun" AND vdata != "", "Command Processor AutoRun",
+    key_lower RLIKE ".*\\\\environment" AND vname == "userinitmprlogonscript" AND vdata != "", "Logon script (UserInitMprLogonScript)",
+    key_lower RLIKE ".*\\\\(winstations\\\\rdp-tcp|terminal server\\\\wds\\\\rdpwd)(\\\\.*)?" AND vname IN ("initialprogram", "startupprograms") AND vdata != "" AND vdata != "rdpclip", "Terminal Services startup program",
+    key_lower RLIKE ".*\\\\explorer\\\\(shellexecutehooks|shellserviceobjectdelayload|sharedtaskscheduler|browser helper objects)(\\\\.*)?", "Explorer hooks / BHO",
+    key_lower RLIKE ".*\\\\clsid\\\\.*\\\\(inprocserver32|localserver32)(\\\\.*)?" AND hive RLIKE ".*(ntuser|usrclass).*", "COM server (user hive)",
+    key_lower RLIKE ".*\\\\(controlset[0-9]+|currentcontrolset)\\\\services\\\\.*" AND vname IN ("imagepath", "servicedll"), "Service",
+    key_lower RLIKE ".*\\\\schedule\\\\taskcache\\\\(tasks|tree)\\\\.*", "Scheduled task (TaskCache)",
+    key_lower RLIKE ".*\\\\microsoft\\\\office( test)?\\\\.*\\\\(addins|special\\\\perf|options)(\\\\.*)?" AND vname IN ("", "open", "loadbehavior", "manifest", "path"), "Office add-in / Office Test",
+    key_lower RLIKE ".*\\\\control\\\\safeboot\\\\(minimal|network)\\\\.*", "SafeBoot service",
+    key_lower RLIKE ".*\\\\control\\\\terminal server\\\\addins\\\\.*" AND vname == "name", "RDP virtual channel add-in"
+  )
+| WHERE asep_type IS NOT NULL
+| WHERE val_raw != ""
+| EVAL f_userpath = val RLIKE ".*\\\\(appdata|temp|programdata|users\\\\public|perflogs|downloads|desktop)\\\\.*"
+| EVAL f_lolbin = val RLIKE ".*(powershell|pwsh|cmd[.]exe|cmd /|wscript|cscript|mshta|rundll32|regsvr32|msiexec|certutil|bitsadmin|wmic|installutil|regasm|regsvcs|msbuild|forfiles|curl[.]exe).*"
+| EVAL f_script = val RLIKE ".*[.](ps1|vbs|vbe|js|jse|wsf|hta|bat|cmd|sct|jar|py)([^a-z0-9].*)?"
+| EVAL f_encoded = val RLIKE ".*(-enc|-encodedcommand|frombase64string|-w hidden|-windowstyle hidden|iex[ (]|invoke-expression|downloadstring|-nop).*"
+| EVAL f_net = val RLIKE ".*(http://|https://|ftp://).*"
+| EVAL f_unc = val RLIKE ".*[\\\\][\\\\][a-z0-9.\\-]+[\\\\].*"
+| EVAL f_dll_outside = asep_type IN ("AppInit_DLLs / Load / Run", "AppCertDLLs", "LSA packages", "Netsh helper DLL", "Time provider DLL", "Print monitor DLL", "Explorer hooks / BHO", "COM server (user hive)")
+    AND val RLIKE ".*[a-z]:\\\\.*[.]dll.*"
+    AND NOT (val RLIKE ".*(system32|syswow64|program files|systemroot|windir).*")
+| EVAL f_winlogon_nd = asep_type == "Winlogon"
+    AND ((vname == "shell" AND vdata != "explorer.exe")
+      OR (vname == "userinit" AND vdata NOT IN ("c:\\windows\\system32\\userinit.exe,", "c:\\windows\\system32\\userinit.exe"))
+      OR vname IN ("taskman", "appsetup", "ginadll", "uihost", "vmapplet"))
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_winlogon_nd, "non-default Winlogon value; ", ""),
+    CASE(f_userpath, "user-writable path; ", ""),
+    CASE(f_lolbin, "LOLBin/interpreter in value; ", ""),
+    CASE(f_script, "script file; ", ""),
+    CASE(f_encoded, "encoded/hidden/download cradle; ", ""),
+    CASE(f_net, "network URL; ", ""),
+    CASE(f_unc, "UNC path; ", ""),
+    CASE(f_dll_outside, "DLL outside system directories; ", "")
+  ), "; $", "")
+// user profile names differ per host; collapse them so the same entry counts once
+| EVAL val_norm = REPLACE(val, "\\\\users\\\\[^\\\\]+\\\\", "\\\\users\\\\<user>\\\\")
+| STATS
+    host_count = COUNT_DISTINCT(_index),
+    entries = COUNT(*),
+    reasons = VALUES(reasons),
+    keys = VALUES(key_lower),
+    first_write = MIN(registry.last_write),
+    last_write = MAX(registry.last_write),
+    source_indices = VALUES(_index)
+  BY asep_type, vname, val_norm
+| KEEP
+    source_indices,
+    host_count,
+    entries,
+    asep_type,
+    vname,
+    val_norm,
+    reasons,
+    first_write,
+    last_write,
+    keys
+| SORT host_count ASC, last_write DESC
+| LIMIT 10000

@@ -1,0 +1,23 @@
+// PE-10 | Hidden scheduled tasks: TaskCache\Tree entries with no security descriptor (Tarrask)
+// Tactic: TA0003 Persistence | ATT&CK: T1053.005, T1564
+// Indexes: registry-* | Needs: RECmd batch output that dumps TaskCache\Tree values (Id, Index, SD)
+FROM registry-* METADATA _index
+| WHERE event.dataset == "registry.batch"
+| EVAL key_lower = TO_LOWER(COALESCE(registry.key, ""))
+| WHERE key_lower RLIKE ".*\\\\schedule\\\\taskcache\\\\tree\\\\.*"
+| EVAL vname = TO_LOWER(COALESCE(registry.value, ""))
+| EVAL vdata = COALESCE(MV_CONCAT(registry.data.strings, " "), "")
+| STATS
+    has_id = COUNT(*) WHERE vname == "id",
+    has_sd = COUNT(*) WHERE vname == "sd",
+    has_index = COUNT(*) WHERE vname == "index",
+    task_id = VALUES(vdata) WHERE vname == "id",
+    index_value = VALUES(vdata) WHERE vname == "index",
+    last_write = MAX(registry.last_write)
+  BY _index, key_lower
+| WHERE has_id > 0 AND (has_sd == 0 OR index_value == "0")
+| EVAL task_name = REPLACE(key_lower, "^.*\\\\taskcache\\\\tree", "")
+| EVAL why = CASE(has_sd == 0, "SD value deleted (task hidden from schtasks and the UI)", "Index set to 0 (task hidden)")
+| KEEP _index, last_write, why, task_name, task_id, has_id, has_sd, index_value, key_lower
+| SORT last_write DESC
+| LIMIT 2000

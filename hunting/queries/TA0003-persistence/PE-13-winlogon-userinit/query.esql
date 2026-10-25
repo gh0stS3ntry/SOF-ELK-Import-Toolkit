@@ -1,0 +1,69 @@
+// PE-13 | Extra entries in Winlogon Userinit
+// Tactic: TA0003 Persistence | ATT&CK: T1547.004
+// Indexes: registry-* | Needs: RECmd batch output with the Winlogon key
+FROM registry-* METADATA _index
+| WHERE event.dataset == "registry.batch"
+| EVAL key_lower = TO_LOWER(COALESCE(registry.key, ""))
+| WHERE key_lower RLIKE ".*\\\\windows nt\\\\currentversion\\\\winlogon"
+| EVAL vname = TO_LOWER(COALESCE(registry.value, ""))
+| WHERE vname == "userinit"
+| EVAL val_raw = COALESCE(MV_CONCAT(registry.data.strings, ","), "")
+| EVAL entries = SPLIT(TO_LOWER(val_raw), ",")
+| MV_EXPAND entries
+| EVAL entry = TRIM(REPLACE(entries, "\"", ""))
+| WHERE entry != ""
+| WHERE NOT entry IN ("c:\\windows\\system32\\userinit.exe", "%systemroot%\\system32\\userinit.exe", "c:\\windows\\system32\\userinit")
+| EVAL hive = TO_LOWER(COALESCE(kape.source_hive, registry.hive_path, kape.source_file, ""))
+| EVAL scope = CASE(
+    hive RLIKE ".*ntuser.*", "HKCU (user hive)",
+    hive RLIKE ".*software.*", "HKLM (SOFTWARE hive)",
+    "Unknown hive")
+| EVAL f_userpath = entry RLIKE ".*\\\\(users|programdata|perflogs|temp|appdata|downloads)\\\\.*"
+| EVAL f_lolbin = entry RLIKE ".*(powershell|pwsh|cmd[.]exe|cmd /|mshta|wscript|cscript|rundll32|regsvr32|msiexec|certutil|bitsadmin|wmic|msbuild|installutil|curl[.]exe).*"
+| EVAL f_script = entry RLIKE ".*[.](ps1|bat|cmd|vbs|vbe|js|jse|wsf|hta|sct|py)([^a-z0-9].*)?"
+| EVAL f_encoded = entry RLIKE ".*(-enc|-encodedcommand|frombase64string|-w hidden|-windowstyle hidden|iex[ (]|invoke-expression|downloadstring).*"
+| EVAL f_net = entry RLIKE ".*(http://|https://|ftp://).*"
+| EVAL f_unc = entry RLIKE ".*[\\\\][\\\\][a-z0-9.\\-]+[\\\\].*"
+| EVAL f_bare = NOT entry RLIKE ".*[\\\\/%].*"
+| EVAL f_lookalike = entry RLIKE ".*userinit.*"
+| EVAL f_system32 = entry RLIKE ".*\\\\windows\\\\system32\\\\.*"
+| EVAL f_wow = key_lower LIKE "*wow6432node*"
+| EVAL score = 4
+    + CASE(f_userpath, 2, 0)
+    + CASE(f_lolbin, 2, 0)
+    + CASE(f_encoded, 2, 0)
+    + CASE(f_net, 2, 0)
+    + CASE(scope == "HKCU (user hive)", 2, 0)
+    + CASE(f_script, 1, 0)
+    + CASE(f_unc, 1, 0)
+    + CASE(f_bare, 1, 0)
+    + CASE(f_lookalike, 1, 0)
+    + CASE(f_system32, 1, 0)
+    + CASE(f_wow, 1, 0)
+| EVAL reasons = REPLACE(CONCAT(
+    "extra/non-default Userinit entry; ",
+    CASE(f_userpath, "user-writable path; ", ""),
+    CASE(f_lolbin, "interpreter/LOLBin; ", ""),
+    CASE(f_encoded, "encoded/hidden/download cradle; ", ""),
+    CASE(f_net, "network URL; ", ""),
+    CASE(scope == "HKCU (user hive)", "Userinit in a user hive; ", ""),
+    CASE(f_script, "script file; ", ""),
+    CASE(f_unc, "UNC path; ", ""),
+    CASE(f_bare, "no path (resolved via search order); ", ""),
+    CASE(f_lookalike, "userinit look-alike name; ", ""),
+    CASE(f_system32, "non-userinit file in System32; ", ""),
+    CASE(f_wow, "WOW6432Node Winlogon key; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    registry.last_write,
+    score,
+    reasons,
+    scope,
+    entry,
+    val_raw,
+    registry.key,
+    registry.hive_path,
+    kape.source_file
+| SORT score DESC, registry.last_write DESC
+| LIMIT 2000

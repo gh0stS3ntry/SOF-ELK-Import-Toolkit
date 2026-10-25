@@ -1,0 +1,34 @@
+// EXF-04 | Exfiltration and cloud-transfer tools in execution artifacts (Amcache, ShimCache, SRUM)
+// Tactic: TA0010 Exfiltration | ATT&CK: T1567.002, T1048, T1537
+// Indexes: amcache-*, shimcache-*, srum-* | Needs: any of the three
+FROM amcache-*, shimcache-*, srum-* METADATA _index
+| EVAL exe_path = TO_LOWER(COALESCE(file.path, process.executable, ""))
+| EVAL exe_name = REPLACE(exe_path, "^.*\\\\", "")
+| EVAL tool = CASE(
+    exe_name RLIKE "rclone.*[.]exe", "rclone",
+    exe_name RLIKE "(megasync|megacmd.*|mega.*)[.]exe", "MEGA",
+    exe_name RLIKE "(winscp|pscp|psftp|filezilla|fzsftp|cyberduck|coreftp)[.]exe", "SFTP/FTP client",
+    exe_name RLIKE "(restic|azcopy|gsutil|s3browser.*|aws|rclone_.*)[.]exe", "cloud storage CLI",
+    exe_name RLIKE "(curl|wget)[.]exe" AND NOT exe_path RLIKE ".*\\\\windows\\\\(system32|syswow64)\\\\.*", "curl/wget (non-system copy)",
+    exe_name RLIKE "(dropbox|googledrivesync|googledrivefs|insync|syncthing|freefilesync|resilio.*|pcloud.*|box(sync)?)[.]exe", "sync client",
+    exe_name RLIKE "(exmatter|stealbit|sendspace.*|transfer.*|anonfiles.*)[.]exe", "known exfil tool or uploader",
+    null)
+| WHERE tool IS NOT NULL
+| EVAL artifact = REPLACE(_index, "-.*$", "")
+| EVAL ts = COALESCE(amcache.file_key_last_write, file.mtime, srum.timestamp)
+| EVAL exe_norm = REPLACE(exe_path, "^(\\\\device\\\\harddiskvolume[0-9]+|[a-z]:)", "")
+| EVAL f_userpath = exe_path RLIKE ".*\\\\(users\\\\public|programdata|perflogs|windows\\\\temp|temp|appdata\\\\local\\\\temp|downloads|[$]recycle[.]bin)\\\\.*"
+| STATS
+    host_count = COUNT_DISTINCT(_index),
+    artifacts = VALUES(artifact),
+    users = VALUES(user.name),
+    sha1_values = VALUES(file.hash.sha1),
+    in_odd_path = MAX(TO_INTEGER(f_userpath)),
+    first_seen = MIN(ts),
+    last_seen = MAX(ts),
+    source_indices = VALUES(_index)
+  BY tool, exe_name, exe_norm
+| EVAL score = CASE(tool IN ("rclone", "MEGA", "known exfil tool or uploader"), 4, 2) + in_odd_path * 2
+| KEEP source_indices, host_count, score, tool, exe_name, artifacts, users, in_odd_path, first_seen, last_seen, sha1_values, exe_norm
+| SORT score DESC, first_seen ASC
+| LIMIT 2000

@@ -1,0 +1,77 @@
+// EX-02 | Suspicious process creation (Sysmon 1)
+// Tactic: TA0002 Execution | ATT&CK: T1059, T1218, T1204.002, T1036.003
+// Indexes: evtxlogs-* | Needs: Sysmon event 1
+FROM evtxlogs-* METADATA _index
+| WHERE winlog.channel == "Microsoft-Windows-Sysmon/Operational"
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE eid == "1"
+| EVAL image = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.Image), ""))
+| EVAL parent = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.ParentImage), ""))
+| EVAL cmd = COALESCE(TO_STRING(winlog.payload.event_data.CommandLine), "")
+| EVAL cmd_l = TO_LOWER(cmd)
+| EVAL parent_cmd = COALESCE(TO_STRING(winlog.payload.event_data.ParentCommandLine), "")
+| EVAL image_name = REPLACE(image, "^.*\\\\", "")
+| EVAL parent_name = REPLACE(parent, "^.*\\\\", "")
+| EVAL original_name = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.OriginalFileName), ""))
+| EVAL f_shell = image_name IN ("cmd.exe", "powershell.exe", "pwsh.exe", "powershell_ise.exe")
+| EVAL f_lolbin = image_name IN ("mshta.exe", "rundll32.exe", "regsvr32.exe", "certutil.exe", "bitsadmin.exe", "msiexec.exe", "wmic.exe", "installutil.exe", "regasm.exe", "regsvcs.exe", "msbuild.exe", "cmstp.exe", "forfiles.exe", "odbcconf.exe", "mavinject.exe", "msxsl.exe", "wscript.exe", "cscript.exe", "hh.exe", "pcalua.exe", "esentutl.exe", "expand.exe", "extrac32.exe", "curl.exe", "finger.exe", "ftp.exe", "certreq.exe", "msdt.exe")
+| EVAL f_recon = image_name IN ("whoami.exe", "nltest.exe", "net.exe", "net1.exe", "systeminfo.exe", "ipconfig.exe", "quser.exe", "qwinsta.exe", "nslookup.exe", "arp.exe", "route.exe", "netstat.exe", "tasklist.exe", "dsquery.exe", "adfind.exe", "klist.exe", "setspn.exe", "nbtstat.exe")
+| EVAL f_office_parent = parent_name IN ("winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe", "onenote.exe", "msaccess.exe", "mspub.exe", "visio.exe")
+| EVAL f_server_parent = parent_name IN ("w3wp.exe", "httpd.exe", "nginx.exe", "tomcat.exe", "tomcat8.exe", "tomcat9.exe", "java.exe", "php-cgi.exe", "sqlservr.exe", "umworkerprocess.exe", "node.exe")
+| EVAL f_browser_parent = parent_name IN ("chrome.exe", "msedge.exe", "firefox.exe", "iexplore.exe")
+| EVAL f_wmi_parent = parent_name IN ("wmiprvse.exe", "scrcons.exe")
+| EVAL f_userpath = image RLIKE ".*\\\\(users\\\\public|programdata|perflogs|windows\\\\temp|appdata|temp|downloads|desktop|[$]recycle[.]bin)\\\\.*"
+| EVAL f_encoded = cmd_l RLIKE ".*(-enc |-encodedcommand|-e [a-z0-9+/=]{40,}|frombase64string|-w hidden|-windowstyle hidden|-nop |iex[ (]|invoke-expression|downloadstring|downloadfile|invoke-webrequest|net[.]webclient).*"
+| EVAL f_tool = CONCAT(image_name, " ", cmd_l) RLIKE ".*(mimikatz|sekurlsa|procdump|comsvcs[.]dll|psexec|paexec|rubeus|sharphound|bloodhound|adfind|nanodump|rclone|ngrok|plink|vssadmin.*delete|shadowcopy.*delete|bcdedit.*recoveryenabled|wbadmin.*delete|ntdsutil|reg(.exe)? +save).*"
+| EVAL f_script_arg = cmd_l RLIKE ".*[.](ps1|vbs|vbe|js|jse|wsf|hta|bat|sct)([^a-z0-9].*)?"
+| EVAL f_net = cmd_l RLIKE ".*(http://|https://|ftp://|\\\\\\\\[0-9]).*"
+// renamed binary: PE original name does not match the file name on disk
+| EVAL f_renamed = original_name != "" AND original_name != "?" AND original_name != image_name
+    AND original_name RLIKE ".*[.](exe|dll)"
+| EVAL f_child_of_note = f_shell OR f_lolbin OR f_recon
+| EVAL score = CASE(f_tool, 4, 0)
+    + CASE(f_server_parent AND f_child_of_note, 5, 0)
+    + CASE(f_office_parent AND f_child_of_note, 4, 0)
+    + CASE(f_wmi_parent AND f_child_of_note, 3, 0)
+    + CASE(f_browser_parent AND f_child_of_note, 2, 0)
+    + CASE(f_renamed, 3, 0)
+    + CASE(f_encoded, 3, 0)
+    + CASE(f_userpath, 2, 0)
+    + CASE(f_net AND f_child_of_note, 2, 0)
+    + CASE(f_script_arg AND f_child_of_note, 1, 0)
+    + CASE(f_lolbin, 1, 0)
+    + CASE(f_recon, 1, 0)
+| WHERE score >= 3
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_tool, "attack tool or destructive command; ", ""),
+    CASE(f_server_parent AND f_child_of_note, "spawned by a web/database server process; ", ""),
+    CASE(f_office_parent AND f_child_of_note, "spawned by an Office application; ", ""),
+    CASE(f_wmi_parent AND f_child_of_note, "spawned by WMI; ", ""),
+    CASE(f_browser_parent AND f_child_of_note, "spawned by a browser; ", ""),
+    CASE(f_renamed, "renamed binary (OriginalFileName differs); ", ""),
+    CASE(f_encoded, "encoded/hidden/download cradle; ", ""),
+    CASE(f_userpath, "image in a user-writable path; ", ""),
+    CASE(f_net AND f_child_of_note, "URL or UNC-to-IP in command; ", ""),
+    CASE(f_script_arg AND f_child_of_note, "script file argument; ", ""),
+    CASE(f_lolbin, "LOLBin; ", ""),
+    CASE(f_recon, "discovery command; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    score,
+    reasons,
+    winlog.payload.event_data.User,
+    image,
+    cmd,
+    parent,
+    parent_cmd,
+    original_name,
+    winlog.payload.event_data.IntegrityLevel,
+    winlog.payload.event_data.CurrentDirectory,
+    winlog.payload.event_data.Hashes,
+    winlog.payload.event_data.ProcessGuid,
+    winlog.payload.event_data.ParentProcessGuid
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

@@ -1,0 +1,43 @@
+// CA-08 | Kerberos and NTLM authentication failures by source and reason (domain controllers)
+// Tactic: TA0006 Credential Access | ATT&CK: T1110, T1087.002
+// Indexes: evtxlogs-* | Needs: Security 4768, 4771 and/or 4776 failures
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE TO_STRING(winlog.channel) == "Security" AND eid IN ("4768", "4771", "4776")
+| EVAL status = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.Status), ""))
+| WHERE status NOT IN ("", "0x0", "0x00000000")
+| EVAL reason = CASE(
+    status == "0x6", "Kerberos: unknown user (name guessing)",
+    status == "0x12", "Kerberos: account disabled, expired or locked out",
+    status == "0x17", "Kerberos: password expired",
+    status == "0x18", "Kerberos: bad password",
+    status == "0x25", "Kerberos: clock skew",
+    status == "0xc0000064", "NTLM: unknown user (name guessing)",
+    status == "0xc000006a", "NTLM: bad password",
+    status == "0xc0000234", "NTLM: account locked out",
+    status == "0xc0000072", "NTLM: account disabled",
+    status == "0xc0000071", "NTLM: password expired",
+    status == "0xc0000193", "NTLM: account expired",
+    CONCAT("other status ", status))
+| EVAL account = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.TargetUserName), ""))
+| EVAL ip = REPLACE(COALESCE(TO_STRING(winlog.payload.event_data.IpAddress), "-"), "^::ffff:", "")
+| EVAL src = CASE(ip NOT IN ("-", ""), ip, COALESCE(TO_STRING(winlog.payload.event_data.Workstation), "(unknown)"))
+| STATS
+    failures = COUNT(*),
+    distinct_accounts = COUNT_DISTINCT(account),
+    accounts = VALUES(account),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, src, reason
+| EVAL accounts = MV_SLICE(accounts, 0, 49)
+| KEEP
+    _index,
+    src,
+    reason,
+    failures,
+    distinct_accounts,
+    first_seen,
+    last_seen,
+    accounts
+| SORT distinct_accounts DESC, failures DESC
+| LIMIT 5000

@@ -1,0 +1,41 @@
+// EX-16 | Program execution recorded in UserAssist and BAM/DAM
+// Tactic: TA0002 Execution | ATT&CK: T1204.002, T1059
+// Indexes: registry-* | Needs: RECmd UserAssist and/or BamDam plugin output
+FROM registry-* METADATA _index
+| WHERE event.dataset IN ("registry.userassist", "registry.bamdam")
+| EVAL program = TO_LOWER(COALESCE(registry.plugin.program_name, registry.plugin.program, ""))
+| WHERE program != ""
+| EVAL last_run = COALESCE(registry.plugin.last_executed, registry.plugin.execution_time)
+| EVAL source = CASE(event.dataset == "registry.userassist", "UserAssist (GUI launch)", "BAM/DAM (background activity moderator)")
+// UserAssist lives in the user's NTUSER.DAT; BAM keys are per SID under the SYSTEM hive
+| EVAL account = COALESCE(user.name, REPLACE(registry.key, "(?i)^.*\\\\(S-1-[0-9-]+).*$", "$1"))
+| EVAL runs = TO_INTEGER(registry.plugin.run_counter)
+| EVAL program_norm = REPLACE(program, "^(\\\\device\\\\harddiskvolume[0-9]+|[a-z]:)", "")
+| INLINE STATS host_count = COUNT_DISTINCT(_index) BY program_norm
+| EVAL f_userpath = program RLIKE ".*\\\\(users\\\\public|programdata|perflogs|temp|appdata|downloads|desktop|[$]recycle[.]bin)\\\\.*"
+| EVAL f_lolbin = program RLIKE ".*\\\\(cmd|powershell|pwsh|mshta|wscript|cscript|rundll32|regsvr32|certutil|bitsadmin|wmic|psexec|psexec64|mstsc)[.]exe"
+| EVAL f_tool = program RLIKE ".*(mimikatz|procdump|rclone|anydesk|teamviewer|screenconnect|ngrok|plink|putty|winscp|filezilla|7z|winrar|advanced_ip|netscan|nmap|lazagne|adfind|sharphound|bloodhound|everything).*"
+| EVAL f_rare = host_count <= 1
+| EVAL score = CASE(f_userpath, 2, 0) + CASE(f_tool, 3, 0) + CASE(f_lolbin, 1, 0) + CASE(f_rare, 1, 0)
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_userpath, "user-writable path; ", ""),
+    CASE(f_tool, "dual-use or attack tool name; ", ""),
+    CASE(f_lolbin, "shell / LOLBin / remote tool; ", ""),
+    CASE(f_rare, "on one host only; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    last_run,
+    source,
+    account,
+    score,
+    reasons,
+    program,
+    runs,
+    registry.plugin.focus_count,
+    registry.plugin.focus_time,
+    host_count,
+    registry.key,
+    kape.source_hive
+| SORT score DESC, last_run DESC
+| LIMIT 10000

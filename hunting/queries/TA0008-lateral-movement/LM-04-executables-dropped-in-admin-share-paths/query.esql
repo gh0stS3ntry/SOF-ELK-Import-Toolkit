@@ -1,0 +1,47 @@
+// LM-04 | Executables and scripts created in Windows, Temp and other admin-share reachable folders ($MFT and $J)
+// Tactic: TA0008 Lateral Movement | ATT&CK: T1570, T1021.002, T1569.002
+// Indexes: filesystem-* | Needs: MFTECmd $MFT and/or $J output
+FROM filesystem-* METADATA _index
+| EVAL fname = TO_LOWER(COALESCE(TO_STRING(file.name), ""))
+| WHERE fname RLIKE ".*[.](exe|dll|sys|ps1|bat|cmd|vbs|js|hta|msi|scr)"
+| EVAL dir = TO_LOWER(COALESCE(TO_STRING(file.directory), REPLACE(COALESCE(TO_STRING(file.path), ""), "\\\\[^\\\\]*$", "")))
+// MFTECmd paths start with "." for the volume root, e.g. .\Windows\Temp
+// folders reachable through ADMIN$ / C$ that PsExec, Impacket, Cobalt Strike and RMM pushes use
+| EVAL drop_dir = CASE(
+    dir RLIKE "([a-z]:|[.])?\\\\windows", "\\Windows (ADMIN$ root)",
+    dir RLIKE "([a-z]:|[.])?\\\\windows\\\\temp(\\\\.*)?", "\\Windows\\Temp",
+    dir RLIKE "([a-z]:|[.])?\\\\windows\\\\(system32|syswow64)\\\\(spool\\\\drivers\\\\color|tasks|com|debug)(\\\\.*)?", "System32 writable subfolder",
+    dir RLIKE "([a-z]:|[.])?(\\\\perflogs|\\\\programdata|\\\\users\\\\public|\\\\temp|\\\\intel|\\\\tmp)(\\\\.*)?", "drive-root staging folder",
+    dir RLIKE "[a-z]:|[.]", "drive root",
+    null)
+| WHERE drop_dir IS NOT NULL
+| EVAL record_type = CASE(file.update_reasons IS NOT NULL, "USN $J", "$MFT")
+| EVAL reasons_usn = MV_CONCAT(TO_UPPER(TO_STRING(file.update_reasons)), ",")
+| WHERE record_type == "$MFT" OR reasons_usn LIKE "*FILE_CREATE*" OR reasons_usn LIKE "*RENAME_NEW_NAME*"
+| EVAL event_time = CASE(record_type == "USN $J", @timestamp, COALESCE(file.filename.created, file.stdinfo.created))
+| INLINE STATS name_hosts = COUNT_DISTINCT(_index) BY fname
+| EVAL f_known_tool = fname RLIKE "(psexesvc|paexec.*|remcomsvc|csexecsvc|winexesvc|beacon|artifact|svchost[0-9]+|rundll|update|install).*"
+// letters and digits mixed (a1b2c3d4.exe) or long hex; plain-word names like explorer.exe do not match
+| EVAL f_random = fname RLIKE "([a-z]+[0-9]+[a-z0-9]*|[0-9]+[a-z]+[a-z0-9]*)[.](exe|dll|ps1|bat)|[0-9a-f]{8,32}[.](exe|dll|ps1|bat)"
+| EVAL f_rare = name_hosts <= 1
+| EVAL f_timestomp = COALESCE(DATE_DIFF("seconds", file.stdinfo.created, file.filename.created) > 60, false)
+| EVAL score = CASE(f_known_tool, 3, 0) + CASE(f_random, 2, 0) + CASE(f_rare, 1, 0) + CASE(f_timestomp, 2, 0)
+    + CASE(drop_dir IN ("\\Windows (ADMIN$ root)", "drive-root staging folder", "drive root"), 1, 0)
+| WHERE score >= 2
+| KEEP
+    _index,
+    record_type,
+    event_time,
+    score,
+    drop_dir,
+    file.name,
+    dir,
+    file.size,
+    name_hosts,
+    reasons_usn,
+    file.stdinfo.created,
+    file.filename.created,
+    kape.mft.inuse,
+    file.inode
+| SORT score DESC, event_time ASC
+| LIMIT 10000

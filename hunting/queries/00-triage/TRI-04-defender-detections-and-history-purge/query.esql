@@ -1,0 +1,47 @@
+// TRI-04 | Defender detections per host per day, with history purges
+// Tactic: Triage (first cut) | ATT&CK: T1070 (history purge after detection)
+// Indexes: evtxlogs-* | Needs: Defender Operational 1116/1117 (1013 optional)
+FROM evtxlogs-* METADATA _index
+| WHERE winlog.channel == "Microsoft-Windows-Windows Defender/Operational"
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE eid IN ("1116", "1117", "1013")
+| EVAL day = DATE_TRUNC(1 day, @timestamp)
+| EVAL path = CASE(
+    eid == "1013", "(1013 history deletion)",
+    COALESCE(TO_STRING(`winlog.payload.event_data.Path`), "(no path)")
+  )
+| EVAL threat = CASE(
+    eid == "1013", "(n/a)",
+    COALESCE(TO_STRING(`winlog.payload.event_data.Threat Name`), "(no threat name)")
+  )
+| STATS
+    count_1116 = COUNT(*) WHERE eid == "1116",
+    count_1117 = COUNT(*) WHERE eid == "1117",
+    first_det = MIN(@timestamp) WHERE eid IN ("1116", "1117"),
+    day_deletion_times = VALUES(@timestamp) WHERE eid == "1013"
+  BY _index, day, path, threat
+// every 1013 on the host, attached to each detection row of that host
+| INLINE STATS host_deletion_times = VALUES(day_deletion_times) BY _index
+| WHERE count_1116 + count_1117 > 0
+| MV_EXPAND host_deletion_times
+| STATS
+    events_1116 = MAX(count_1116),
+    events_1117 = MAX(count_1117),
+    first_detection = MIN(first_det),
+    deletions_1013_within_24h = COUNT(host_deletion_times) WHERE host_deletion_times >= first_det AND host_deletion_times <= first_det + 24 hours,
+    first_deletion_after = MIN(host_deletion_times) WHERE host_deletion_times >= first_det
+  BY _index, day, path, threat
+| EVAL total_1116_1117 = events_1116 + events_1117
+| KEEP
+    _index,
+    day,
+    path,
+    threat,
+    events_1116,
+    events_1117,
+    total_1116_1117,
+    first_detection,
+    deletions_1013_within_24h,
+    first_deletion_after
+| SORT day ASC, _index ASC, total_1116_1117 DESC
+| LIMIT 10000

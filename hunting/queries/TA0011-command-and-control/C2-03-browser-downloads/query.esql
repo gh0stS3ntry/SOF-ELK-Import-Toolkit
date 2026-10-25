@@ -1,0 +1,39 @@
+// C2-03 | Files downloaded through the browser (browsing history)
+// Tactic: TA0011 Command and Control | ATT&CK: T1105, T1204.002, T1189
+// Indexes: browsinghistory-* | Needs: BrowsingHistoryView output
+FROM browsinghistory-* METADATA _index
+| EVAL full_url = url.original
+| WHERE full_url IS NOT NULL
+| EVAL url_lower = TO_LOWER(full_url)
+| EVAL url_path = REPLACE(url_lower, "[?#].*$", "")
+| EVAL file_ext = CASE(url_path RLIKE ".*[.][a-z0-9]{1,8}", REPLACE(url_path, "^.*\\.([a-z0-9]{1,8})$", "$1"), null)
+| EVAL by_extension = url_lower RLIKE "(https?|ftp)://.*"
+    AND url_path RLIKE ".*[.](exe|dll|msi|msp|scr|com|sys|ps1|psm1|bat|cmd|vbs|vbe|js|jse|wsf|hta|jar|py|lnk|iso|img|vhd|vhdx|zip|7z|rar|gz|tar|cab|docm|xlsm|pptm|doc|docx|xls|xlsx|ppt|pptx|pdf|rtf|apk|dmg|pkg|deb|rpm|sh|bin|dat)"
+| EVAL by_visit_type = TO_LOWER(COALESCE(browsinghistory.visit_type, "")) LIKE "*download*"
+| EVAL local_download = url_lower LIKE "file:*" AND url_lower LIKE "*download*"
+| EVAL downloads_page = url_lower LIKE "chrome://downloads*" OR url_lower LIKE "edge://downloads*" OR url_lower LIKE "about:downloads*"
+| WHERE by_extension OR by_visit_type OR local_download OR downloads_page
+| EVAL evidence = CASE(
+    downloads_page, "Browser downloads page visited",
+    by_visit_type, "Visit type indicates download",
+    local_download, "Local file path in a Downloads folder",
+    "URL points to downloadable file type")
+| EVAL f_exec = COALESCE(file_ext IN ("exe", "dll", "msi", "msp", "scr", "ps1", "bat", "cmd", "vbs", "vbe", "js", "jse", "wsf", "hta", "jar", "lnk", "iso", "img", "vhd", "vhdx"), false)
+| KEEP
+    _index,
+    browsinghistory.visit_time,
+    user.name,
+    browsinghistory.web_browser,
+    browsinghistory.browser_profile,
+    evidence,
+    f_exec,
+    file_ext,
+    full_url,
+    url.domain,
+    browsinghistory.title,
+    browsinghistory.visit_type,
+    browsinghistory.visited_from,
+    browsinghistory.visit_count,
+    browsinghistory.history_file
+| SORT browsinghistory.visit_time ASC
+| LIMIT 10000

@@ -1,0 +1,48 @@
+// PE-06 | Scheduled task creation and changes from the command line or PowerShell
+// Tactic: TA0003 Persistence | ATT&CK: T1053.005
+// Indexes: evtxlogs-* | Needs: PowerShell Operational 4104 on at least one host; adds Security 4688 / Sysmon 1
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| WHERE (ch == "Security" AND eid == "4688")
+     OR (ch == "Microsoft-Windows-Sysmon/Operational" AND eid == "1")
+     OR (ch == "Microsoft-Windows-PowerShell/Operational" AND eid == "4104")
+| EVAL cmd = TO_LOWER(CONCAT(
+    COALESCE(TO_STRING(kape.executable_info), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.ScriptBlockText), "")))
+| WHERE cmd LIKE "*schtasks*/create*" OR cmd LIKE "*schtasks*/change*" OR cmd LIKE "*schtasks*/run*" OR cmd LIKE "*schtasks*/delete*"
+     OR cmd LIKE "*register-scheduledtask*" OR cmd LIKE "*new-scheduledtaskaction*" OR cmd LIKE "*set-scheduledtask*"
+     OR cmd LIKE "*unregister-scheduledtask*" OR cmd LIKE "*schedule.service*" OR cmd LIKE "*at.exe *" OR cmd LIKE "*\\\\at *"
+// the Microsoft script modules that define these cmdlets match too; drop their definitions
+| WHERE NOT cmd LIKE "*function register-scheduledtask*"
+| EVAL f_remote = cmd RLIKE ".*(/s [a-z0-9.\\-]+|-cimsession|-computername).*"
+| EVAL f_system = cmd RLIKE ".*(/ru (\"?system\"?|\"?nt authority)|-user (\"?system|\"?nt authority)|/rl highest|-runlevel highest).*"
+| EVAL f_lolbin = cmd RLIKE ".*/tr .*(powershell|pwsh|cmd|mshta|wscript|cscript|rundll32|regsvr32|certutil|bitsadmin).*"
+    OR cmd RLIKE ".*-execute .*(powershell|pwsh|cmd|mshta|wscript|cscript|rundll32|regsvr32).*"
+| EVAL f_userpath = cmd RLIKE ".*\\\\(users\\\\public|programdata|perflogs|appdata|temp|downloads)\\\\.*"
+| EVAL f_encoded = cmd RLIKE ".*(-enc|-encodedcommand|frombase64string|-w hidden|-windowstyle hidden|iex[ (]|downloadstring).*"
+| EVAL f_frequent = cmd RLIKE ".*/sc (minute|onstart|onlogon|onidle).*" OR cmd RLIKE ".*-(atstartup|atlogon|repetitioninterval).*"
+| EVAL score = CASE(f_remote, 3, 0) + CASE(f_lolbin, 2, 0) + CASE(f_userpath, 2, 0) + CASE(f_encoded, 2, 0)
+    + CASE(f_system, 1, 0) + CASE(f_frequent, 1, 0)
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_remote, "remote host; ", ""),
+    CASE(f_lolbin, "interpreter/LOLBin action; ", ""),
+    CASE(f_userpath, "user-writable path; ", ""),
+    CASE(f_encoded, "encoded/hidden/download cradle; ", ""),
+    CASE(f_system, "runs as SYSTEM / highest; ", ""),
+    CASE(f_frequent, "boot/logon/minute trigger; ", "")
+  ), "; $", "")
+| EVAL cmd_preview = SUBSTRING(TRIM(cmd), 1, 1500)
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    ch,
+    eid,
+    score,
+    reasons,
+    winlog.payload.event_data.SubjectUserName,
+    user.id,
+    cmd_preview
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

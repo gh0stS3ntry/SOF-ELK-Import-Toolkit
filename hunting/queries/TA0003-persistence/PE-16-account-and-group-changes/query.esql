@@ -1,0 +1,85 @@
+// PE-16 | Local and domain account creation and privileged group changes
+// Tactic: TA0003 Persistence | ATT&CK: T1136.001, T1136.002, T1098, T1078.003
+// Indexes: evtxlogs-* | Needs: Security 4720-4767, 4781 ("Audit User Account / Security Group Management")
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE TO_STRING(winlog.channel) == "Security"
+    AND eid IN ("4720", "4722", "4723", "4724", "4725", "4726", "4727", "4728", "4729", "4730", "4731", "4732", "4733", "4734", "4735", "4737", "4738", "4741", "4743", "4754", "4756", "4757", "4767", "4781")
+| EVAL target_name = TO_STRING(winlog.payload.event_data.TargetUserName)
+| EVAL target_l = TO_LOWER(COALESCE(target_name, ""))
+| EVAL target_sid = TO_UPPER(COALESCE(TO_STRING(winlog.payload.event_data.TargetSid), ""))
+| EVAL member = COALESCE(TO_STRING(winlog.payload.event_data.MemberName), TO_STRING(winlog.payload.event_data.MemberSid))
+| EVAL actor_user = TO_STRING(winlog.payload.event_data.SubjectUserName)
+| EVAL actor_domain = TO_STRING(winlog.payload.event_data.SubjectDomainName)
+| EVAL action = CASE(
+    eid == "4720", "User account created",
+    eid == "4722", "User account enabled",
+    eid == "4723", "Password change attempted (own)",
+    eid == "4724", "Password reset attempted",
+    eid == "4725", "User account disabled",
+    eid == "4726", "User account deleted",
+    eid == "4727", "Global security group created",
+    eid == "4728", "Member added to global group",
+    eid == "4729", "Member removed from global group",
+    eid == "4730", "Global security group deleted",
+    eid == "4731", "Local group created",
+    eid == "4732", "Member added to local group",
+    eid == "4733", "Member removed from local group",
+    eid == "4734", "Local group deleted",
+    eid IN ("4735", "4737"), "Group changed",
+    eid == "4738", "User account changed",
+    eid == "4741", "Computer account created",
+    eid == "4743", "Computer account deleted",
+    eid == "4754", "Universal security group created",
+    eid == "4756", "Member added to universal group",
+    eid == "4757", "Member removed from universal group",
+    eid == "4767", "User account unlocked",
+    eid == "4781", "Account name changed",
+    "Other")
+| EVAL is_group_change = eid IN ("4728", "4729", "4732", "4733", "4756", "4757")
+// builtin Administrators/Account/Server/Backup Operators/RDP/Remote Management; Domain/Schema/Enterprise Admins, GPO creators, key admins
+| EVAL f_admin_group = target_sid RLIKE "S-1-5-32-544|S-1-5-21-.*-(512|518|519)"
+    OR target_l IN ("administrators", "domain admins", "enterprise admins", "schema admins")
+| EVAL f_other_priv = NOT f_admin_group AND (target_sid RLIKE "S-1-5-32-(547|548|549|551|555|578|580)|S-1-5-21-.*-(520|526|527)"
+    OR target_l IN ("dnsadmins", "exchange windows permissions", "exchange trusted subsystem", "organization management", "group policy creator owners"))
+| EVAL f_hidden = COALESCE(target_name LIKE "*$", false) AND eid IN ("4720", "4781", "4738")
+| EVAL f_builtin = eid IN ("4722", "4724", "4738", "4781") AND target_l IN ("administrator", "guest", "defaultaccount", "krbtgt")
+| EVAL f_lookalike = eid IN ("4720", "4741")
+    AND target_l RLIKE ".*(admin|adm1n|root|system|support|helpdesk|service|svc|backup|temp|test|update|sql|iis).*"
+| EVAL f_actor_machine = COALESCE(actor_user LIKE "*$", false)
+| EVAL score = CASE(
+        eid IN ("4720", "4741"), 3,
+        eid IN ("4781", "4727", "4731", "4754"), 2,
+        1)
+    + CASE(is_group_change AND f_admin_group, 4, 0)
+    + CASE(is_group_change AND f_other_priv, 3, 0)
+    + CASE(f_hidden, 3, 0)
+    + CASE(f_builtin, 2, 0)
+    + CASE(f_lookalike, 1, 0)
+    + CASE(f_actor_machine AND eid IN ("4720", "4728", "4732", "4756"), 1, 0)
+| WHERE score >= 3
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(is_group_change AND f_admin_group, "admin group membership change; ", ""),
+    CASE(is_group_change AND f_other_priv, "other privileged group change; ", ""),
+    CASE(f_hidden, "account name ends with $ (hidden account trick); ", ""),
+    CASE(f_builtin, "built-in Administrator/Guest/DefaultAccount/krbtgt modified; ", ""),
+    CASE(f_lookalike, "look-alike or generic account name; ", ""),
+    CASE(f_actor_machine AND eid IN ("4720", "4728", "4732", "4756"), "performed in SYSTEM / machine context; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    eid,
+    action,
+    score,
+    reasons,
+    target_name,
+    target_sid,
+    member,
+    winlog.payload.event_data.TargetDomainName,
+    actor_domain,
+    actor_user,
+    winlog.payload.event_data.SubjectLogonId
+| SORT @timestamp ASC, score DESC
+| LIMIT 10000

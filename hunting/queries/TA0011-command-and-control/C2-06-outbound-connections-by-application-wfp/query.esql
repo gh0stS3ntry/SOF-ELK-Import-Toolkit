@@ -1,0 +1,32 @@
+// C2-06 | Outbound connections to public addresses, per application (WFP 5156)
+// Tactic: TA0011 Command and Control | ATT&CK: T1071, T1571, T1095
+// Indexes: evtxlogs-* | Needs: Security 5156 ("Audit Filtering Platform Connection")
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE TO_STRING(winlog.channel) == "Security" AND eid == "5156"
+// %%14593 = outbound; Dest* is the remote side
+| WHERE TO_STRING(winlog.payload.event_data.Direction) == "%%14593"
+| EVAL dst = TO_STRING(winlog.payload.event_data.DestAddress)
+| EVAL dst_ip = TO_IP(dst)
+| WHERE dst_ip IS NOT NULL
+    AND NOT CIDR_MATCH(dst_ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4", "255.255.255.255/32", "0.0.0.0/32", "::1/128", "fe80::/10", "fc00::/7", "ff00::/8")
+| EVAL dport = TO_STRING(winlog.payload.event_data.DestPort)
+| EVAL app = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.Application), ""))
+| STATS
+    connections = COUNT(*),
+    distinct_dest = COUNT_DISTINCT(dst),
+    dests = VALUES(dst),
+    ports = VALUES(dport),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, app
+| INLINE STATS app_hosts = COUNT_DISTINCT(_index) BY app
+| EVAL f_userpath = app RLIKE ".*\\\\(users\\\\public|programdata|perflogs|windows\\\\temp|temp|appdata|downloads|[$]recycle[.]bin)\\\\.*"
+| EVAL f_lolbin = app RLIKE ".*\\\\(powershell|pwsh|rundll32|regsvr32|mshta|wscript|cscript|certutil|bitsadmin|msbuild|installutil|cmd|notepad|werfault|dllhost|wmiprvse)[.]exe"
+| EVAL f_odd_port = MV_COUNT(MV_DEDUPE(ports)) > 0 AND NOT MV_CONCAT(ports, ",") RLIKE "(80|443|53|123)(,(80|443|53|123))*"
+| EVAL score = CASE(f_lolbin, 3, 0) + CASE(f_userpath, 3, 0) + CASE(f_odd_port, 1, 0) + CASE(app_hosts == 1, 1, 0) + CASE(distinct_dest <= 3 AND connections >= 50, 2, 0)
+| EVAL dests = MV_SLICE(dests, 0, 24)
+| EVAL ports = MV_SLICE(ports, 0, 24)
+| KEEP _index, score, app, connections, distinct_dest, first_seen, last_seen, app_hosts, f_lolbin, f_userpath, f_odd_port, ports, dests
+| SORT score DESC, connections DESC
+| LIMIT 5000

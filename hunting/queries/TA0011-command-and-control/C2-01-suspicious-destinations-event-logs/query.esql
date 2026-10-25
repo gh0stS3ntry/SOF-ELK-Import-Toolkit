@@ -1,0 +1,88 @@
+// C2-01 | Suspicious destinations and beacon-style code in event logs (Defender, BITS, PowerShell, DNS client)
+// Tactic: TA0011 Command and Control | ATT&CK: T1071.001, T1102, T1105, T1197, T1568.002, T1572
+// Indexes: evtxlogs-* | Needs: Defender, PowerShell Operational; BITS-Client and DNS-Client Operational when collected
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| WHERE (ch == "Microsoft-Windows-Windows Defender/Operational" AND eid IN ("1116", "1117", "1125", "1126"))
+     OR (ch == "Microsoft-Windows-Bits-Client/Operational" AND eid IN ("3", "59", "60", "61"))
+     OR (ch == "Microsoft-Windows-PowerShell/Operational" AND eid IN ("4103", "4104"))
+     OR (ch == "Windows PowerShell" AND eid IN ("400", "800"))
+     OR (ch == "Microsoft-Windows-DNS-Client/Operational" AND eid IN ("3006", "3008"))
+| EVAL qname = TO_LOWER(COALESCE(TO_STRING(`winlog.payload.event_data.QueryName`), ""))
+| EVAL bits_url = TO_LOWER(COALESCE(TO_STRING(`winlog.payload.event_data.url`), TO_STRING(`winlog.payload_data.URL`), ""))
+| EVAL txt = TO_LOWER(CONCAT(
+    COALESCE(MV_CONCAT(`winlog.payload.event_data.string`, " "), ""), " ",
+    COALESCE(TO_STRING(message), ""), " ",
+    COALESCE(TO_STRING(kape.executable_info), ""), " ",
+    COALESCE(TO_STRING(`winlog.payload.event_data.Path`), ""), " ",
+    COALESCE(TO_STRING(`winlog.payload.event_data.ScriptBlockText`), ""), " ",
+    bits_url, " ", qname))
+| EVAL f_chat_api = txt RLIKE ".*(api[.]telegram[.]org|discord(app)?[.]com/api/webhooks|hooks[.]slack[.]com/services|ntfy[.]sh|webhook[.]site|pipedream[.]net|interact[.]sh|oast[.](pro|live|site|online|fun|me)|burpcollaborator[.]net|canarytokens[.]com|requestbin).*"
+| EVAL f_tunnel = txt RLIKE ".*(ngrok[.](io|app)|ngrok-free[.]app|trycloudflare[.]com|serveo[.]net|loca[.]lt|duckdns[.]org|no-ip[.](com|org|biz)|ddns[.]net|hopto[.]org|zapto[.]org|sytes[.]net|myftp[.]org|portmap[.]io|playit[.]gg).*"
+| EVAL f_ip_url = txt RLIKE ".*(https?|ftp)://[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}.*"
+| EVAL f_hosting = txt RLIKE ".*(pastebin[.]com|paste[.]ee|hastebin|ghostbin|transfer[.]sh|anonfiles|gofile[.]io|temp[.]sh|0x0[.]st|raw[.]githubusercontent[.]com|gist[.]githubusercontent|workers[.]dev|pages[.]dev|glitch[.]me|herokuapp[.]com|firebaseio[.]com|dropboxusercontent|api[.]dropboxapi[.]com|graph[.]microsoft[.]com).*"
+| EVAL f_c2_path = txt RLIKE ".*(/gate[.]php|/submit[.]php|/beacon|/pixel[.](gif|png)|/__utm[.]gif|/jquery-[0-9]+[.][0-9]+[.][0-9]+[.]min[.]js|/updates[.]rss|/api/v1/(poll|task|beacon)).*"
+| EVAL f_cradle = txt RLIKE ".*(downloadstring|downloadfile|invoke-webrequest|invoke-restmethod|net[.]webclient|start-bitstransfer|httpwebrequest|xmlhttp|winhttp[.]winhttprequest).*"
+| EVAL f_socket = txt RLIKE ".*(net[.]sockets[.]tcpclient|net[.]sockets[.]udpclient|tcplistener|getstream[(][)]).*"
+| EVAL f_loop_sleep = txt RLIKE ".*(while[ ]*[(][$]true[)]|while[ ]*[(]1[)]|for[ ]*[(][;][;][)]).*" AND txt LIKE "*start-sleep*"
+| EVAL f_encoded = txt RLIKE ".*(-enc |-encodedcommand|frombase64string|-w hidden|-windowstyle hidden).*"
+| EVAL f_def_web = ch LIKE "*Defender*" AND eid IN ("1116", "1117") AND txt LIKE "*webfile:*"
+| EVAL f_def_netprot = ch LIKE "*Defender*" AND eid IN ("1125", "1126")
+| EVAL f_bits_job = ch LIKE "*Bits-Client*" AND eid IN ("3", "59") AND bits_url != ""
+    AND NOT bits_url RLIKE ".*(microsoft|windowsupdate|azureedge|office|live[.]com|mozilla|google|adobe|apple|dell|hp[.]com|lenovo).*"
+| EVAL f_dga = qname != "" AND (qname RLIKE "[a-z0-9\\-]{20,}[.][a-z0-9.\\-]+" OR qname RLIKE ".*[bcdfghjklmnpqrstvwxz]{7,}.*")
+| EVAL f_long_dns = qname != "" AND LENGTH(qname) > 60
+| EVAL score = CASE(f_chat_api, 4, 0)
+    + CASE(f_tunnel, 3, 0)
+    + CASE(f_ip_url, 3, 0)
+    + CASE(f_c2_path, 3, 0)
+    + CASE(f_socket, 3, 0)
+    + CASE(f_bits_job, 3, 0)
+    + CASE(f_def_web, 3, 0)
+    + CASE(f_def_netprot, 3, 0)
+    + CASE(f_loop_sleep AND f_cradle, 3, 0)
+    + CASE(f_dga, 2, 0)
+    + CASE(f_long_dns, 2, 0)
+    + CASE(f_encoded AND (f_cradle OR f_ip_url), 2, 0)
+    + CASE(f_cradle, 1, 0)
+    + CASE(f_hosting, 1, 0)
+| WHERE score >= 3
+| EVAL indicator = CASE(
+    qname != "", qname,
+    bits_url != "", bits_url,
+    txt RLIKE ".*https?://.*", REPLACE(txt, "(?s)^.*?(https?://[^\\s\"'<>)|]+).*$", "$1"),
+    null
+  )
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_chat_api, "chat/webhook/OAST callback endpoint; ", ""),
+    CASE(f_tunnel, "tunnel or dynamic-DNS host; ", ""),
+    CASE(f_ip_url, "IP-literal URL; ", ""),
+    CASE(f_c2_path, "C2-framework-style URL path; ", ""),
+    CASE(f_socket, "raw socket client in script; ", ""),
+    CASE(f_bits_job, "BITS job to non-vendor URL; ", ""),
+    CASE(f_def_web, "Defender detection of web-sourced file; ", ""),
+    CASE(f_def_netprot, "Network Protection event; ", ""),
+    CASE(f_loop_sleep AND f_cradle, "endless loop + sleep + web request (beacon code); ", ""),
+    CASE(f_dga, "DGA-like DNS name; ", ""),
+    CASE(f_long_dns, "very long DNS name (tunnelling?); ", ""),
+    CASE(f_encoded AND (f_cradle OR f_ip_url), "encoded/hidden download cradle; ", ""),
+    CASE(f_cradle, "web request in script; ", ""),
+    CASE(f_hosting, "paste/file-hosting/cloud-API host; ", "")
+  ), "; $", "")
+| EVAL detail = SUBSTRING(TRIM(txt), 1, 1500)
+//Filter away Google Update-like behaviour
+| WHERE NOT COALESCE(indicator LIKE "http:*edgedl.me.gvt1.com*" AND winlog.user.identifier == "S-1-5-18", false)
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    winlog.user.identifier,
+    ch,
+    eid,
+    score,
+    reasons,
+    indicator,
+    detail
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

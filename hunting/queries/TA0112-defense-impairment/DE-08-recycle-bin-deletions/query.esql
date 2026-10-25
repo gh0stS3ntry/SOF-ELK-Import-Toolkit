@@ -1,0 +1,31 @@
+// DE-08 | Files sent to the Recycle Bin ($I records)
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1070.004
+// Indexes: recyclebin-* | Needs: RBCmd output
+FROM recyclebin-* METADATA _index
+| WHERE recyclebin.deleted_on IS NOT NULL
+| EVAL original_path = COALESCE(recyclebin.original_path, file.path, "")
+| EVAL p = TO_LOWER(original_path)
+| EVAL original_name = REPLACE(original_path, "^.*\\\\", "")
+| EVAL original_dir = REPLACE(original_path, "\\\\[^\\\\]*$", "")
+| EVAL size_kb = ROUND(TO_DOUBLE(file.size) / 1024.0, 1)
+| EVAL f_exec = p RLIKE ".*[.](exe|dll|sys|scr|msi|ps1|psm1|bat|cmd|vbs|vbe|js|jse|wsf|hta|jar|py|lnk|iso|img|vhd|vhdx)"
+| EVAL f_archive = p RLIKE ".*[.](zip|rar|7z|tar|gz|cab|001|pst)"
+| EVAL f_tool = p RLIKE ".*(mimikatz|procdump|nanodump|lazagne|rubeus|sharphound|bloodhound|adfind|netscan|advanced_ip|nmap|rclone|winscp|filezilla|megasync|anydesk|teamviewer|screenconnect|psexec|paexec|cobalt|beacon|ngrok|chisel|plink).*"
+| EVAL f_folder = TO_LOWER(COALESCE(recyclebin.file_type, "")) LIKE "*folder*" OR TO_LOWER(COALESCE(recyclebin.file_type, "")) LIKE "*directory*"
+| KEEP
+    _index,
+    recyclebin.deleted_on,
+    user.id,
+    original_name,
+    original_dir,
+    f_exec,
+    f_archive,
+    f_tool,
+    f_folder,
+    size_kb,
+    file.size,
+    recyclebin.file_type,
+    original_path,
+    recyclebin.source_name
+| SORT recyclebin.deleted_on ASC
+| LIMIT 10000

@@ -1,0 +1,32 @@
+// TRI-05 | Installed software, newest first, with rarity across hosts
+// Tactic: Triage (first cut) | ATT&CK: T1072, T1219 (software that was installed to be abused)
+// Indexes: amcache-* | Needs: AmcacheParser ProgramEntries
+FROM amcache-* METADATA _index
+| WHERE event.dataset == "amcache.program_entries"
+| EVAL name = COALESCE(package.name, "(no name)")
+| EVAL publisher = COALESCE(amcache.publisher, "")
+| EVAL installed = COALESCE(package.installed, amcache.install_date_msi, amcache.install_date_arp_last_modified, amcache.key_last_write)
+| INLINE STATS host_count = COUNT_DISTINCT(host.name) BY name
+| EVAL path_l = TO_LOWER(COALESCE(package.path, ""))
+| EVAL f_user_path = path_l RLIKE ".*\\\\(users|programdata|temp|appdata|downloads|public)\\\\.*"
+| EVAL f_no_publisher = publisher == ""
+| EVAL f_remote_tool = TO_LOWER(name) RLIKE ".*(anydesk|teamviewer|screenconnect|connectwise|splashtop|rustdesk|atera|kaseya|ninja|remote ?utilities|ultraviewer|dameware|radmin|vnc|logmein|gotoassist|supremo|meshagent|tailscale|zerotier|ngrok|openvpn|wireguard).*"
+| EVAL f_admin_tool = TO_LOWER(name) RLIKE ".*(7-zip|winrar|filezilla|winscp|putty|rclone|megasync|python|nmap|wireshark|advanced ip scanner|angry ip|sysinternals|process hacker|everything).*"
+| KEEP
+    _index,
+    installed,
+    name,
+    package.version,
+    publisher,
+    host_count,
+    f_remote_tool,
+    f_admin_tool,
+    f_user_path,
+    f_no_publisher,
+    package.path,
+    amcache.uninstall_string,
+    amcache.source,
+    amcache.type,
+    amcache.key_last_write
+| SORT installed DESC
+| LIMIT 10000

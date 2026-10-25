@@ -1,0 +1,32 @@
+// EX-14 | .NET CLR loaded by unusual processes (CLR usage logs)
+// Tactic: TA0002 Execution | ATT&CK: T1620, T1055, T1218
+// Indexes: clrusagelogs-* | Needs: ConvertUsageLogsTo-CSV.ps1 output
+FROM clrusagelogs-* METADATA _index
+| EVAL proc = TO_LOWER(COALESCE(clr_usage.assembly_name, file.name, ""))
+| WHERE proc != ""
+| INLINE STATS host_count = COUNT_DISTINCT(_index) BY proc
+// processes that normally never load the CLR: typical sacrificial hosts for execute-assembly
+| EVAL f_sacrificial = proc IN ("rundll32.exe", "regsvr32.exe", "dllhost.exe", "svchost.exe", "werfault.exe", "notepad.exe", "gpupdate.exe", "searchprotocolhost.exe", "spoolsv.exe", "lsass.exe", "explorer.exe", "winlogon.exe", "wuauclt.exe", "mstsc.exe", "taskhostw.exe", "msiexec.exe", "werfaultsecure.exe")
+| EVAL f_lolbin = proc IN ("mshta.exe", "wmic.exe", "msbuild.exe", "installutil.exe", "regasm.exe", "regsvcs.exe", "cscript.exe", "wscript.exe", "cmstp.exe", "msxsl.exe", "odbcconf.exe", "addinprocess.exe", "addinprocess32.exe", "presentationhost.exe")
+| EVAL f_office = proc IN ("winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe", "onenote.exe")
+| EVAL f_rare = host_count <= 1
+| EVAL score = CASE(f_sacrificial, 4, 0) + CASE(f_lolbin, 3, 0) + CASE(f_office, 1, 0) + CASE(f_rare, 1, 0)
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_sacrificial, "process that does not normally host .NET; ", ""),
+    CASE(f_lolbin, ".NET-capable LOLBin; ", ""),
+    CASE(f_office, "Office application loading .NET; ", ""),
+    CASE(f_rare, "on one host only; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    clr_usage.first_execution_timestamp,
+    clr_usage.last_execution_timestamp,
+    score,
+    reasons,
+    proc,
+    user.name,
+    clr_usage.runtime,
+    host_count,
+    file.path
+| SORT score DESC, host_count ASC, clr_usage.last_execution_timestamp DESC
+| LIMIT 10000

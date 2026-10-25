@@ -1,0 +1,32 @@
+// LM-05 | Network share access by source, account and share, with named pipes (Security 5140/5145)
+// Tactic: TA0008 Lateral Movement | ATT&CK: T1021.002, T1135, T1039
+// Indexes: evtxlogs-* | Needs: Security 5140 ("Audit File Share"); 5145 ("Audit Detailed File Share") adds files and pipes
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE TO_STRING(winlog.channel) == "Security" AND eid IN ("5140", "5145")
+| EVAL share = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.ShareName), ""))
+| EVAL rel = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.RelativeTargetName), ""))
+| EVAL account = CONCAT(COALESCE(TO_STRING(winlog.payload.event_data.SubjectDomainName), ""), "\\", COALESCE(TO_STRING(winlog.payload.event_data.SubjectUserName), ""))
+| EVAL ip = REPLACE(COALESCE(TO_STRING(winlog.payload.event_data.IpAddress), ""), "^::ffff:", "")
+| EVAL f_admin_share = share RLIKE ".*\\\\(admin[$]|[a-z][$])"
+| EVAL f_ipc = share LIKE "*ipc$"
+| EVAL f_pipe = f_ipc AND rel RLIKE "(svcctl|atsvc|psexesvc.*|remcom.*|paexec.*|csexec.*|winreg|samr|lsarpc|drsuapi|netlogon|spoolss|srvsvc|wkssvc|epmapper|msagent_.*|postex_.*|status_.*|mojo.*)"
+| EVAL f_sysvol = share RLIKE ".*\\\\(sysvol|netlogon)"
+| EVAL time_bucket = DATE_TRUNC(1 hour, @timestamp)
+| STATS
+    events = COUNT(*),
+    shares = VALUES(share),
+    admin_share = MAX(TO_INTEGER(f_admin_share)),
+    pipes = VALUES(rel) WHERE f_pipe,
+    files_touched = COUNT_DISTINCT(rel) WHERE NOT f_ipc,
+    sample_files = VALUES(rel) WHERE NOT f_ipc,
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, ip, account, time_bucket
+| WHERE NOT account LIKE "*$"
+| EVAL f_c2_pipe = COALESCE(MV_CONCAT(pipes, " ") RLIKE ".*(msagent_|postex_|status_|mojo[.]).*", false)
+| EVAL score = admin_share * 3 + CASE(f_c2_pipe, 4, 0) + CASE(pipes IS NOT NULL, 2, 0) + CASE(files_touched >= 100, 2, 0)
+| EVAL sample_files = MV_SLICE(sample_files, 0, 19)
+| KEEP _index, time_bucket, ip, account, score, events, shares, admin_share, pipes, files_touched, first_seen, last_seen, sample_files
+| SORT score DESC, time_bucket ASC
+| LIMIT 10000

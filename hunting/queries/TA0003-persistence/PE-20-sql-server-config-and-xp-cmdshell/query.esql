@@ -1,0 +1,44 @@
+// PE-20 | SQL Server configuration changes, xp_cmdshell and CLR use (Application log)
+// Tactic: TA0003 Persistence | ATT&CK: T1505.001, T1059.003, T1562.001
+// Indexes: evtxlogs-* | Needs: Application log from the SQL Server host
+FROM evtxlogs-* METADATA _index
+| WHERE TO_STRING(winlog.channel) == "Application"
+| EVAL prov = TO_LOWER(COALESCE(TO_STRING(winlog.provider_name), ""))
+| WHERE prov LIKE "mssql*" OR prov LIKE "sqlserveragent*" OR prov LIKE "sqlagent*"
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL txt = TO_LOWER(COALESCE(MV_CONCAT(winlog.payload.event_data.string, " | "), ""))
+// 15457 config option changed; 15281 blocked component; 8128 extended proc DLL loaded; 17135/17137 db start; 33205 audit record
+| EVAL f_config = eid == "15457"
+| EVAL f_dangerous_opt = txt RLIKE ".*(xp_cmdshell|ole automation procedures|clr enabled|clr strict security|ad hoc distributed queries|external scripts enabled|show advanced options|remote admin connections|database mail xps|allow polybase export|scan for startup procs).*"
+| EVAL f_enabled = txt RLIKE ".*from 0 to 1.*"
+| EVAL f_blocked = eid == "15281"
+| EVAL f_xp_dll = eid == "8128" OR txt LIKE "*xplog70.dll*"
+| EVAL f_audit_cmd = eid == "33205" AND txt RLIKE ".*(xp_cmdshell|sp_oacreate|sp_configure|create assembly|sp_addextendedproc|sp_add_job|sp_addsrvrolemember|alter server role|create login|openrowset|bulk insert).*"
+| EVAL f_login_admin = txt RLIKE ".*(sp_addsrvrolemember|alter server role.*sysadmin|create login).*"
+| WHERE f_config OR f_blocked OR f_xp_dll OR f_audit_cmd OR f_login_admin
+| EVAL score = CASE(f_config AND f_dangerous_opt AND f_enabled, 5, 0)
+    + CASE(f_config AND NOT (f_dangerous_opt AND f_enabled), 1, 0)
+    + CASE(f_blocked, 3, 0)
+    + CASE(f_xp_dll, 3, 0)
+    + CASE(f_audit_cmd, 3, 0)
+    + CASE(f_login_admin, 2, 0)
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_config AND f_dangerous_opt AND f_enabled, "dangerous option switched on; ", ""),
+    CASE(f_config AND NOT (f_dangerous_opt AND f_enabled), "configuration change; ", ""),
+    CASE(f_blocked, "blocked use of a disabled component (attempt); ", ""),
+    CASE(f_xp_dll, "xp_cmdshell / extended procedure DLL loaded; ", ""),
+    CASE(f_audit_cmd, "audited dangerous statement; ", ""),
+    CASE(f_login_admin, "login created or added to a server role; ", "")
+  ), "; $", "")
+| EVAL detail = SUBSTRING(txt, 1, 1500)
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    winlog.provider_name,
+    eid,
+    score,
+    reasons,
+    detail
+| SORT @timestamp ASC
+| LIMIT 5000

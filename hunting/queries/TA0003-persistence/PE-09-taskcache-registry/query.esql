@@ -1,0 +1,59 @@
+// PE-09 | Scheduled tasks in the TaskCache registry key, scored by their actions
+// Tactic: TA0003 Persistence | ATT&CK: T1053.005
+// Indexes: registry-* | Needs: RECmd batch output that dumps TaskCache\Tasks values (Path, Author, Actions)
+FROM registry-* METADATA _index
+| WHERE event.dataset == "registry.batch"
+| EVAL key_lower = TO_LOWER(COALESCE(registry.key, ""))
+| WHERE key_lower RLIKE ".*\\\\schedule\\\\taskcache\\\\tasks\\\\.*"
+| EVAL vname = TO_LOWER(COALESCE(registry.value, ""))
+| EVAL vdata = COALESCE(MV_CONCAT(registry.data.strings, " "), "")
+| EVAL guid = REPLACE(key_lower, "^.*\\\\taskcache\\\\tasks\\\\(\\{[^}]+\\}).*$", "$1")
+| WHERE guid LIKE "{*}"
+| STATS
+    task_path = VALUES(vdata) WHERE vname IN ("path", "uri"),
+    author = VALUES(vdata) WHERE vname == "author",
+    description = VALUES(vdata) WHERE vname == "description",
+    created = VALUES(vdata) WHERE vname == "date",
+    actions = VALUES(vdata) WHERE vname == "actions",
+    last_write = MAX(registry.last_write)
+  BY _index, guid
+| EVAL path_s = TO_LOWER(COALESCE(MV_CONCAT(task_path, " | "), ""))
+| EVAL author_s = COALESCE(MV_CONCAT(author, " | "), "")
+| EVAL actions_s = TO_LOWER(COALESCE(MV_CONCAT(actions, " "), ""))
+| EVAL f_not_ms = path_s != "" AND NOT path_s RLIKE "\\\\microsoft\\\\.*"
+| EVAL f_root = path_s RLIKE "\\\\[^\\\\|]+"
+| EVAL f_author_user = author_s RLIKE ".*[\\\\].*"
+// Actions is a binary value; RECmd shows it as text or as UTF-16LE hex bytes, so match both
+| EVAL f_lolbin_txt = actions_s RLIKE ".*(powershell|pwsh|cmd[.]exe|mshta|wscript|cscript|rundll32|regsvr32|certutil|bitsadmin|msbuild|installutil|curl[.]exe).*"
+| EVAL f_lolbin_hex = actions_s RLIKE ".*(70[- ]00[- ]6f[- ]00[- ]77[- ]00[- ]65[- ]00[- ]72[- ]00[- ]73[- ]00[- ]68[- ]00[- ]65[- ]00[- ]6c[- ]00[- ]6c|6d[- ]00[- ]73[- ]00[- ]68[- ]00[- ]74[- ]00[- ]61|77[- ]00[- ]73[- ]00[- ]63[- ]00[- ]72[- ]00[- ]69[- ]00[- ]70[- ]00[- ]74|63[- ]00[- ]73[- ]00[- ]63[- ]00[- ]72[- ]00[- ]69[- ]00[- ]70[- ]00[- ]74|63[- ]00[- ]6d[- ]00[- ]64[- ]00[- ]2e[- ]00[- ]65[- ]00[- ]78[- ]00[- ]65|72[- ]00[- ]75[- ]00[- ]6e[- ]00[- ]64[- ]00[- ]6c[- ]00[- ]6c[- ]00[- ]33[- ]00[- ]32|72[- ]00[- ]65[- ]00[- ]67[- ]00[- ]73[- ]00[- ]76[- ]00[- ]72[- ]00[- ]33[- ]00[- ]32).*"
+| EVAL f_lolbin = f_lolbin_txt OR f_lolbin_hex
+| EVAL f_userpath = actions_s RLIKE ".*[\\\\](appdata|temp|programdata|users[\\\\]public|perflogs|downloads)[\\\\].*"
+| EVAL f_net = actions_s RLIKE ".*(http://|https://).*"
+| EVAL score = CASE(f_lolbin, 3, 0)
+    + CASE(f_userpath, 2, 0)
+    + CASE(f_net, 2, 0)
+    + CASE(f_not_ms, 1, 0)
+    + CASE(f_root, 1, 0)
+    + CASE(f_author_user, 1, 0)
+| WHERE score >= 3
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_lolbin, "interpreter/LOLBin in task action; ", ""),
+    CASE(f_userpath, "user-writable path in action; ", ""),
+    CASE(f_net, "network URL in action; ", ""),
+    CASE(f_not_ms, "task outside \\Microsoft folder; ", ""),
+    CASE(f_root, "task at root of task tree; ", ""),
+    CASE(f_author_user, "author is a user account; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    last_write,
+    created,
+    score,
+    reasons,
+    task_path,
+    author,
+    description,
+    guid,
+    actions
+| SORT score DESC, last_write DESC
+| LIMIT 10000

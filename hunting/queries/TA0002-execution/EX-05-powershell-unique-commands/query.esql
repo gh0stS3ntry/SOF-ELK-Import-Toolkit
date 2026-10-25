@@ -1,0 +1,38 @@
+// EX-05 | Unique PowerShell host applications across hosts (long tail)
+// Tactic: TA0002 Execution | ATT&CK: T1059.001
+// Indexes: evtxlogs-* | Needs: Windows PowerShell 400/600/800 or PowerShell Operational 4103
+FROM evtxlogs-* METADATA _index
+| WHERE winlog.channel LIKE "*PowerShell*" OR winlog.provider_name LIKE "*PowerShell*"
+| EVAL event_string = MV_CONCAT(winlog.payload.event_data.string, ", ")
+| GROK event_string "HostApplication=%{GREEDYDATA:command_line}"
+| EVAL command_line = TRIM(REPLACE(REPLACE(REPLACE(command_line, "&gt;", ">"), "&lt;", "<"), "&amp;", "&"))
+| WHERE command_line IS NOT NULL AND command_line != ""
+// stage 1: per command and host
+| STATS
+    log_count = COUNT(*),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY command_line, _index
+| EVAL host_detail = CONCAT(_index, " [",
+    DATE_FORMAT("yyyy-MM-dd HH:mm:ss", first_seen), " -> ",
+    DATE_FORMAT("yyyy-MM-dd HH:mm:ss", last_seen), "]")
+// stage 2: one row per command
+| STATS
+    log_count = SUM(log_count),
+    host_count = COUNT_DISTINCT(_index),
+    first_seen = MIN(first_seen),
+    last_seen = MAX(last_seen),
+    hosts = VALUES(host_detail),
+    source_indices = VALUES(_index)
+  BY command_line
+| EVAL hosts = MV_CONCAT(hosts, ", ")
+| KEEP
+    source_indices,
+    host_count,
+    log_count,
+    first_seen,
+    last_seen,
+    command_line,
+    hosts
+| SORT log_count ASC
+| LIMIT 10000

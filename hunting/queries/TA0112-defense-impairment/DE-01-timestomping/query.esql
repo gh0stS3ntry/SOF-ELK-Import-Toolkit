@@ -1,0 +1,78 @@
+// DE-01 | Timestomping: $SI earlier than $FN, zeroed sub-seconds ($MFT)
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1070.006
+// Indexes: filesystem-* | Needs: MFTECmd $MFT output
+FROM filesystem-* METADATA _index
+| WHERE file.update_reasons IS NULL
+| WHERE COALESCE(TO_STRING(file.type), "") != "dir"
+| WHERE file.stdinfo.created IS NOT NULL AND file.filename.created IS NOT NULL
+| EVAL fname = TO_LOWER(COALESCE(TO_STRING(file.name), ""))
+| EVAL p = TO_LOWER(COALESCE(TO_STRING(file.path), TO_STRING(file.directory), ""))
+| WHERE NOT p RLIKE ".*\\\\(winsxs|servicing|softwaredistribution|assembly|driverstore|catroot|catroot2|installer)\\\\.*"
+| EVAL si_c_ms = DATE_DIFF("milliseconds", DATE_TRUNC(1 second, file.stdinfo.created), file.stdinfo.created)
+| EVAL si_m_ms = DATE_DIFF("milliseconds", DATE_TRUNC(1 second, file.stdinfo.mtime), file.stdinfo.mtime)
+| EVAL si_x_ms = DATE_DIFF("milliseconds", DATE_TRUNC(1 second, file.stdinfo.ctime), file.stdinfo.ctime)
+| EVAL si_a_ms = DATE_DIFF("milliseconds", DATE_TRUNC(1 second, file.stdinfo.accessed), file.stdinfo.accessed)
+| EVAL fn_c_ms = DATE_DIFF("milliseconds", DATE_TRUNC(1 second, file.filename.created), file.filename.created)
+| EVAL zero_si = TO_INTEGER(COALESCE(si_c_ms == 0, false))
+    + TO_INTEGER(COALESCE(si_m_ms == 0, false))
+    + TO_INTEGER(COALESCE(si_x_ms == 0, false))
+    + TO_INTEGER(COALESCE(si_a_ms == 0, false))
+| EVAL f_si_before_fn = file.stdinfo.created < file.filename.created
+| EVAL f_si_before_fn_m = COALESCE(file.stdinfo.mtime < file.filename.mtime, false)
+| EVAL gap_days = DATE_DIFF("days", file.stdinfo.created, file.filename.created)
+| WHERE f_si_before_fn OR zero_si >= 2
+| EVAL f_zero_vs_fn = COALESCE(si_c_ms == 0, false) AND COALESCE(fn_c_ms > 0, false)
+| EVAL f_ctime_incons = COALESCE(file.stdinfo.created > file.stdinfo.ctime, false)
+    OR COALESCE(file.stdinfo.mtime > file.stdinfo.ctime, false)
+| EVAL f_exec = fname RLIKE ".*[.](exe|dll|sys|scr|ocx|cpl|drv|ps1|bat|cmd|vbs|vbe|js|jse|wsf|hta|lnk|msi|jar|py)"
+| EVAL f_high_dir = p RLIKE ".*\\\\(users\\\\public|programdata|perflogs|windows\\\\temp|windows\\\\tasks|windows\\\\debug|[$]recycle[.]bin|appdata|temp|downloads|desktop)\\\\.*"
+| EVAL score = CASE(f_si_before_fn, 3, 0)
+    + CASE(f_si_before_fn AND f_si_before_fn_m, 1, 0)
+    + CASE(zero_si >= 3, 4, zero_si == 2, 2, 0)
+    + CASE(f_zero_vs_fn, 1, 0)
+    + CASE(f_ctime_incons, 2, 0)
+    + CASE(f_exec, 2, 0)
+    + CASE(f_high_dir, 1, 0)
+| WHERE score >= 5
+| EVAL hit_type = CASE(
+    f_si_before_fn AND zero_si >= 2, "$SI older than $FN + zeroed sub-seconds",
+    f_si_before_fn, "$SI created older than $FN created",
+    "Zeroed sub-seconds in $SI"
+  )
+| EVAL flags = REPLACE(CONCAT(
+    CASE(f_si_before_fn, "$SI created < $FN created; ", ""),
+    CASE(f_si_before_fn AND f_si_before_fn_m, "$SI modified also < $FN modified; ", ""),
+    CASE(zero_si >= 2, CONCAT(TO_STRING(zero_si), " of 4 $SI times have .000 sub-seconds; "), ""),
+    CASE(f_zero_vs_fn, "$SI created has no fraction but $FN created does; ", ""),
+    CASE(f_ctime_incons, "$SI created/modified later than MFT-changed time; ", ""),
+    CASE(f_exec, "executable/script type; ", ""),
+    CASE(f_high_dir, "user-writable or staging dir; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    score,
+    hit_type,
+    flags,
+    file.name,
+    file.path,
+    file.filename.created,
+    file.stdinfo.created,
+    gap_days,
+    file.stdinfo.mtime,
+    file.filename.mtime,
+    file.stdinfo.ctime,
+    file.stdinfo.accessed,
+    si_c_ms,
+    si_m_ms,
+    si_x_ms,
+    si_a_ms,
+    fn_c_ms,
+    zero_si,
+    file.size,
+    kape.mft.inuse,
+    kape.mft.name_type,
+    file.inode,
+    file.sequence_number,
+    file.parent.inode
+| SORT score DESC, file.filename.created ASC
+| LIMIT 10000

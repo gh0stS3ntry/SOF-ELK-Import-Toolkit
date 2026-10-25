@@ -1,0 +1,38 @@
+// DE-02 | Event logs cleared, event log service stopped or disabled
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1070.001, T1562.002
+// Indexes: evtxlogs-* | Needs: Security 1102/1100, System 104/7036/7040; adds wevtutil/Clear-EventLog commands from 4688, Sysmon 1, 4104
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| EVAL txt = TO_LOWER(CONCAT(
+    COALESCE(TO_STRING(kape.executable_info), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.ScriptBlockText), "")))
+| EVAL svc = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.param1), ""))
+| EVAL svc_state = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.param2), ""))
+| EVAL f_sec_log_cleared = ch == "Security" AND eid == "1102"
+| EVAL f_nonsec_log_cleared = ch == "System" AND eid == "104"
+| EVAL f_eventlog_shutdown = ch == "Security" AND eid == "1100"
+| EVAL f_disable_eventlog_svc = ch == "System" AND eid == "7040" AND svc LIKE "windows event log*"
+| EVAL f_stop_eventlog_svc = ch == "System" AND eid == "7036" AND svc LIKE "windows event log*" AND svc_state LIKE "*stopped*"
+| EVAL f_clear_cmd = ch IN ("Security", "Microsoft-Windows-Sysmon/Operational", "Microsoft-Windows-PowerShell/Operational") AND eid IN ("4688", "1", "4104")
+    AND txt RLIKE ".*(wevtutil(\\.exe)?[ ]+(cl|clear-log|sl[ ].*/e:false)|clear-eventlog|remove-eventlog|limit-eventlog|eventing[.]reader[.]eventlogsession.*clearlog|\\[system[.]diagnostics[.]eventing.*clearlog|auditpol.*/clear|stop-service.*eventlog|sc(\\.exe)?[ ]+(stop|config)[ ]+eventlog).*"
+| WHERE f_sec_log_cleared OR f_nonsec_log_cleared OR f_eventlog_shutdown OR f_disable_eventlog_svc OR f_stop_eventlog_svc OR f_clear_cmd
+| EVAL reason = CASE(
+    f_sec_log_cleared, "Security log cleared (1102)",
+    f_nonsec_log_cleared, "Other event log cleared (System 104)",
+    f_disable_eventlog_svc, "Event Log service start type changed (7040)",
+    f_stop_eventlog_svc, "Event Log service stopped (7036)",
+    f_eventlog_shutdown, "Event logging shut down (1100; also at normal shutdown)",
+    "Log clearing / tampering command")
+| EVAL detail = SUBSTRING(TRIM(CONCAT(COALESCE(TO_STRING(winlog.payload.event_data.string), ""), " ", svc, " ", svc_state, " ", txt)), 1, 600)
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    ch,
+    eid,
+    reason,
+    winlog.user.name,
+    detail
+| SORT @timestamp ASC
+| LIMIT 10000

@@ -1,0 +1,62 @@
+// CA-02 | Credential dump files and dump tools on disk ($MFT)
+// Tactic: TA0006 Credential Access | ATT&CK: T1003.001, T1003.002, T1003.003
+// Indexes: filesystem-* | Needs: MFTECmd $MFT output
+FROM filesystem-* METADATA _index
+| WHERE file.update_reasons IS NULL
+| WHERE COALESCE(TO_STRING(file.type), "") != "dir"
+| EVAL fname = TO_LOWER(COALESCE(TO_STRING(file.name), ""))
+| WHERE fname != ""
+| EVAL p = TO_LOWER(COALESCE(TO_STRING(file.path), TO_STRING(file.directory), ""))
+| EVAL f_tool_kz = fname RLIKE ".*(mimikatz|mimilib|mimidrv|mimispool|mimilove|kekeo|safetykatz|sharpkatz|pypykatz|nanodump|dumpert|lsassy|handlekatz|sharpdump|sharpdpapi|sharpchrome|lazagne|rubeus|pwdump|fgdump|gsecdump|cachedump|quarkspwdump|secretsdump).*[.](exe|dll|sys|ps1|py|bin)"
+    OR fname RLIKE "(wce(64)?|wceaux)[.](exe|dll)"
+| EVAL f_tool_dump = fname RLIKE "(procdump|procdump64|procdump64a|dumpit|winpmem.*|avdump|processdump|sqldumper|createdump|rdrleakdiag)[.]exe"
+    AND NOT p RLIKE ".*\\\\(program files|program files [(]x86[)]|windows\\\\system32|windows\\\\syswow64|windows\\\\microsoft[.]net|microsoft sql server)\\\\.*"
+| EVAL f_lsass_dump = fname RLIKE ".*lsass.*[.](dmp|mdmp|hdmp|dump|bin|zip|7z|rar|gz)"
+| EVAL f_hive_copy = fname RLIKE "(sam|system|security)([.](save|bak|hiv|hive|copy|old))?"
+    AND NOT p RLIKE ".*\\\\windows\\\\(system32\\\\config|repair|servicing|winsxs|system32\\\\sru)(\\\\.*)?"
+| EVAL f_ntds = fname RLIKE "ntds.*[.](dit|jfm|bak|dat)" AND NOT p RLIKE ".*\\\\windows\\\\ntds\\\\.*"
+| EVAL f_dump_file = fname RLIKE ".*[.](dmp|mdmp|hdmp)" AND fname != "memory.dmp"
+    AND NOT p RLIKE ".*\\\\(windows\\\\minidump|windows\\\\livekernelreports|windows\\\\wer|programdata\\\\microsoft\\\\windows\\\\wer|appdata\\\\local\\\\crashdumps|appdata\\\\local\\\\microsoft\\\\windows\\\\wer)(\\\\.*)?"
+| WHERE f_tool_kz OR f_tool_dump OR f_lsass_dump OR f_hive_copy OR f_ntds OR f_dump_file
+| EVAL size_mb = ROUND(TO_DOUBLE(file.size) / 1048576.0, 1)
+| EVAL f_big = COALESCE(file.size >= 5242880, false)
+| EVAL f_staging = p RLIKE ".*\\\\(users\\\\public|programdata|perflogs|windows\\\\temp|[$]recycle[.]bin|appdata|temp|downloads|desktop)\\\\.*"
+| EVAL f_deleted = NOT COALESCE(kape.mft.inuse, true)
+| EVAL event_time = COALESCE(file.filename.created, file.stdinfo.created, @timestamp)
+| EVAL score = CASE(f_tool_kz, 6, 0)
+    + CASE(f_lsass_dump, 6, 0)
+    + CASE(f_hive_copy, 5, 0)
+    + CASE(f_ntds, 5, 0)
+    + CASE(f_tool_dump, 3, 0)
+    + CASE(f_dump_file, 2, 0)
+    + CASE(f_dump_file AND f_big, 2, 0)
+    + CASE(f_staging, 1, 0)
+    + CASE(f_deleted, 1, 0)
+| WHERE score >= 4
+| EVAL flags = REPLACE(CONCAT(
+    CASE(f_tool_kz, "credential-theft tool filename; ", ""),
+    CASE(f_lsass_dump, "LSASS dump file name; ", ""),
+    CASE(f_hive_copy, "SAM/SYSTEM/SECURITY hive copy outside config dir; ", ""),
+    CASE(f_ntds, "NTDS.dit or IFM remnant outside default location; ", ""),
+    CASE(f_tool_dump, "dump utility outside standard install dir; ", ""),
+    CASE(f_dump_file AND f_big, "dump file 5MB+ outside crash-report dirs; ", f_dump_file, "dump file outside crash-report dirs; ", ""),
+    CASE(f_staging, "user-writable or staging directory; ", ""),
+    CASE(f_deleted, "deleted; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    event_time,
+    score,
+    flags,
+    file.name,
+    file.path,
+    size_mb,
+    file.stdinfo.created,
+    file.stdinfo.mtime,
+    file.filename.created,
+    kape.mft.inuse,
+    file.inode,
+    file.sequence_number,
+    file.parent.inode
+| SORT score DESC, event_time ASC
+| LIMIT 5000

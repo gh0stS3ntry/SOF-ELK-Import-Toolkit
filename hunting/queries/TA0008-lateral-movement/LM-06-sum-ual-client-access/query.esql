@@ -1,0 +1,19 @@
+// LM-06 | Server client access from User Access Logging (SUM database), by client and account
+// Tactic: TA0008 Lateral Movement | ATT&CK: T1021, T1078
+// Indexes: sum-* | Needs: SumECmd output (Windows Server 2012+); field names follow SumECmd's CSV columns
+FROM sum-* METADATA _index
+| WHERE AuthenticatedUserName IS NOT NULL
+| EVAL account = TO_LOWER(TO_STRING(AuthenticatedUserName))
+| EVAL client_ip = TO_STRING(IpAddress)
+| EVAL role = TO_STRING(RoleDescription)
+| STATS
+    total_accesses = SUM(TO_LONG(TotalAccesses)),
+    first_seen = MIN(InsertDate),
+    last_seen = MAX(LastAccess),
+    roles = VALUES(role),
+    client_names = VALUES(ClientName)
+  BY _index, account, client_ip
+| INLINE STATS servers_for_client = COUNT_DISTINCT(_index) BY client_ip
+| KEEP _index, account, client_ip, client_names, roles, total_accesses, first_seen, last_seen, servers_for_client
+| SORT first_seen DESC
+| LIMIT 10000

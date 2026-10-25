@@ -1,0 +1,38 @@
+// C2-07 | Network connections by process (Sysmon 3), scored
+// Tactic: TA0011 Command and Control | ATT&CK: T1071, T1571, T1219
+// Indexes: evtxlogs-* | Needs: Sysmon event 3
+FROM evtxlogs-* METADATA _index
+| WHERE winlog.channel == "Microsoft-Windows-Sysmon/Operational"
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE eid == "3"
+| EVAL image = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.Image), ""))
+| EVAL dst = TO_STRING(winlog.payload.event_data.DestinationIp)
+| EVAL dst_ip = TO_IP(dst)
+| EVAL dhost = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.DestinationHostname), ""))
+| EVAL dport = TO_STRING(winlog.payload.event_data.DestinationPort)
+| EVAL outbound = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.Initiated), "true")) == "true"
+| WHERE outbound
+| EVAL is_public = dst_ip IS NOT NULL AND NOT CIDR_MATCH(dst_ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4", "::1/128", "fe80::/10", "fc00::/7", "ff00::/8")
+| STATS
+    connections = COUNT(*),
+    public_connections = COUNT(*) WHERE is_public,
+    distinct_dest = COUNT_DISTINCT(dst),
+    dests = VALUES(dst),
+    dest_hosts = VALUES(dhost),
+    ports = VALUES(dport),
+    users = VALUES(winlog.payload.event_data.User),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, image
+| INLINE STATS image_hosts = COUNT_DISTINCT(_index) BY image
+| EVAL f_userpath = image RLIKE ".*\\\\(users\\\\public|programdata|perflogs|windows\\\\temp|temp|appdata|downloads|[$]recycle[.]bin)\\\\.*"
+| EVAL f_lolbin = image RLIKE ".*\\\\(powershell|pwsh|rundll32|regsvr32|mshta|wscript|cscript|certutil|bitsadmin|msbuild|installutil|cmd|notepad|werfault|dllhost|wmiprvse)[.]exe"
+| EVAL f_tunnel_host = COALESCE(MV_CONCAT(dest_hosts, " ") RLIKE ".*(ngrok|trycloudflare|duckdns|no-ip|ddns[.]net|hopto|zapto|serveo|portmap|playit|workers[.]dev|pastebin|transfer[.]sh|telegram|discord).*", false)
+| EVAL f_lateral_port = COALESCE(MV_CONTAINS(ports, "445") OR MV_CONTAINS(ports, "135") OR MV_CONTAINS(ports, "5985") OR MV_CONTAINS(ports, "5986") OR MV_CONTAINS(ports, "3389") OR MV_CONTAINS(ports, "22"), false)
+| EVAL score = CASE(f_lolbin AND public_connections > 0, 3, 0) + CASE(f_userpath, 3, 0) + CASE(f_tunnel_host, 3, 0)
+    + CASE(image_hosts == 1, 1, 0) + CASE(f_lateral_port AND NOT image LIKE "*\\\\system32\\\\svchost.exe" AND NOT image == "system", 1, 0)
+| EVAL dests = MV_SLICE(dests, 0, 24)
+| EVAL dest_hosts = MV_SLICE(dest_hosts, 0, 24)
+| KEEP _index, score, image, users, connections, public_connections, distinct_dest, first_seen, last_seen, image_hosts, ports, dest_hosts, dests
+| SORT score DESC, public_connections DESC
+| LIMIT 5000

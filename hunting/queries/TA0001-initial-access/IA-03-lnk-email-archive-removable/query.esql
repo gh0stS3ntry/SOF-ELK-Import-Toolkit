@@ -1,0 +1,46 @@
+// IA-03 | Files opened from email attachments, archives, mounted images, removable or network drives
+// Tactic: TA0001 Initial Access | ATT&CK: T1566.001, T1204.002, T1091, T1553.005
+// Indexes: lnkfiles-* | Needs: LECmd
+FROM lnkfiles-* METADATA _index
+| EVAL target = TO_LOWER(COALESCE(TO_STRING(file.target.local_path), TO_STRING(file.target.network_path), TO_STRING(file.target.absolute_path), ""))
+| WHERE target != ""
+| EVAL drive_type = TO_LOWER(COALESCE(TO_STRING(file.target.drivetype), ""))
+| EVAL lnk_path = TO_LOWER(COALESCE(TO_STRING(file.path), ""))
+| EVAL profile = CASE(lnk_path RLIKE ".*\\\\users\\\\[^\\\\]+\\\\.*", REPLACE(lnk_path, "^.*\\\\users\\\\([^\\\\]+)\\\\.*$", "$1"), null)
+| EVAL f_outlook = target RLIKE ".*\\\\(content[.]outlook|olk[0-9a-z]*)\\\\.*"
+| EVAL f_archive_tmp = target RLIKE ".*\\\\appdata\\\\local\\\\temp\\\\(rar[$]ex|7zo|temp[0-9]+_|wz[0-9a-z]+).*"
+| EVAL f_downloads = target RLIKE ".*\\\\downloads\\\\.*"
+| EVAL f_removable = drive_type LIKE "*removable*"
+| EVAL f_optical = drive_type LIKE "*cd-rom*" OR drive_type LIKE "*cdrom*"
+| EVAL f_network = drive_type LIKE "*remote*" OR target LIKE "\\\\\\\\*"
+| EVAL f_risky_ext = target RLIKE ".*[.](exe|dll|scr|com|pif|cpl|msi|js|jse|vbs|vbe|wsf|hta|ps1|bat|cmd|lnk|iso|img|vhd|vhdx|one|chm|xll|docm|xlsm|pptm|jar|zip|rar|7z)"
+| WHERE f_outlook OR f_archive_tmp OR f_removable OR f_optical OR f_network OR (f_downloads AND f_risky_ext)
+| EVAL score = CASE(f_outlook, 3, 0) + CASE(f_archive_tmp, 2, 0) + CASE(f_optical, 3, 0)
+    + CASE(f_removable, 2, 0) + CASE(f_network, 1, 0) + CASE(f_risky_ext, 2, 0) + CASE(f_downloads, 1, 0)
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_outlook, "opened from Outlook attachment cache; ", ""),
+    CASE(f_archive_tmp, "opened from inside an archive (temp extraction); ", ""),
+    CASE(f_optical, "on a CD-ROM drive (mounted ISO/IMG?); ", ""),
+    CASE(f_removable, "on removable media; ", ""),
+    CASE(f_network, "on a network share; ", ""),
+    CASE(f_downloads, "in Downloads; ", ""),
+    CASE(f_risky_ext, "executable/script/container file type; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    file.created,
+    file.mtime,
+    profile,
+    score,
+    reasons,
+    target,
+    drive_type,
+    file.target.volume.label,
+    volume.serial_number,
+    file.target.created,
+    file.target.mtime,
+    file.size,
+    file.tracker.machine_id,
+    file.path
+| SORT score DESC, file.mtime ASC
+| LIMIT 10000

@@ -1,0 +1,32 @@
+// IM-02 | Mass renames to a new extension (encryption bursts, USN $J)
+// Tactic: TA0040 Impact | ATT&CK: T1486
+// Indexes: filesystem-* | Needs: MFTECmd $J output
+FROM filesystem-* METADATA _index
+| WHERE file.update_reasons IS NOT NULL
+| EVAL reasons = MV_CONCAT(TO_UPPER(TO_STRING(file.update_reasons)), ",")
+| WHERE reasons LIKE "*RENAME_NEW_NAME*" OR (reasons LIKE "*FILE_CREATE*" AND reasons LIKE "*CLOSE*")
+| EVAL fname = TO_LOWER(COALESCE(TO_STRING(file.name), ""))
+| EVAL ext = CASE(fname LIKE "*.*", REPLACE(fname, "^.*[.]", ""), "")
+| WHERE ext != "" AND LENGTH(ext) <= 40
+// common churn: temp/office lock files, browser caches, updates
+| WHERE NOT ext IN ("tmp", "temp", "log", "etl", "dat", "db", "db-wal", "db-shm", "jrs", "chk", "pf", "lnk", "ini", "xml", "json", "partial", "crdownload", "part", "download", "old", "bak", "new", "cab", "msi", "dll", "exe", "mui", "cat", "manifest", "evtx", "regtrans-ms", "blf", "sqlite", "ldb", "jfm", "edb")
+| EVAL bucket = DATE_TRUNC(5 minutes, @timestamp)
+| EVAL op = CASE(reasons LIKE "*RENAME_NEW_NAME*", "rename", "create")
+| STATS
+    events = COUNT(*),
+    renames = COUNT(*) WHERE op == "rename",
+    distinct_files = COUNT_DISTINCT(fname),
+    distinct_dirs = COUNT_DISTINCT(file.parent.inode),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    sample_names = VALUES(fname)
+  BY _index, ext, bucket
+| WHERE renames >= 50 OR distinct_dirs >= 20
+| EVAL sample_names = MV_SLICE(sample_names, 0, 9)
+// ransom-note-style and known locker extensions get a bonus; long random extensions are common
+| EVAL f_known = ext RLIKE "(locked|lock|crypt|crypted|encrypted|enc|crypto|lockbit|lockbit3|akira|blacksuit|royal|play|basta|hive|conti|ryuk|phobos|dharma|makop|stop|djvu|medusa|rhysida|bianlian|cl0p|clop|8base|cactus|qilin|agenda|inc|ransom|pay|wncry|wnry|locky|cerber|sodinokibi|revil|babuk|avoslocker|blackcat|alphv|black|darkside|nokoyawa|trigona|mallox|hunters|ransomhub)"
+| EVAL f_random = ext RLIKE "[a-z0-9]{5,}" AND ext RLIKE ".*[0-9].*" AND ext RLIKE ".*[a-z].*"
+| EVAL score = CASE(renames >= 1000, 4, renames >= 200, 3, renames >= 50, 2, 0) + CASE(distinct_dirs >= 50, 2, distinct_dirs >= 20, 1, 0) + CASE(f_known, 3, 0) + CASE(f_random, 1, 0)
+| KEEP _index, score, bucket, ext, f_known, f_random, events, renames, distinct_files, distinct_dirs, first_seen, last_seen, sample_names
+| SORT score DESC, first_seen ASC
+| LIMIT 2000

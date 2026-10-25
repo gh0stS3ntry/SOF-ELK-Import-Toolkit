@@ -1,0 +1,39 @@
+// EX-13 | Prefetch: rare executables, low run counts and loads from user-writable paths
+// Tactic: TA0002 Execution | ATT&CK: T1204.002, T1036
+// Indexes: prefetch-* | Needs: PECmd
+FROM prefetch-* METADATA _index
+| EVAL exe = TO_LOWER(COALESCE(TO_STRING(file.target.path), ""))
+| WHERE exe != ""
+| EVAL loaded = TO_LOWER(COALESCE(MV_CONCAT(TO_STRING(kape.prefetch.files_loaded), " | "), ""))
+| EVAL dirs = TO_LOWER(COALESCE(MV_CONCAT(TO_STRING(kape.prefetch.directories), " | "), ""))
+| EVAL runs = COALESCE(kape.prefetch.run_count, 0)
+| INLINE STATS host_count = COUNT_DISTINCT(_index) BY exe
+| EVAL f_userpath_load = loaded RLIKE ".*\\\\(users\\\\public|programdata|perflogs|windows\\\\temp|appdata\\\\local\\\\temp|downloads|[$]recycle[.]bin)\\\\.*"
+| EVAL f_tool = exe RLIKE ".*(mimikatz|procdump|psexe|paexec|rclone|nanodump|rubeus|sharphound|adfind|7z|winrar|rar|plink|ngrok|anydesk|teamviewer|screenconnect|netscan|advanced_ip|nmap|lazagne|bloodhound|cobalt|beacon|wmic|ntdsutil|vssadmin|wevtutil|bcdedit|certutil|bitsadmin|mshta|regsvr32|rundll32).*"
+| EVAL f_rare = host_count <= 1
+| EVAL f_few_runs = runs <= 3
+| EVAL score = CASE(f_userpath_load, 3, 0) + CASE(f_tool, 2, 0) + CASE(f_rare, 1, 0) + CASE(f_few_runs, 1, 0)
+| WHERE score >= 2
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_userpath_load, "loads files from a user-writable path; ", ""),
+    CASE(f_tool, "tool / LOLBin name; ", ""),
+    CASE(f_rare, "on one host only; ", ""),
+    CASE(f_few_runs, "run 3 times or fewer; ", "")
+  ), "; $", "")
+| EVAL first_run_approx = file.stdinfo.ctime
+| KEEP
+    _index,
+    kape.prefetch.last_run,
+    first_run_approx,
+    score,
+    reasons,
+    exe,
+    runs,
+    host_count,
+    prefetch.previous_runs,
+    kape.prefetch.hash,
+    kape.prefetch.volume.name,
+    dirs,
+    file.path
+| SORT score DESC, kape.prefetch.last_run DESC
+| LIMIT 10000

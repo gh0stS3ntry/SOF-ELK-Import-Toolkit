@@ -1,0 +1,92 @@
+// EX-09 | Suspicious WMI execution
+// Tactic: TA0002 Execution | ATT&CK: T1047, T1546.003, T1220
+// Indexes: evtxlogs-* | Needs: WMI-Activity Operational 5858/5860/5861 and PowerShell 4104 on at least one host; adds 4688 / Sysmon 1
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| WHERE (ch == "Microsoft-Windows-WMI-Activity/Operational" AND eid IN ("5858", "5859", "5860", "5861"))
+     OR (ch == "Microsoft-Windows-Sysmon/Operational" AND eid IN ("1", "19", "20", "21"))
+     OR (ch == "Security" AND eid == "4688")
+     OR (ch == "Microsoft-Windows-PowerShell/Operational" AND eid == "4104")
+// WMI-Activity events keep their detail in UserData; 4688/Sysmon 1 in kape.executable_info
+| EVAL txt = TO_LOWER(CONCAT(
+    COALESCE(TO_STRING(kape.executable_info), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.event_data.ScriptBlockText), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.user_data.Operation_ESStoConsumerBinding.CONSUMER), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.user_data.Operation_TemporaryEssStarted.Query), ""), " ",
+    COALESCE(TO_STRING(winlog.payload.user_data.Operation_ClientFailure.Operation), "")))
+| EVAL wmi_client = COALESCE(
+    TO_STRING(winlog.payload.user_data.Operation_ClientFailure.ClientMachine),
+    TO_STRING(winlog.payload.user_data.Operation_TemporaryEssStarted.ClientMachine))
+| EVAL wmi_user = COALESCE(
+    TO_STRING(winlog.payload.user_data.Operation_ClientFailure.User),
+    TO_STRING(winlog.payload.user_data.Operation_TemporaryEssStarted.User))
+| EVAL ev_persist = (ch == "Microsoft-Windows-WMI-Activity/Operational" AND eid == "5861")
+    OR (ch == "Microsoft-Windows-Sysmon/Operational" AND eid IN ("19", "20", "21"))
+| EVAL ev_sub = ch == "Microsoft-Windows-WMI-Activity/Operational" AND eid IN ("5859", "5860")
+| EVAL ev_fail = ch == "Microsoft-Windows-WMI-Activity/Operational" AND eid == "5858"
+| EVAL f_wmic = txt RLIKE ".*wmic([.]exe|[ ]).*"
+| EVAL f_ps_wmi = txt RLIKE ".*(get-wmiobject|gwmi|invoke-wmimethod|iwmi|invoke-cimmethod|get-ciminstance|new-ciminstance|set-wmiinstance|register-wmievent|new-cimsession|wmisearcher|wmiclass|managementclass|managementobjectsearcher|win32_process|win32_service|win32_scheduledjob).*"
+| EVAL f_wmiprvse = txt RLIKE ".*wmiprvse[.]exe.*"
+| EVAL f_wmiprvse_parent = txt RLIKE ".*(parent|creator).*wmiprvse[.]exe.*"
+| EVAL f_scrcons = txt RLIKE ".*scrcons[.]exe.*"
+| EVAL f_persist_class = txt RLIKE ".*(commandlineeventconsumer|activescripteventconsumer|nteventlogeventconsumer|smtpeventconsumer|__eventfilter|__eventconsumer|__filtertoconsumerbinding|root.subscription).*"
+| EVAL f_wmi_ctx = f_wmic OR f_ps_wmi OR f_wmiprvse OR f_scrcons OR f_persist_class OR ev_persist OR ev_sub OR ev_fail
+| WHERE f_wmi_ctx
+| EVAL f_child_interp = txt RLIKE ".*\\\\(cmd|powershell|pwsh|mshta|wscript|cscript|rundll32|regsvr32|certutil|bitsadmin|msiexec|mofcomp|schtasks|whoami|nltest)[.]exe.*"
+| EVAL f_consumer_payload = txt RLIKE ".*(scriptingtext|commandlinetemplate|scriptfilename|executablepath).*"
+| EVAL f_proc_create = txt RLIKE ".*(process[ ]+call[ ]+create|win32_process.*create|win32_processstartup|win32_scheduledjob).*"
+| EVAL f_remote = txt RLIKE ".*(/node:|[-]computername|[-]cn[ ]|[-]cimsession).*"
+| EVAL f_xsl = txt RLIKE ".*([/]|[-])format:.*(http|[.]xsl).*"
+| EVAL f_shadow = txt RLIKE ".*(shadowcopy[ ]+(call[ ]+)?delete|win32_shadowcopy.*delete).*"
+| EVAL f_recon = txt RLIKE ".*wmic.*(os[ ]+get|process[ ]+(list|get)|useraccount|qfe|startup|service[ ]+(list|get)|nicconfig|computersystem|logicaldisk|product[ ]+get|antivirusproduct|/namespace).*"
+| EVAL f_obf = txt RLIKE ".*(-enc|-encodedcommand|frombase64string|-nop|-noprofile|-w[ ]+hidden|-windowstyle[ ]+hidden|iex[ (]|invoke-expression|downloadstring|downloadfile|net[.]webclient|invoke-webrequest|bitsadmin).*"
+| EVAL f_userpath = txt RLIKE ".*\\\\(appdata|temp|programdata|users\\\\public|perflogs|downloads)\\\\.*"
+| EVAL score = CASE(ev_persist, 4, 0)
+    + CASE(ev_sub, 2, 0)
+    + CASE(ev_fail, 1, 0)
+    + CASE(f_scrcons, 4, 0)
+    + CASE(f_persist_class, 3, 0)
+    + CASE(f_consumer_payload, 2, 0)
+    + CASE(f_wmiprvse_parent, 2, 0)
+    + CASE(f_wmiprvse_parent AND f_child_interp, 1, 0)
+    + CASE(f_proc_create, 3, 0)
+    + CASE(f_remote, 2, 0)
+    + CASE(f_xsl, 4, 0)
+    + CASE(f_shadow, 3, 0)
+    + CASE(f_recon, 1, 0)
+    + CASE(f_obf, 2, 0)
+    + CASE(f_userpath, 1, 0)
+| WHERE score >= 2
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(ev_persist, "permanent WMI subscription/binding created; ", ""),
+    CASE(ev_sub, "WMI event filter/temporary subscription; ", ""),
+    CASE(ev_fail, "WMI operation failure (client, user, operation logged); ", ""),
+    CASE(f_scrcons, "scrcons.exe (ActiveScriptEventConsumer); ", ""),
+    CASE(f_persist_class, "WMI persistence classes; ", ""),
+    CASE(f_consumer_payload, "consumer payload (script/command); ", ""),
+    CASE(f_wmiprvse_parent, "spawned by WmiPrvSE.exe; ", ""),
+    CASE(f_wmiprvse_parent AND f_child_interp, "shell/LOLBin child of WmiPrvSE; ", ""),
+    CASE(f_proc_create, "WMI process creation; ", ""),
+    CASE(f_remote, "remote WMI target/credentials; ", ""),
+    CASE(f_xsl, "wmic XSL /format (squiblytwo); ", ""),
+    CASE(f_shadow, "shadow copy deletion via WMI; ", ""),
+    CASE(f_recon, "wmic recon; ", ""),
+    CASE(f_obf, "encoded/hidden/download cradle; ", ""),
+    CASE(f_userpath, "user-writable path; ", "")
+  ), "; $", "")
+| EVAL cmd_preview = SUBSTRING(TRIM(txt), 1, 1500)
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    ch,
+    eid,
+    score,
+    reasons,
+    kape.map_description,
+    wmi_client,
+    wmi_user,
+    cmd_preview
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

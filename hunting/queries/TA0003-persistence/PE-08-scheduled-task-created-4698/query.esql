@@ -1,0 +1,46 @@
+// PE-08 | Scheduled tasks created, updated or deleted (Security 4698/4699/4700/4701/4702)
+// Tactic: TA0003 Persistence | ATT&CK: T1053.005
+// Indexes: evtxlogs-* | Needs: Security 4698-4702 ("Audit Other Object Access Events")
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE TO_STRING(winlog.channel) == "Security" AND eid IN ("4698", "4699", "4700", "4701", "4702")
+| EVAL action = CASE(eid == "4698", "created", eid == "4699", "deleted", eid == "4700", "enabled", eid == "4701", "disabled", "updated")
+| EVAL task = TO_STRING(winlog.payload.event_data.TaskName)
+| EVAL xml = COALESCE(TO_STRING(winlog.payload.event_data.TaskContent), TO_STRING(winlog.payload.event_data.TaskContentNew), "")
+| EVAL x = TO_LOWER(xml)
+| EVAL command = REPLACE(xml, "(?s)^.*<Command>(.*?)</Command>.*$", "$1")
+| EVAL arguments = REPLACE(xml, "(?s)^.*<Arguments>(.*?)</Arguments>.*$", "$1")
+| EVAL run_as = REPLACE(xml, "(?s)^.*<UserId>(.*?)</UserId>.*$", "$1")
+| EVAL f_not_ms = NOT STARTS_WITH(TO_LOWER(COALESCE(task, "")), "\\microsoft\\")
+| EVAL f_lolbin = x RLIKE ".*[<]command[>][^<]*(powershell|pwsh|cmd[.]exe|mshta|wscript|cscript|rundll32|regsvr32|certutil|bitsadmin|msbuild).*"
+| EVAL f_userpath = x RLIKE ".*\\\\(users\\\\public|programdata|perflogs|appdata|temp|downloads)\\\\.*"
+| EVAL f_encoded = x RLIKE ".*(-enc|-encodedcommand|frombase64string|-w hidden|-windowstyle hidden|iex[ (]|downloadstring).*"
+| EVAL f_hidden = x LIKE "*<hidden>true</hidden>*"
+| EVAL f_system = x RLIKE ".*[<]userid[>](s-1-5-18|system|nt authority.system)[<]/userid[>].*"
+| EVAL score = CASE(f_lolbin, 3, 0) + CASE(f_userpath, 2, 0) + CASE(f_encoded, 2, 0) + CASE(f_hidden, 2, 0)
+    + CASE(f_not_ms, 1, 0) + CASE(f_system, 1, 0)
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_lolbin, "interpreter/LOLBin command; ", ""),
+    CASE(f_userpath, "user-writable path; ", ""),
+    CASE(f_encoded, "encoded/hidden/download cradle; ", ""),
+    CASE(f_hidden, "task marked hidden; ", ""),
+    CASE(f_not_ms, "outside \\Microsoft\; ", ""),
+    CASE(f_system, "runs as SYSTEM; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    eid,
+    action,
+    score,
+    reasons,
+    task,
+    command,
+    arguments,
+    run_as,
+    winlog.payload.event_data.SubjectUserName,
+    winlog.payload.event_data.SubjectDomainName,
+    winlog.payload.event_data.SubjectLogonId
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

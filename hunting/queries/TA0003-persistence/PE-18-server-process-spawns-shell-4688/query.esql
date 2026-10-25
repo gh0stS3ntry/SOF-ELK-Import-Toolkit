@@ -1,0 +1,46 @@
+// PE-18 | Web, database or mail server process starting shells and tools (Security 4688)
+// Tactic: TA0003 Persistence | ATT&CK: T1505.003, T1190, T1059.003
+// Indexes: evtxlogs-* | Needs: Security 4688
+FROM evtxlogs-* METADATA _index
+| WHERE winlog.channel == "Security"
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE eid == "4688"
+| EVAL image = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.NewProcessName), ""))
+| EVAL parent = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.ParentProcessName), ""))
+| EVAL image_name = REPLACE(image, "^.*\\\\", "")
+| EVAL parent_name = REPLACE(parent, "^.*\\\\", "")
+| WHERE parent_name IN ("w3wp.exe", "httpd.exe", "nginx.exe", "php-cgi.exe", "php.exe", "tomcat.exe", "tomcat7.exe", "tomcat8.exe", "tomcat9.exe", "tomcat10.exe", "java.exe", "javaw.exe", "node.exe", "sqlservr.exe", "sqlagent.exe", "oracle.exe", "postgres.exe", "mysqld.exe", "umworkerprocess.exe", "edgetransport.exe", "msexchangemailboxassistants.exe", "beasvc.exe", "coldfusion.exe", "jrun.exe", "ws_tomcatservice.exe", "vmtoolsd.exe")
+| EVAL cmd = COALESCE(TO_STRING(kape.executable_info), image)
+| EVAL c = TO_LOWER(cmd)
+| EVAL f_shell = image_name IN ("cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe", "mshta.exe", "bash.exe", "sh.exe")
+| EVAL f_recon = image_name IN ("whoami.exe", "net.exe", "net1.exe", "ipconfig.exe", "systeminfo.exe", "tasklist.exe", "netstat.exe", "nltest.exe", "quser.exe", "query.exe", "hostname.exe", "ping.exe", "nslookup.exe", "arp.exe", "dsquery.exe", "klist.exe")
+| EVAL f_lolbin = image_name IN ("certutil.exe", "bitsadmin.exe", "rundll32.exe", "regsvr32.exe", "msiexec.exe", "wmic.exe", "curl.exe", "schtasks.exe", "reg.exe", "sc.exe", "procdump.exe", "procdump64.exe", "7z.exe", "rar.exe", "makecab.exe", "csc.exe", "vbc.exe", "ntdsutil.exe")
+| EVAL f_userpath = image RLIKE ".*\\\\(users\\\\public|programdata|perflogs|windows\\\\temp|appdata|temp|inetpub|aspnet_client)\\\\.*"
+| EVAL f_encoded = c RLIKE ".*(-enc |-encodedcommand|frombase64string|-w hidden|iex[ (]|downloadstring|invoke-webrequest|net[.]webclient).*"
+// csc/vbc under w3wp is normal ASP.NET compilation; conhost and WerFault are noise
+| EVAL f_benign = (parent_name == "w3wp.exe" AND image_name IN ("csc.exe", "vbc.exe", "cvtres.exe")) OR image_name IN ("conhost.exe", "werfault.exe")
+| WHERE NOT f_benign
+| EVAL score = CASE(f_shell, 4, 0) + CASE(f_recon, 3, 0) + CASE(f_lolbin, 2, 0) + CASE(f_userpath, 2, 0) + CASE(f_encoded, 2, 0) + 1
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_shell, "shell/interpreter child; ", ""),
+    CASE(f_recon, "reconnaissance command; ", ""),
+    CASE(f_lolbin, "LOLBin/tool child; ", ""),
+    CASE(f_userpath, "child in user-writable or web path; ", ""),
+    CASE(f_encoded, "encoded/download cradle; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    score,
+    reasons,
+    parent_name,
+    image_name,
+    cmd,
+    winlog.payload.event_data.SubjectUserName,
+    winlog.payload.event_data.TokenElevationType,
+    winlog.payload.event_data.MandatoryLabel,
+    parent,
+    image
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

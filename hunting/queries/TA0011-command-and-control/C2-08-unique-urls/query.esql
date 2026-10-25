@@ -1,0 +1,21 @@
+// C2-08 | Unique URLs visited, with hosts, users and first/last visit
+// Tactic: TA0011 Command and Control | ATT&CK: T1071.001, T1102
+// Indexes: browsinghistory-* | Needs: BrowsingHistoryView output
+FROM browsinghistory-* METADATA _index
+| WHERE url.original IS NOT NULL AND url.original != ""
+| STATS
+    visit_records = COUNT(*),
+    visit_count_sum = SUM(browsinghistory.visit_count),
+    typed_count_sum = SUM(browsinghistory.typed_count),
+    host_count = COUNT_DISTINCT(_index),
+    users = VALUES(user.name),
+    browsers = VALUES(browsinghistory.web_browser),
+    titles = VALUES(browsinghistory.title),
+    domain = VALUES(url.domain),
+    first_visit = MIN(browsinghistory.visit_time),
+    last_visit = MAX(browsinghistory.visit_time),
+    source_indices = VALUES(_index)
+  BY url.original
+| KEEP source_indices, host_count, users, first_visit, last_visit, visit_records, visit_count_sum, typed_count_sum, browsers, domain, titles, url.original
+| SORT last_visit DESC
+| LIMIT 10000
