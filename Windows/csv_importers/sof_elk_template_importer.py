@@ -9,18 +9,19 @@ Columns the importer does not know go to <artifact>.unmapped.<snake_case> as key
 do not fit their field's type are kept as "Column=value" strings in <artifact>.malformed.
 """
 import argparse
-import base64
 import csv
 import datetime as dt
 import hashlib
 import json
 import re
-import ssl
 import sys
 from pathlib import Path
-from urllib import error, request
+from urllib import error
 
 import sof_elk_index_templates as templates
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
+from sof_elk_es_client import EsClient, add_client_arguments, apply_client_arguments, resolve_index  # noqa: E402
 
 try:
     csv.field_size_limit(sys.maxsize)
@@ -294,28 +295,11 @@ def build_doc(art, row, plan, kind, meta, ingest_time, issues):
 
 # --------------------------------------------------------------------------- Elasticsearch
 
-class ES:
-    def __init__(self, url, user=None, password=None, insecure=False):
-        self.url = url.rstrip("/")
-        self.headers = {}
-        if user:
-            token = base64.b64encode(f"{user}:{password or ''}".encode()).decode()
-            self.headers["Authorization"] = f"Basic {token}"
-        self.ctx = ssl._create_unverified_context() if insecure else None
+class ES(EsClient):
+    """Shared retrying client (Windows/common/sof_elk_es_client.py) plus the template steps."""
 
     def call(self, method, path, body=None, ctype="application/json"):
-        data = body.encode("utf-8") if body is not None else None
-        req = request.Request(self.url + path, data=data, method=method,
-                              headers={**self.headers, "Content-Type": ctype})
-        try:
-            with request.urlopen(req, timeout=300, context=self.ctx) as r:
-                status, raw = r.status, r.read()
-        except error.HTTPError as e:
-            status, raw = e.code, e.read()
-        try:
-            return status, (json.loads(raw) if raw else {})
-        except ValueError:
-            return status, {"raw": raw.decode("utf-8", "replace")}
+        return self.request(method, path, body, ctype)
 
     def index_mapping(self, index):
         """The index's mappings, or None if it doesn't exist."""
@@ -352,10 +336,11 @@ class ES:
                      f" {json.dumps(resp)[:500]}\nDelete the index and reload this host.")
         return "appending"
 
-    def bulk(self, lines, stats):
+    def send(self, lines, stats):
+        """Bulk-send lines (rejected items are retried by EsClient.bulk) and count results."""
         if not lines:
             return
-        status, resp = self.call("POST", "/_bulk", "\n".join(lines) + "\n", "application/x-ndjson")
+        status, resp = self.bulk(lines)
         if status >= 300:
             sys.exit(f"Bulk request failed ({status}): {json.dumps(resp)[:500]}")
         for item in resp.get("items", []):
@@ -387,7 +372,8 @@ def run(art, description):
     ap.add_argument("--hostname", required=True, help="Host the KAPE collection came from")
     ap.add_argument("--case", help="Optional case/incident ID added to every document")
     ap.add_argument("--index", default=None,
-                    help=f"Override target index (default: {art.name}-<hostname>)")
+                    help=f"Override target index; must end in -<hostname>"
+                         f" (default: {art.name}-<hostname>)")
     ap.add_argument("--local-tz", metavar="+HH:MM",
                     help=f"Accepted for wrapper compatibility; {art.tool} output is UTC, so it is"
                          " not used")
@@ -398,7 +384,11 @@ def run(art, description):
     ap.add_argument("--insecure", action="store_true", help="Skip TLS certificate checks")
     ap.add_argument("--dry-run", action="store_true",
                     help="Show sections, column -> field mapping and sample docs; send nothing")
+    add_client_arguments(ap)
     args = ap.parse_args()
+    apply_client_arguments(args)
+    if args.batch_size < 1:
+        sys.exit("--batch-size must be a positive integer")
 
     if args.local_tz and not TZ_ARG_RE.match(args.local_tz.strip()):
         sys.exit(f"--local-tz must look like +08:00 or -0500, got '{args.local_tz}'")
@@ -407,9 +397,7 @@ def run(art, description):
         host = sanitize_hostname(args.hostname)
     except ValueError as exc:
         sys.exit(str(exc))
-    index = (args.index or f"{art.name}-{host}").lower()
-    if args.index and index != args.index:
-        print(f"note: Elasticsearch index names must be lower-case, using '{index}'\n")
+    index = resolve_index(art.name, host, args.index)
 
     component, index_tpl, body = templates.load(art.name)
     problems = check_against_template(art, templates.field_types(body["mappings"]))
@@ -531,8 +519,8 @@ def run(art, description):
                 lines.append(json.dumps({"index": {"_index": index, "_id": doc_id}}))
                 lines.append(json.dumps(doc, ensure_ascii=False))
                 if len(lines) >= args.batch_size * 2:
-                    es.bulk(lines, stats)
-            es.bulk(lines, stats)
+                    es.send(lines, stats)
+            es.send(lines, stats)
         new = stats["ok"] - stats["updated"]
         print(f"  {art.dataset_for(s['section']):<36} {s['rows']:>8} rows: {new} new,"
               f" {stats['updated']} already in index, {stats['errors']} errors")
