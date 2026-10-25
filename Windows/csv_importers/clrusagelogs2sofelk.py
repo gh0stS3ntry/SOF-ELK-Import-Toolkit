@@ -10,7 +10,6 @@ must be lowercase: clrusagelogs-<hostname>.
 from __future__ import annotations
 
 import argparse
-import base64
 import csv
 import datetime as dt
 import hashlib
@@ -18,10 +17,12 @@ import ipaddress
 import json
 import os
 import re
-import ssl
 import sys
 from pathlib import Path
-from urllib import error, request
+from urllib import error
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
+from sof_elk_es_client import EsClient, add_client_arguments, apply_client_arguments, log  # noqa: E402
 
 INDEX_PREFIX = "clrusagelogs"
 REQUIRED = {"user", "assemblyname", "firstexecutiontimestamp", "lastexecutiontimestamp", "file"}
@@ -29,29 +30,10 @@ TRUE = {"true", "yes", "y", "1"}
 FALSE = {"false", "no", "n", "0"}
 
 
-def auth_header(user: str | None, password: str | None) -> dict[str, str]:
-    if not user:
-        return {}
-    token = base64.b64encode(f"{user}:{password or ''}".encode("utf-8")).decode("ascii")
-    return {"Authorization": f"Basic {token}"}
-
-
-def http_json(base: str, method: str, path: str, body=None, headers=None, insecure=False, timeout=120):
-    payload = None if body is None else json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    merged = {"Content-Type": "application/json", **(headers or {})}
-    req = request.Request(base.rstrip("/") + path, data=payload, method=method, headers=merged)
-    context = ssl._create_unverified_context() if insecure else None
+def http_json(base: str, method: str, path: str, body=None, user=None, password=None, insecure=False):
+    """(status, payload); timeouts, connection errors and HTTP 429/5xx are retried."""
     try:
-        with request.urlopen(req, timeout=timeout, context=context) as response:
-            raw = response.read()
-            return response.status, json.loads(raw) if raw else {}
-    except error.HTTPError as exc:
-        raw = exc.read()
-        try:
-            obj = json.loads(raw) if raw else {}
-        except Exception:
-            obj = {"raw": raw.decode("utf-8", "replace")}
-        return exc.code, obj
+        return EsClient(base, user, password, insecure).request(method, path, body)
     except error.URLError as exc:
         raise RuntimeError(str(exc.reason)) from exc
 
@@ -152,8 +134,7 @@ def stable_id(index: str, source_file: str, rownum: int, row: dict) -> str:
 
 
 def create_index(es: str, index: str, user=None, password=None, insecure=False):
-    headers = auth_header(user, password)
-    status, _ = http_json(es, "HEAD", f"/{index}", headers=headers, insecure=insecure)
+    status, _ = http_json(es, "HEAD", f"/{index}", user=user, password=password, insecure=insecure)
     if status == 200:
         return False
     if status != 404:
@@ -192,7 +173,7 @@ def create_index(es: str, index: str, user=None, password=None, insecure=False):
             ],
         },
     }
-    status, result = http_json(es, "PUT", f"/{index}", body=body, headers=headers, insecure=insecure)
+    status, result = http_json(es, "PUT", f"/{index}", body=body, user=user, password=password, insecure=insecure)
     if status >= 300:
         raise RuntimeError(f"Failed to create index {index}: HTTP {status}: {json.dumps(result)[:800]}")
     return True
@@ -205,20 +186,10 @@ def bulk_index(es: str, index: str, batch: list[dict], user=None, password=None,
     for item in batch:
         lines.append(json.dumps({"index": {"_index": index, "_id": item["_id"]}}, separators=(",", ":")))
         lines.append(json.dumps(item["_source"], ensure_ascii=False, separators=(",", ":")))
-    payload = ("\n".join(lines) + "\n").encode("utf-8")
-    req = request.Request(
-        es.rstrip("/") + "/_bulk",
-        data=payload,
-        method="POST",
-        headers={"Content-Type": "application/x-ndjson", **auth_header(user, password)},
-    )
-    context = ssl._create_unverified_context() if insecure else None
-    try:
-        with request.urlopen(req, timeout=180, context=context) as response:
-            result = json.loads(response.read())
-    except error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", "replace")
-        raise RuntimeError(f"Bulk request failed HTTP {exc.code}: {raw[:1000]}") from exc
+    # Failed requests and rejected (429/5xx) items are retried with backoff.
+    status, result = EsClient(es, user, password, insecure).bulk(lines)
+    if status >= 300:
+        raise RuntimeError(f"Bulk request failed HTTP {status}: {json.dumps(result, ensure_ascii=False)[:1000]}")
     successes = 0
     errors = []
     for item in result.get("items", []):
@@ -283,7 +254,10 @@ def parse_args():
     p.add_argument("--case", help="Optional case/incident ID")
     p.add_argument("--dry-run", action="store_true", help="Parse and preview without sending to Elasticsearch")
     p.add_argument("--sample-docs", type=int, default=3, help="Number of sample documents to print")
-    return p.parse_args()
+    add_client_arguments(p)
+    args = p.parse_args()
+    apply_client_arguments(args)
+    return args
 
 
 def main():
@@ -316,7 +290,7 @@ def run(args):
     if args.dry_run:
         print("Mode: dry run")
     else:
-        status, info = http_json(args.es, "GET", "/", headers=auth_header(args.user, args.password), insecure=args.insecure)
+        status, info = http_json(args.es, "GET", "/", user=args.user, password=args.password, insecure=args.insecure)
         if status >= 300:
             raise RuntimeError(f"Elasticsearch at {args.es} returned HTTP {status}: {json.dumps(info)[:300]}")
         print(f"Connected to Elasticsearch {info.get('version', {}).get('number', '?')}")
@@ -371,7 +345,8 @@ def run(args):
         print(f"Dry run complete: {total} record(s) parsed; nothing sent to Elasticsearch.")
         return 0
 
-    http_json(args.es, "PUT", f"/{idx}/_settings", body={"index": {"refresh_interval": "1s"}}, headers=auth_header(args.user, args.password), insecure=args.insecure)
+    http_json(args.es, "PUT", f"/{idx}/_settings", body={"index": {"refresh_interval": "1s"}}, user=args.user, password=args.password, insecure=args.insecure)
+    log.info("done: index=%s records=%d ok=%d errors=%d", idx, total, success, error_count)
     print(f"Done: {total} record(s), {success} successful bulk items, {error_count} item errors.")
     print(f"In Kibana, use the clrusagelogs-* Data View with @timestamp as its time field.")
     return 2 if error_count else 0
