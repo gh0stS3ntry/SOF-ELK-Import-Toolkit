@@ -1,0 +1,109 @@
+{
+  "index_patterns": [
+    "shellbag-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "shellbag",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "file": {
+          "properties": {
+            "accessed": {
+              "type": "date"
+            }
+          }
+        },
+        "shellbag": {
+          "properties": {
+            "absolute_path": {
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              },
+              "ignore_above": 8191,
+              "type": "keyword"
+            },
+            "bag_path": {
+              "ignore_above": 8191,
+              "type": "keyword"
+            },
+            "child_bags": {
+              "type": "long"
+            },
+            "extension_block_count": {
+              "type": "long"
+            },
+            "first_interacted": {
+              "type": "date"
+            },
+            "has_explored": {
+              "type": "boolean"
+            },
+            "hive": {
+              "type": "keyword"
+            },
+            "last_interacted": {
+              "type": "date"
+            },
+            "last_write": {
+              "type": "date"
+            },
+            "malformed": {
+              "ignore_above": 8191,
+              "type": "keyword"
+            },
+            "mft_entry": {
+              "type": "long"
+            },
+            "mft_sequence_number": {
+              "type": "long"
+            },
+            "miscellaneous": {
+              "type": "keyword"
+            },
+            "mru_position": {
+              "type": "long"
+            },
+            "node_slot": {
+              "type": "long"
+            },
+            "shell_type": {
+              "type": "keyword"
+            },
+            "slot": {
+              "type": "long"
+            },
+            "unmapped": {
+              "dynamic": "true",
+              "type": "object"
+            },
+            "value": {
+              "ignore_above": 8191,
+              "type": "keyword"
+            }
+          }
+        },
+        "user": {
+          "properties": {
+            "name": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Explicit schema for SBECmd CSV output loaded by sbecmd2sofelk.py: ECS file.created/mtime/accessed for the folder, user.name, shellbag.* for the rest",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}
