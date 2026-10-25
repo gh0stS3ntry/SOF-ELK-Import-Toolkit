@@ -277,9 +277,13 @@ def add_common_cli_args(command: list[str], args: argparse.Namespace, *, is_json
     if args.insecure:
         command.append("--insecure")
     command.extend(["--batch-size", str(args.batch_size)])
+    command.extend(["--max-retries", str(args.max_retries), "--retry-backoff", str(args.retry_backoff),
+                    "--timeout", str(args.timeout)])
+    if args.log_file:
+        command.extend(["--log-file", args.log_file])
+    if args.case:
+        command.extend(["--case", args.case])
     if not is_json:
-        if args.case:
-            command.extend(["--case", args.case])
         if args.local_tz and label not in NO_LOCAL_TZ:
             command.extend(["--local-tz", args.local_tz])
     if args.dry_run:
@@ -332,12 +336,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--insecure", action="store_true", help="Skip TLS certificate verification")
     parser.add_argument("--batch-size", type=int, default=2000, help="Documents per bulk request")
     parser.add_argument("--workers", type=int, default=2, help="Concurrent bulk workers for JSON importers")
-    parser.add_argument("--case", help="Optional case/incident ID for importers that support it")
+    parser.add_argument("--case", help="Optional case/incident ID added to every document by every importer")
     parser.add_argument("--local-tz", help="UTC offset for *LOCAL timestamp fields in KAPE CSVs, e.g. +08:00")
     parser.add_argument("--bhv-tz", help="Timezone offset for NirSoft BrowsingHistoryView, e.g. +08:00 or UTC")
     parser.add_argument("--date-order", choices=("dmy", "mdy", "ymd"), help="Force BrowsingHistoryView regional date order")
     parser.add_argument("--dry-run", action="store_true", help="Pass dry-run mode to every importer")
     parser.add_argument("--sample-docs", type=int, default=2, help="Sample documents per JSON importer in dry-run mode")
+    parser.add_argument("--max-retries", type=int, default=5,
+                        help="Retries for failed Elasticsearch requests and rejected bulk items (timeouts, 429/5xx)")
+    parser.add_argument("--retry-backoff", type=float, default=2.0, help="Base delay in seconds for exponential retry backoff")
+    parser.add_argument("--timeout", type=float, default=300, help="Seconds to wait for each Elasticsearch HTTP response")
+    parser.add_argument("--log-file", help="Append every importer's retries, bulk results and item errors to this file")
     return parser.parse_args()
 
 
@@ -350,6 +359,12 @@ def main() -> int:
     if args.batch_size < 1 or args.workers < 1:
         print("ERROR: --batch-size and --workers must be positive integers.")
         return 2
+    if args.max_retries < 0 or args.retry_backoff <= 0 or args.timeout <= 0:
+        print("ERROR: --max-retries must be >= 0, and --retry-backoff and --timeout must be positive.")
+        return 2
+    if args.log_file:
+        # Importers run from other directories, so hand them an absolute path.
+        args.log_file = str(Path(args.log_file).expanduser().resolve())
 
     wrapper_dir = Path(__file__).resolve().parent
     print(f"SOF-ELK Import Wrapper\nInput directory: {root}\nHostname: {args.hostname}\nElasticsearch: {args.es}", flush=True)

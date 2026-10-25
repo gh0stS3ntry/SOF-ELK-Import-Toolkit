@@ -11,6 +11,8 @@ sof_elk_all_importers/
 ├── SOF-ELK_ConfigureRemoteIngest.sh
 ├── README.md
 └── Windows
+    ├── common/
+    │   └── sof_elk_es_client.py
     ├── csv_importers/
     │   ├── nirsoft_bhv2sofelk.py
     │   ├── jlecmd2sofelk.py
@@ -41,7 +43,7 @@ sof_elk_all_importers/
         └── sof_elk_json_bulk_common.py
 ```
 
-Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. In particular, keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers in `csv_importers/` (the RBCmd, RecentFileCacheParser, SQLECmd, SrumECmd, SumECmd, and WxTCmd importers require it). The AmcacheParser, ShimCache and RECmd importers need `sof_elk_template_importer.py` and `sof_elk_index_templates.py` beside them, and the `index_templates/` folder next to `csv_importers/`.
+Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. Every importer loads the shared Elasticsearch client from `Windows/common/sof_elk_es_client.py`, so keep `common/` beside `csv_importers/` and `json_importers/`. Also keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers in `csv_importers/` (the RBCmd, RecentFileCacheParser, SQLECmd, SrumECmd, SumECmd, and WxTCmd importers require it).
 
 ## Quick start: use the wrapper
 
@@ -74,18 +76,22 @@ Wrapper options:
 | `--insecure` | Skip TLS certificate verification. Use only for a trusted endpoint. |
 | `--batch-size N` | Documents per bulk request; default `2000`. |
 | `--workers N` | Concurrent bulk workers; default `2`. Passed to the four JSON importers only. |
-| `--case ID` | Optional incident/case ID passed to every CSV importer (the JSON importers do not support it). |
+| `--case ID` | Optional incident/case ID passed to every importer and stored in each document's `case` field. |
 | `--local-tz +HH:MM` | Offset used to convert KAPE CSV columns marked `LOCAL`; without it, such columns are generally retained as text. Passed to every CSV importer except BrowsingHistoryView (which uses `--bhv-tz`) and the CLR usage-log importer (which has no LOCAL columns). |
 | `--bhv-tz +HH:MM\|UTC` | Offset for the computer that ran BrowsingHistoryView, or `UTC` if its GMT option was enabled. |
 | `--date-order dmy\|mdy\|ymd` | Optional BrowsingHistoryView regional date order where it cannot be inferred. |
 | `--dry-run` | Validate and preview records without sending them to Elasticsearch. |
 | `--sample-docs N` | Number of transformed sample documents shown in dry-run mode. Passed to the four JSON importers only. |
+| `--max-retries N` | Retries for a failed Elasticsearch request or a rejected bulk item; default `5`, `0` disables retrying. Passed to every importer. |
+| `--retry-backoff SECONDS` | Base delay for exponential backoff between retries; default `2`. Passed to every importer. |
+| `--timeout SECONDS` | Time to wait for each Elasticsearch HTTP response; default `300`. Passed to every importer. |
+| `--log-file PATH` | Append every importer's command line, retries, per-batch bulk results, and item-level errors to this file. Passed to every importer. |
 
 The wrapper stages selected inputs using links when supported (falling back as needed) so it can invoke importers with the correct basenames and source-detection behavior. The staging directory is temporary and is removed after the run. The wrapper itself should remain at the package root so that it can locate both importer subdirectories.
 
 ## Index names and inputs
 
-Hostnames are normalized the same way by every importer: lowercased (Elasticsearch index names must be lowercase), with any run of characters other than `a-z`, `0-9`, `.`, `_`, and `-` replaced by `-`, and leading/trailing `.`, `_`, `-` removed. For example, `WS 01` becomes `ws-01`. The normalized name is used in the index name and, for the CSV importers, in `host.name`. When running the JLECmd, SBECmd, AmcacheParser, ShimCache, RECmd, or BrowsingHistoryView importer directly, the default index can be overridden with `--index`; the other importers always use the default. The four Eric Zimmerman importers in `json_importers/` also accept CSV in current versions, in addition to their original JSON/JSON.GZ formats.
+Hostnames are normalized the same way by every importer: lowercased (Elasticsearch index names must be lowercase), with any run of characters other than `a-z`, `0-9`, `.`, `_`, and `-` replaced by `-`, and leading/trailing `.`, `_`, `-` removed. For example, `WS 01` becomes `ws-01`. The normalized name is used in the index name and in every document's `host.name`. Every importer writes one index per evidence host, named `<prefix>-<hostname>`. When running the JLECmd, SBECmd, AmcacheParser, ShimCache, RECmd, or BrowsingHistoryView importer directly, `--index` can change the prefix, but the name must still end in `-<hostname>` (for example `amcache-test-ws01` for host `WS01`); any other value is rejected. The other importers always use the default. The four Eric Zimmerman importers in `json_importers/` also accept CSV in current versions, in addition to their original JSON/JSON.GZ formats.
 
 | Script | Tool / evidence type | Input format | Default index |
 |---|---|---|---|
@@ -112,7 +118,7 @@ The per-host index names are intended to be discovered by the corresponding Kiba
 
 CSV importers do a type-inference pass before ingestion, convert recognized values, establish or extend mappings, and send documents through Elasticsearch's `_bulk` API. They retain the source-specific fields and metadata implemented by the importer, but the legacy KAPE CSV importers deliberately do not write the `forensic_tag` field in indexed documents. Source-specific classification may still be used internally by the importer.
 
-All thirteen CSV importers accept an input file or directory, search directories recursively, and support `--hostname`, `--case`, `--es`, `--batch-size`, `--user`, `--password`, `--insecure`, and `--dry-run`. The remaining options differ by importer:
+All thirteen CSV importers accept an input file or directory, search directories recursively, and support `--hostname`, `--case`, `--es`, `--batch-size`, `--user`, `--password`, `--insecure`, `--dry-run`, and the retry/logging options described under [Retries and logging](#retries-and-logging). The remaining options differ by importer:
 
 | Importer(s) | Inputs | Additional options |
 |---|---|---|
@@ -310,7 +316,9 @@ The four importers under `Windows/json_importers/` implement the main field tran
 
 Accepted JSON data files are `.json` and `.json.gz`. JSON input may be a top-level JSON array, a single JSON object, or a sequence of whitespace-separated/NDJSON objects. For CSV input, the scripts read rows with `iter_csv_records` in `sof_elk_json_bulk_common.py` and apply the same transformation, index, and host conventions as their JSON path. When a directory is supplied, a tool-specific filename pattern is used for JSON files; CSV discovery is format-aware and header-aware. PECmd timeline JSON is excluded.
 
-The four importers support `--hostname`, `--es`, `--user`, `--password`, `--insecure`, `--batch-size`, `--workers`, `--dry-run`, and `--sample-docs`. They do not support `--case`, `--local-tz`, or `--index`, for either JSON or CSV input.
+The four importers support `--hostname`, `--case`, `--es`, `--user`, `--password`, `--insecure`, `--batch-size`, `--workers`, `--dry-run`, `--sample-docs`, and the retry/logging options described under [Retries and logging](#retries-and-logging). They do not support `--local-tz` or `--index`, for either JSON or CSV input.
+
+Every document gets `host.name` (the normalized hostname, mapped as `keyword`) and, when `--case` is given, `case` (`keyword`), the same fields the CSV importers write. ES|QL queries can therefore filter `filesystem-*`, `evtxlogs-*`, `lnkfiles-*`, and `prefetch-*` by `host.name` and `case` as well as by `_index`. When an importer appends to an index created by an earlier version, it first adds the `host.name`/`case` keyword mappings; documents loaded before that do not have these fields until they are re-imported (deterministic IDs make the re-import overwrite them).
 
 ### 14. `mftecmd2sofelk.py`
 
@@ -368,6 +376,22 @@ python3 Windows/json_importers/pecmd2sofelk.py /cases/IR-2026-042 --hostname WS0
 - Importers use deterministic document IDs based on host and stable file/record properties so rerunning the same exports does not create duplicate logical documents. Identical rows within one file are kept as separate documents (by row position, or by a counter for BrowsingHistoryView).
 - **Upgrade note:** the document-ID scheme changed for the RECmd, JLECmd, SBECmd, and CLR usage-log importers. If a host was loaded with an earlier version of these importers, delete that host's documents (or its index) before re-importing, otherwise the old and new IDs produce duplicates.
 - `--dry-run` previews parsing/transformation and prints sample documents, but it does not prove that a live Elasticsearch cluster will accept every mapping. Always test representative output from your installed tool versions before loading production evidence.
+
+## Retries and logging
+
+All importers send Elasticsearch traffic through the shared client in `Windows/common/sof_elk_es_client.py` (standard library and `urllib` only):
+
+- **Whole-request retry.** Connection errors, timeouts, and HTTP `429`, `500`, `502`, `503`, and `504` responses are retried with exponential backoff and full jitter (delay up to `--retry-backoff` × 2^attempt, capped at 60 seconds). A `Retry-After` header is honored. If Elasticsearch is still unreachable after `--max-retries`, the importer stops with an error.
+- **Per-item retry.** When a `_bulk` request succeeds but individual documents are rejected with `429`, `502`, `503`, or `504` (typically `es_rejected_execution_exception` when the write queue is full), only those documents are re-sent, with the same backoff. Documents rejected for other reasons, such as mapping errors, are not retried and are counted as item errors.
+- **Safe to replay.** Every importer sends `index` actions with deterministic document IDs, so a retried batch overwrites itself instead of creating duplicates.
+- **Logging.** Retries and failures are printed to stderr. With `--log-file PATH`, each importer appends its command line (password masked), start and finish summary, every retry, a per-batch bulk summary, and every item-level error (`_id`, status, and reason) to that file. The wrapper passes the same file to all importers, so one run produces one log.
+
+| Option | Default | Purpose |
+|---|---|---|
+| `--max-retries N` | `5` | Retries per request and per rejected bulk item; `0` disables retrying. |
+| `--retry-backoff SECONDS` | `2` | Base delay for exponential backoff. |
+| `--timeout SECONDS` | `300` | Time to wait for each Elasticsearch HTTP response. |
+| `--log-file PATH` | none | Append detailed run information to this file. |
 
 ## Timestamp and data-quality cautions
 

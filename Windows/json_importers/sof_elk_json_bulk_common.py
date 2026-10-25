@@ -9,11 +9,12 @@ import gzip
 import hashlib
 import json
 import re
-import ssl
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib import error, request
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
+from sof_elk_es_client import EsClient, add_client_arguments, apply_client_arguments, log  # noqa: E402
 
 CHUNK_SIZE = 1024 * 1024
 CSV_SUFFIXES = {".csv"}
@@ -303,35 +304,20 @@ def nested_mapping(dotted_properties):
     return root
 
 
+# Fields every JSON importer adds so documents can be attributed without relying on _index.
+HOST_CASE_MAPPINGS = {"host.name": {"type": "keyword"}, "case": {"type": "keyword", "ignore_above": 1024}}
+
+
 class Elasticsearch:
-    def __init__(self, url, user=None, password=None, insecure=False, timeout=300):
-        self.url = url.rstrip("/")
-        self.timeout = timeout
-        self.headers = {"Content-Type": "application/json"}
-        if user:
-            import base64
-            token = base64.b64encode(f"{user}:{password or ''}".encode()).decode()
-            self.headers["Authorization"] = f"Basic {token}"
-        self.ssl_context = ssl._create_unverified_context() if insecure else None
+    def __init__(self, url, user=None, password=None, insecure=False):
+        self.client = EsClient(url, user, password, insecure)
 
     def call(self, method, path, body=None, content_type=None):
-        data = body.encode("utf-8") if isinstance(body, str) else body
-        headers = dict(self.headers)
-        if content_type:
-            headers["Content-Type"] = content_type
-        req = request.Request(self.url + path, data=data, method=method, headers=headers)
+        """(status, payload); timeouts, connection errors and HTTP 429/5xx are retried."""
         try:
-            with request.urlopen(req, timeout=self.timeout, context=self.ssl_context) as response:
-                status, content = response.status, response.read()
-        except error.HTTPError as exc:
-            status, content = exc.code, exc.read()
-        except error.URLError as exc:
-            raise RuntimeError(f"Elasticsearch request failed: {exc.reason}") from exc
-        try:
-            payload = json.loads(content) if content else {}
-        except ValueError:
-            payload = {"raw": content.decode("utf-8", "replace")}
-        return status, payload
+            return self.client.request(method, path, body, content_type or "application/json")
+        except OSError as exc:
+            raise RuntimeError(f"Elasticsearch request failed: {getattr(exc, 'reason', exc)}") from exc
 
     def root_info(self):
         status, payload = self.call("GET", "/")
@@ -343,6 +329,11 @@ class Elasticsearch:
         status, _ = self.call("HEAD", f"/{index}")
         if status == 200:
             print(f"Using existing index: {index}")
+            # Indexes created before host.name/case were written get explicit keyword mappings.
+            status, payload = self.call("PUT", f"/{index}/_mapping", json.dumps(
+                {"properties": nested_mapping(HOST_CASE_MAPPINGS)}, separators=(",", ":")))
+            if status >= 300:
+                print(f"WARN: could not add host.name/case keyword mappings to {index}: {payload}", file=sys.stderr)
             return False
         body = {
             "settings": {
@@ -368,8 +359,11 @@ class Elasticsearch:
         return True
 
     def bulk(self, index, lines):
-        body = "\n".join(lines) + "\n"
-        status, payload = self.call("POST", "/_bulk", body, "application/x-ndjson")
+        """Send one batch; rejected (429/5xx) items are retried by EsClient.bulk."""
+        try:
+            status, payload = self.client.bulk(lines)
+        except OSError as exc:
+            raise RuntimeError(f"Bulk request failed: {getattr(exc, 'reason', exc)}") from exc
         if status >= 300:
             raise RuntimeError(f"Bulk request failed (HTTP {status}): {payload}")
         ok = errors_count = 0
@@ -443,7 +437,8 @@ class BulkWriter:
 def add_common_arguments(parser, description):
     parser.description = description
     parser.add_argument("paths", nargs="+", help="JSON or CSV output file(s), or folders to search recursively")
-    parser.add_argument("--hostname", required=True, help="Evidence host; used in the target index name")
+    parser.add_argument("--hostname", required=True, help="Evidence host; used in the target index name and host.name")
+    parser.add_argument("--case", help="Optional case/incident ID added to every document as case")
     parser.add_argument("--es", default="http://localhost:9200", help="Elasticsearch base URL")
     parser.add_argument("--user", help="Elasticsearch username when authentication is enabled")
     parser.add_argument("--password", help="Elasticsearch password")
@@ -452,16 +447,31 @@ def add_common_arguments(parser, description):
     parser.add_argument("--workers", type=int, default=2, help="Concurrent bulk requests")
     parser.add_argument("--dry-run", action="store_true", help="Parse/transform records without connecting to Elasticsearch")
     parser.add_argument("--sample-docs", type=int, default=2, help="Print this many transformed sample documents in dry-run mode")
+    add_client_arguments(parser)
+
+
+def add_host_and_case(doc, hostname, case):
+    """host.name and case match the CSV importers, so ES|QL can filter every index the same way."""
+    host = doc.get("host")
+    if not isinstance(host, dict):
+        host = doc["host"] = {}
+    host["name"] = hostname
+    if case:
+        doc["case"] = case
+    return doc
 
 
 def run_import(args, label_type, index_prefix, patterns, exclude_patterns, mappings, transform,
                csv_int_fields=(), csv_bool_fields=()):
+    apply_client_arguments(args)
     hostname = sanitize_hostname(args.hostname)
     index = f"{index_prefix}-{hostname}"
+    case = (args.case or "").strip() or None
     files = discover_files(args.paths, patterns, exclude_patterns)
     if not files:
         raise SystemExit("No matching JSON/CSV output files found (or all input paths were missing).")
     print(f"Tool label: {label_type}\nTarget index: {index}\nFiles: {len(files)}")
+    log.info("start: label=%s index=%s files=%d case=%s dry_run=%s", label_type, index, len(files), case, args.dry_run)
     if args.batch_size < 1 or args.workers < 1:
         raise SystemExit("--batch-size and --workers must be positive integers.")
     ingest_time = utc_now()
@@ -475,7 +485,7 @@ def run_import(args, label_type, index_prefix, patterns, exclude_patterns, mappi
                 for record in records:
                     if path.suffix.lower() != ".csv":
                         record = normalize_boolean_strings(record)
-                    doc = transform(record, path, hostname, label_type, ingest_time)
+                    doc = add_host_and_case(transform(record, path, hostname, label_type, ingest_time), hostname, case)
                     if total < dry_samples:
                         print(json.dumps(doc, ensure_ascii=False, indent=2)[:12000])
                     total += 1
@@ -493,7 +503,7 @@ def run_import(args, label_type, index_prefix, patterns, exclude_patterns, mappi
         raise SystemExit(f"Cannot connect to Elasticsearch at {args.es}: {exc}") from exc
     version = info.get("version", {}).get("number", "unknown")
     print(f"Connected to Elasticsearch {version}")
-    created = es.ensure_index(index, nested_mapping(mappings))
+    created = es.ensure_index(index, nested_mapping({**mappings, **HOST_CASE_MAPPINGS}))
     writer = BulkWriter(es, index, args.batch_size, args.workers)
     read_count = 0
     try:
@@ -502,7 +512,7 @@ def run_import(args, label_type, index_prefix, patterns, exclude_patterns, mappi
             for ordinal, record in enumerate(iter_input_records(path, csv_int_fields, csv_bool_fields)):
                 if path.suffix.lower() != ".csv":
                     record = normalize_boolean_strings(record)
-                doc = transform(record, path, hostname, label_type, ingest_time)
+                doc = add_host_and_case(transform(record, path, hostname, label_type, ingest_time), hostname, case)
                 writer.add(document_id(hostname, path, ordinal, record), doc)
                 read_count += 1
                 per_file += 1
@@ -518,6 +528,7 @@ def run_import(args, label_type, index_prefix, patterns, exclude_patterns, mappi
     finally:
         es.finish_index(index, created)
     print(f"Done: {read_count} record(s), {stats['ok']} successful bulk items, {stats['errors']} item errors, {stats['batches']} bulk request(s).")
+    log.info("done: index=%s records=%d ok=%d errors=%d batches=%d", index, read_count, stats["ok"], stats["errors"], stats["batches"])
     for reason in stats["examples"]:
         print(f"  Elasticsearch item error: {reason}", file=sys.stderr)
     if stats["errors"]:
