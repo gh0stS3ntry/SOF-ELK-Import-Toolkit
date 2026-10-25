@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
 """Load NirSoft BrowsingHistoryView CSV/TXT/TSV exports into browsinghistory-<hostname>.
 
-Field extraction, type inference, date-order checks, URL/user enrichment, stable IDs, and
-Elasticsearch bulk loading follow the original bhv2sofelk.py importer. `forensic_tag` is omitted.
+Every column is mapped to a fixed field with a fixed type, defined by the explicit index template
+in Windows/index_templates/index-browsinghistory.json (plus the shared component-toolkit-common.json):
+the URL is ECS url.original (url.domain / url.scheme derived), the profile owner is user.name, and
+every other column is browsinghistory.<snake_case>.
+
+BrowsingHistoryView writes visit times in the regional format and clock of the machine that RAN it,
+so --tz is required and day/month order is detected (or forced with --date-order). The converted
+UTC time is browsinghistory.visit_time and @timestamp; the text as exported is kept in
+browsinghistory.visit_time_local.
+
+Template install, index creation and bulk sending come from sof_elk_template_importer.py.
+Full field reference: docs/schemas/browsinghistory.md.
 """
 import argparse
 import codecs
@@ -16,15 +26,14 @@ from pathlib import Path
 from urllib import error
 from urllib.parse import urlsplit
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
-from sof_elk_es_client import EsClient, add_client_arguments, apply_client_arguments, log, resolve_index  # noqa: E402
+import sof_elk_index_templates as templates
+import sof_elk_template_importer as engine
+from sof_elk_template_importer import add_client_arguments, apply_client_arguments, resolve_index
 
 try:
     csv.field_size_limit(sys.maxsize)
 except OverflowError:
     csv.field_size_limit(2**31 - 1)
-
-FORENSIC_TAG = "BrowsingHistory"
 
 # BrowsingHistoryView's default column order, used only when the export has no header line
 DEFAULT_COLUMNS = [
@@ -40,19 +49,34 @@ ISO_RE = re.compile(
 # Regional: 10/08/2026 9:12:44 AM, 08.10.2026 21:12, 2026/10/08 21:12:44
 LOCALE_RE = re.compile(
     r"^(\d{1,4})[/.-](\d{1,2})[/.-](\d{1,4})[ T,]+(\d{1,2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?\s*([AaPp]\.?[Mm]\.?)?$")
-INT_RE = re.compile(r"^-?\d{1,19}$")
-BOOLS = {"true": True, "false": False, "yes": True, "no": False}
 TZ_RE = re.compile(r"^([+-])(\d{1,2}):?(\d{2})?$")
 
-TIME_PRIORITY = ["visittime", "lastvisittime", "lastvisit", "visitdate", "time", "date", "timestamp"]
-TIME_NAME_RE = re.compile(r"time|date|visit", re.I)
-RESERVED = {"@timestamp", "forensic_tag", "host", "user", "url", "ingest", "case"}
+ARTIFACT_NAME = "browsinghistory"
 
-ES_FAMILY = {
-    "text": "string", "keyword": "string", "match_only_text": "string", "wildcard": "string",
-    "long": "long", "integer": "long", "short": "long", "byte": "long",
-    "date": "date", "date_nanos": "date", "boolean": "boolean",
+# Column (lower-case, spaces removed) -> list of (field, conversion). "visit" is the regional
+# visit-time conversion below; the others are sof_elk_template_importer.CONV_TYPE conversions.
+COLUMNS = {
+    "url": [("url.original", "keyword")],
+    "title": [("browsinghistory.title", "keyword")],
+    "visittime": [("browsinghistory.visit_time", "visit"), ("browsinghistory.visit_time_local", "keyword")],
+    "visitcount": [("browsinghistory.visit_count", "long")],
+    "visitedfrom": [("browsinghistory.visited_from", "keyword")],
+    "visittype": [("browsinghistory.visit_type", "keyword")],
+    "visitduration": [("browsinghistory.visit_duration", "keyword")],
+    "webbrowser": [("browsinghistory.web_browser", "keyword")],
+    "userprofile": [("browsinghistory.user_profile", "keyword")],
+    "browserprofile": [("browsinghistory.browser_profile", "keyword")],
+    "urllength": [("browsinghistory.url_length", "long")],
+    "typedcount": [("browsinghistory.typed_count", "long")],
+    "historyfile": [("browsinghistory.history_file", "keyword")],
+    "recordid": [("browsinghistory.record_id", "long")],
 }
+CONV_TYPE = {**engine.CONV_TYPE, "visit": "date"}
+TIME_FIELD, TIME_COLUMN = "browsinghistory.visit_time", "visittime"
+
+
+def col_key(name):
+    return re.sub(r"[\s_]+", "", name.strip().lower())
 
 
 # --------------------------------------------------------------------------- reading
@@ -73,28 +97,6 @@ def detect_encoding(path):
             return "utf-8"
         except UnicodeDecodeError:
             return "cp1252"  # NirSoft's ANSI export on Western Windows
-
-
-def sanitize_hostname(hostname):
-    """Lower-case host name safe for an Elasticsearch index name."""
-    value = re.sub(r"[^a-z0-9._-]+", "-", hostname.strip().lower()).strip("._-")
-    if not value:
-        raise ValueError("--hostname must contain at least one letter or digit")
-    return value
-
-
-def clean_fields(header):
-    used, out = set(RESERVED), []
-    for name in header:
-        f = re.sub(r"[^\w]+", "_", name.strip()).strip("_") or "field"
-        if f[0].isdigit():
-            f = "f_" + f
-        base, i = f, 2
-        while f in used:
-            f, i = f"{base}_{i}", i + 1
-        used.add(f)
-        out.append(f)
-    return out
 
 
 class Table:
@@ -122,7 +124,6 @@ class Table:
                 self.raw_header = [f"col_{i + 1}" for i in range(n)]
                 self.note = (f"no header line and {n} columns (default layout has"
                              f" {len(DEFAULT_COLUMNS)}) - columns named col_1..col_{n}")
-        self.fields = clean_fields(self.raw_header)
 
     def rows(self):
         with open(self.path, encoding=self.encoding, errors="replace", newline="") as fh:
@@ -198,137 +199,53 @@ def parse_datetime(value, order, tz):
     return to_utc(y, mo, d, h, mi, ss, frac, offset)
 
 
-# --------------------------------------------------------------------------- inference
+
+# --------------------------------------------------------------------------- visit-time order
 
 def new_stat():
-    return {"filled": 0, "boolean": True, "long": True, "date": True, "bad": None,
-            "ymd": 0, "day_first": 0, "month_first": 0, "other": 0, "iso": 0}
+    return {"filled": 0, "iso": 0, "ymd": 0, "day_first": 0, "month_first": 0, "other": 0,
+            "bad": 0, "bad_example": None}
 
 
-def scan(table, stats):
+def scan(table, stat):
+    """Count rows and gather day/month evidence from the Visit Time column."""
+    keys = [col_key(c) for c in table.raw_header]
+    i = keys.index(TIME_COLUMN) if TIME_COLUMN in keys else None
     count = 0
     for row in table.rows():
         count += 1
-        for i, f in enumerate(table.fields):
-            v = row[i].strip() if i < len(row) else ""
-            if not v:
-                continue
-            s = stats.setdefault(f, new_stat())
-            s["filled"] += 1
-            if s["boolean"] and v.lower() not in BOOLS:
-                s["boolean"] = False
-            if s["long"] and not INT_RE.match(v):
-                s["long"] = False
-            if ISO_RE.match(v):
-                s["iso"] += 1
-                continue
-            m = LOCALE_RE.match(v)
-            if not m:
-                s["date"] = False
-                if s["bad"] is None:
-                    s["bad"] = v[:60]
-                continue
-            a, b = m.group(1), m.group(2)
-            if len(a) == 4:
-                s["ymd"] += 1
-            elif int(a) > 12:
-                s["day_first"] += 1
-            elif int(b) > 12:
-                s["month_first"] += 1
-            else:
-                s["other"] += 1
+        v = row[i].strip() if i is not None and i < len(row) else ""
+        if not v:
+            continue
+        stat["filled"] += 1
+        if ISO_RE.match(v):
+            stat["iso"] += 1
+            continue
+        m = LOCALE_RE.match(v)
+        if not m:
+            stat["bad"] += 1
+            stat["bad_example"] = stat["bad_example"] or v[:60]
+            continue
+        a, b = m.group(1), m.group(2)
+        if len(a) == 4:
+            stat["ymd"] += 1
+        elif int(a) > 12:
+            stat["day_first"] += 1
+        elif int(b) > 12:
+            stat["month_first"] += 1
+        else:
+            stat["other"] += 1
     return count
 
 
-def decide_types(stats, forced_order):
-    """field -> (type, order). Dates keep their day/month order for parsing."""
-    types = {}
-    for f, s in stats.items():
-        if not s["filled"]:
-            types[f] = ("string", None)
-        elif s["boolean"]:
-            types[f] = ("boolean", None)
-        elif s["long"]:
-            types[f] = ("long", None)
-        elif s["date"]:
-            if s["iso"] == s["filled"]:
-                types[f] = ("date", "iso")
-            else:
-                order = forced_order or resolve_order(s)
-                types[f] = ("date", order)  # order may be None / 'conflict' -> handled by check
-        else:
-            types[f] = ("string", None)
-    return types
+def decide_order(stat, forced):
+    if stat["filled"] and stat["iso"] == stat["filled"] - stat["bad"]:
+        return "iso"
+    return forced or resolve_order(stat)
 
 
-def pick_time_field(types):
-    dates = [f for f, (t, o) in types.items() if t == "date"]
-    lower = {f.lower().replace("_", ""): f for f in dates}
-    for name in TIME_PRIORITY:
-        if name in lower:
-            return lower[name]
-    return dates[0] if dates else None
-
-
-# --------------------------------------------------------------------------- documents
-
-def user_from_profile(value):
-    v = value.strip().rstrip("\\/")
-    if not v:
-        return None
-    return re.split(r"[\\/]", v)[-1].lower() or None
-
-
-def build_doc(row, fields, write, renames, ts_field, tz, meta, ingest_time):
-    doc, ts = {}, None
-    for i, f in enumerate(fields):
-        raw = row[i] if i < len(row) else ""
-        v = raw.strip()
-        if not v:
-            continue
-        t, order = write[f]
-        val = raw
-        if t == "date":
-            val = parse_datetime(v, None if order == "iso" else order, tz) or raw
-            if f == ts_field and val != raw:
-                ts = val
-                doc[f"{renames.get(f, f)}_local"] = v  # as NirSoft showed it, before conversion
-        elif t == "long":
-            val = int(v)
-        elif t == "boolean":
-            val = BOOLS[v.lower()]
-        doc[renames.get(f, f)] = val
-
-    doc["@timestamp"] = ts or ingest_time
-    doc["host"] = {"name": meta["host"]}
-    if meta["user_col"] is not None and meta["user_col"] < len(row):
-        user = user_from_profile(row[meta["user_col"]])
-        if user:
-            doc["user"] = {"name": user}
-    if meta["url_col"] is not None and meta["url_col"] < len(row):
-        try:
-            u = urlsplit(row[meta["url_col"]].strip())
-            url = {}
-            if u.scheme:
-                url["scheme"] = u.scheme.lower()
-            if u.hostname:
-                url["domain"] = u.hostname.lower()
-            if url:
-                doc["url"] = url
-        except ValueError:
-            pass
-    doc["ingest"] = {"source_file": meta["source_file"],
-                     "timestamp_source": ts_field if ts else "ingest_time"}
-    if meta.get("case"):
-        doc["case"] = meta["case"]
-    return doc
-
-
-# --------------------------------------------------------------------------- check
-
-def timestamp_check(tables, stats, types, ts_field, tz, rows_total, forced_order=None):
+def timestamp_check(tables, stat, order, tz, rows_total, forced):
     """Print the timestamp report. Returns True if it's safe to load."""
-    ok = True
     print("\nTimestamp check")
     for t in tables:
         enc = {"utf-16": "UTF-16", "utf-8-sig": "UTF-8 (BOM)", "utf-8": "UTF-8", "cp1252": "ANSI"}[t.encoding]
@@ -336,50 +253,39 @@ def timestamp_check(tables, stats, types, ts_field, tz, rows_total, forced_order
         print(f"  file: {t.path.name}  [{enc}, {delim}-delimited]")
         if t.note:
             print(f"    WARN {t.note}")
-    for f, (typ, order) in types.items():
-        if typ != "date":
-            continue
-        s = stats[f]
-        if order == "iso":
-            desc = "ISO format"
-        elif order in ("dmy", "mdy", "ymd"):
-            if forced_order:
-                how = "from --date-order"
-                against = {"dmy": s["month_first"], "mdy": s["day_first"], "ymd": 0}[order]
-                if against:
-                    how += (f"; WARNING {against} value(s) are impossible that way and will not be"
-                            f" searchable as dates")
-            else:
-                how = (f"detected: {s['day_first'] or s['month_first'] or s['ymd']} value(s)"
-                       f" only make sense that way")
-            desc = {"dmy": "day/month/year", "mdy": "month/day/year", "ymd": "year/month/day"}[order] + f" ({how})"
-        elif order == "conflict":
-            desc = "MIXED day-first and month-first values"
-            ok = False
+    if not stat["filled"]:
+        print("  WARN no Visit Time values -> every row uses ingest time")
+        return True
+    ok = True
+    if order == "iso":
+        desc = "ISO format"
+    elif order in ("dmy", "mdy", "ymd"):
+        if forced:
+            how = "from --date-order"
+            against = {"dmy": stat["month_first"], "mdy": stat["day_first"], "ymd": 0}[order]
+            if against:
+                how += f"; WARNING {against} value(s) are impossible that way and go to browsinghistory.malformed"
         else:
-            desc = "AMBIGUOUS: every date has day and month <= 12"
-            ok = False
-        mark = "OK  " if order in ("iso", "dmy", "mdy", "ymd") else "STOP"
-        star = "  <- @timestamp" if f == ts_field else ""
-        print(f"  {mark} {f}: {desc}, times read as {tz}{star}")
-        if order is None:
-            print("       Can't tell 08/10 = 8 Oct from 10 Aug. Re-run with --date-order dmy (e.g. SG/UK"
-                  " regional settings) or --date-order mdy (US) to match the machine that ran"
-                  " BrowsingHistoryView.")
-        elif order == "conflict":
-            print("       Some values only work day-first and others only month-first: the file mixes"
-                  " formats. Check the export; use --date-order to force one reading.")
-    if ts_field:
-        filled = stats[ts_field]["filled"]
-        if filled < rows_total:
-            print(f"    - {rows_total - filled} row(s) have no {ts_field} -> those use ingest time")
+            how = (f"detected: {stat['day_first'] or stat['month_first'] or stat['ymd']} value(s)"
+                   f" only make sense that way")
+        desc = {"dmy": "day/month/year", "mdy": "month/day/year", "ymd": "year/month/day"}[order] + f" ({how})"
+    elif order == "conflict":
+        desc, ok = "MIXED day-first and month-first values", False
     else:
-        print("  WARN no date column found -> every row uses ingest time")
-    for f, s in stats.items():
-        if types[f][0] != "date" and TIME_NAME_RE.search(f) and s["filled"] and (s["iso"] or s["ymd"] or s["day_first"] or s["month_first"] or s["other"]):
-            n = s["iso"] + s["ymd"] + s["day_first"] + s["month_first"] + s["other"]
-            print(f"    - {f}: {n}/{s['filled']} values are dates, the rest aren't"
-                  f" (e.g. \"{s['bad']}\") -> stored as text")
+        desc, ok = "AMBIGUOUS: every date has day and month <= 12", False
+    print(f"  {'OK  ' if ok else 'STOP'} Visit Time: {desc}, times read as {tz}  <- @timestamp")
+    if order is None:
+        print("       Can't tell 08/10 = 8 Oct from 10 Aug. Re-run with --date-order dmy (e.g. SG/UK"
+              " regional settings) or --date-order mdy (US) to match the machine that ran"
+              " BrowsingHistoryView.")
+    elif order == "conflict":
+        print("       Some values only work day-first and others only month-first: the file mixes"
+              " formats. Check the export; use --date-order to force one reading.")
+    if stat["filled"] < rows_total:
+        print(f"    - {rows_total - stat['filled']} row(s) have no Visit Time -> those use ingest time")
+    if stat["bad"]:
+        print(f"    - {stat['bad']} value(s) are not dates (e.g. \"{stat['bad_example']}\")"
+              f" -> kept in browsinghistory.malformed")
     if tz == "Z":
         print("  note: --tz UTC assumes BrowsingHistoryView's GMT/UTC time option was ON")
     else:
@@ -388,113 +294,98 @@ def timestamp_check(tables, stats, types, ts_field, tz, rows_total, forced_order
     return ok
 
 
-# --------------------------------------------------------------------------- Elasticsearch
+# --------------------------------------------------------------------------- documents
 
-META_PROPS = {
-    "@timestamp": {"type": "date"},
-    "host": {"properties": {"name": {"type": "keyword"}}},
-    "user": {"properties": {"name": {"type": "keyword"}}},
-    "url": {"properties": {"domain": {"type": "keyword"}, "scheme": {"type": "keyword"}}},
-    "ingest": {"properties": {"source_file": {"type": "keyword"},
-                              "timestamp_source": {"type": "keyword"}}},
-    "case": {"type": "keyword"},
-}
-
-
-class ES:
-    def __init__(self, url, user=None, password=None, insecure=False):
-        self.client = EsClient(url, user, password, insecure)
-
-    def call(self, method, path, body=None, ctype="application/json"):
-        """(status, payload); timeouts, connection errors and HTTP 429/5xx are retried."""
-        return self.client.request(method, path, body, ctype)
-
-    def existing_fields(self, index):
-        status, _ = self.call("HEAD", f"/{index}")
-        if status != 200:
-            return None
-        status, resp = self.call("GET", f"/{index}/_mapping")
-        if status >= 300:
-            sys.exit(f"Could not read mapping of {index} ({status}): {json.dumps(resp)[:500]}")
-        props = next(iter(resp.values()), {}).get("mappings", {}).get("properties", {})
-        return {f: m.get("type", "object") for f, m in props.items()}
-
-    def create_index(self, index, props):
-        body = {
-            "settings": {"number_of_replicas": 0, "index.mapping.total_fields.limit": 2000,
-                         "index.mapping.ignore_malformed": True},
-            "mappings": {
-                "date_detection": False, "numeric_detection": False,
-                "dynamic_templates": [{"strings": {
-                    "match_mapping_type": "string",
-                    "mapping": {"type": "text",
-                                "fields": {"keyword": {"type": "keyword", "ignore_above": 2048}}},
-                }}],
-                "properties": {**props, **META_PROPS},
-            },
-        }
-        status, resp = self.call("PUT", f"/{index}", json.dumps(body))
-        if status >= 300:
-            sys.exit(f"Could not create index {index} ({status}): {json.dumps(resp)[:500]}")
-
-    def add_fields(self, index, props):
-        if props:
-            status, resp = self.call("PUT", f"/{index}/_mapping", json.dumps({"properties": props}))
-            if status >= 300:
-                sys.exit(f"Could not update mapping of {index} ({status}): {json.dumps(resp)[:500]}")
-
-    def bulk(self, lines, stats):
-        if not lines:
-            return
-        status, resp = self.client.bulk(lines)  # retries failed requests and rejected items
-        if status >= 300:
-            sys.exit(f"Bulk request failed ({status}): {json.dumps(resp)[:500]}")
-        for item in resp.get("items", []):
-            res = next(iter(item.values()))
-            if "error" in res:
-                stats["errors"] += 1
-                if stats["errors"] <= 5:
-                    print(f"    ! {res['error'].get('reason', res['error'])}", file=sys.stderr)
-            else:
-                stats["ok"] += 1
-                if res.get("result") == "updated":
-                    stats["updated"] += 1
-        lines.clear()
-
-    def host_count(self, index, host):
-        self.call("POST", f"/{index}/_refresh")
-        q = {"query": {"term": {"host.name": host}}}
-        status, resp = self.call("POST", f"/{index}/_count", json.dumps(q))
-        return resp.get("count") if status < 300 else None
+def column_plan(header):
+    """[(column, [(field, conv), ...])] for one file, plus columns not in the schema."""
+    plan, unknown, used = [], [], set()
+    for col in header:
+        targets = COLUMNS.get(col_key(col))
+        if targets is None:
+            name = engine.snake(col)
+            base, i = name, 2
+            while name in used:
+                name, i = f"{base}_{i}", i + 1
+            used.add(name)
+            targets = [(f"{ARTIFACT_NAME}.unmapped.{name}", "keyword")]
+            unknown.append(col.strip())
+        plan.append((col.strip(), targets))
+    return plan, unknown
 
 
-def fit_existing(types, existing):
-    """Adjust types to an existing index. Returns (write, renames)."""
-    write, renames = {}, {}
-    for f, (t, order) in types.items():
-        if existing is None or f not in existing:
-            write[f] = (t, order)
+def user_from_profile(value):
+    v = value.strip().rstrip("\\/")
+    if not v:
+        return None
+    return re.split(r"[\\/]", v)[-1].lower() or None
+
+
+def build_doc(row, plan, order, tz, meta, ingest_time, issues):
+    doc, malformed = {}, []
+    for i, (col, targets) in enumerate(plan):
+        v = row[i].strip() if i < len(row) else ""
+        if not v:
             continue
-        fam = ES_FAMILY.get(existing[f], "other")
-        if fam == t:
-            write[f] = (t, order)
-        elif fam == "string":
-            write[f] = ("string", None)
-        else:
-            renames[f] = f"{f}_text"
-            write[f] = ("string", None)
-    return write, renames
+        for field, conv in targets:
+            if conv == "visit":
+                val = parse_datetime(v, None if order == "iso" else order, tz)
+            else:
+                val = engine.convert(v, conv)
+            if val is None:
+                malformed.append(f"{col}={v}")
+                issues[(col, field)] = issues.get((col, field), 0) + 1
+                continue
+            if engine.get_field(doc, field) is None:
+                engine.set_field(doc, field, val)
+    if malformed:
+        engine.set_field(doc, f"{ARTIFACT_NAME}.malformed", malformed)
+
+    ts = engine.get_field(doc, TIME_FIELD)
+    doc["@timestamp"] = ts or ingest_time
+    doc["host"] = {"name": meta["host"]}
+    doc["event"] = {"dataset": ARTIFACT_NAME}
+    profile = engine.get_field(doc, "browsinghistory.user_profile")
+    if profile and user_from_profile(profile):
+        doc["user"] = {"name": user_from_profile(profile)}
+    original = engine.get_field(doc, "url.original")
+    if original:
+        try:
+            u = urlsplit(original)
+            if u.scheme:
+                doc["url"]["scheme"] = u.scheme.lower()
+            if u.hostname:
+                doc["url"]["domain"] = u.hostname.lower()
+        except ValueError:
+            pass
+    doc["kape"] = {
+        "source_file": meta["source_file"],
+        "timestamp_source": "Visit Time" if ts else "ingest_time",
+        "timestamp_meaning": ("Page visit time, converted from the exporting machine's clock (--tz)"
+                              if ts else "No usable time in this row - time the row was loaded"),
+    }
+    if meta.get("case"):
+        doc["case"] = meta["case"]
+    return doc
 
 
-def mapping_props(write, renames, skip=()):
-    return {renames.get(f, f): {"type": t} for f, (t, _) in write.items()
-            if t != "string" and renames.get(f, f) not in skip}
+def check_against_template(types):
+    problems = []
+    for col, targets in COLUMNS.items():
+        for field, conv in targets:
+            if types.get(field) != CONV_TYPE[conv]:
+                problems.append(f"{col} -> {field}: template has {types.get(field) or 'nothing'},"
+                                f" needs {CONV_TYPE[conv]}")
+    for field in ("url.domain", "url.scheme", "user.name", "event.dataset", "kape.timestamp_meaning",
+                  f"{ARTIFACT_NAME}.malformed"):
+        if field not in types:
+            problems.append(f"{field}: missing from template")
+    return problems
 
 
 # --------------------------------------------------------------------------- main
 
 def main():
-    ap = argparse.ArgumentParser(description="Load NirSoft BrowsingHistoryView CSVs into SOF-ELK.")
+    ap = argparse.ArgumentParser(description="Load NirSoft BrowsingHistoryView CSVs into SOF-ELK with a fixed schema.")
     ap.add_argument("paths", nargs="+", help="BrowsingHistory CSV file(s) or folders")
     ap.add_argument("--hostname", required=True, help="Host the browser history came from")
     ap.add_argument("--tz", required=True, metavar="+HH:MM|UTC",
@@ -519,6 +410,8 @@ def main():
             break
     args = ap.parse_args(argv)
     apply_client_arguments(args)
+    if args.batch_size < 1:
+        sys.exit("--batch-size must be a positive integer")
 
     if args.tz.strip().upper() in ("UTC", "GMT", "Z", "+00:00", "0"):
         tz = "Z"
@@ -529,10 +422,16 @@ def main():
         tz = f"{m.group(1)}{int(m.group(2)):02d}:{m.group(3) or '00'}"
 
     try:
-        host = sanitize_hostname(args.hostname)
+        host = engine.sanitize_hostname(args.hostname)
     except ValueError as exc:
         sys.exit(str(exc))
-    index = resolve_index("browsinghistory", host, args.index)
+    index = resolve_index(ARTIFACT_NAME, host, args.index)
+
+    component, index_tpl, body = templates.load(ARTIFACT_NAME)
+    types = templates.field_types(body["mappings"])
+    problems = check_against_template(types)
+    if problems:
+        sys.exit(f"Column map and index-{ARTIFACT_NAME}.json disagree:\n  " + "\n  ".join(problems))
 
     files = []
     for p in map(Path, args.paths):
@@ -551,33 +450,29 @@ def main():
     if not tables:
         sys.exit("No CSV files found.")
 
-    stats, rows_total = {}, 0
+    stat, rows_total = new_stat(), 0
     for t in tables:
-        rows_total += scan(t, stats)
-    for t in tables:
-        for f in t.fields:
-            stats.setdefault(f, new_stat())
-    types = decide_types(stats, args.date_order)
-    ts_field = pick_time_field(types)
+        rows_total += scan(t, stat)
+    order = decide_order(stat, args.date_order)
+    plans = {t.path: column_plan(t.raw_header) for t in tables}
     ingest_time = dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
     print(f"{len(tables)} file(s), {rows_total} rows -> index '{index}', host={host}")
-    safe = timestamp_check(tables, stats, types, ts_field, tz, rows_total, args.date_order)
+    unknown = sorted({c for _, u in plans.values() for c in u})
+    if unknown:
+        print(f"Columns not in the {ARTIFACT_NAME} schema (kept as keywords under"
+              f" {ARTIFACT_NAME}.unmapped.*): {', '.join(unknown)}")
+    safe = timestamp_check(tables, stat, order, tz, rows_total, args.date_order)
 
     def meta_for(t):
-        lower = [x.lower() for x in t.fields]
-        return {"host": host, "case": args.case, "source_file": t.path.name,
-                "user_col": lower.index("user_profile") if "user_profile" in lower else None,
-                "url_col": lower.index("url") if "url" in lower else None}
+        return {"host": host, "case": args.case, "source_file": t.path.name}
 
     if args.dry_run:
-        typed = {f: (t if t != "date" else f"date ({o})") for f, (t, o) in types.items() if t != "string"}
-        print(f"\nTyped fields: {typed or 'none'}")
         print("\nSample documents:")
-        shown = 0
+        shown, issues = 0, {}
         for t in tables:
             for row in t.rows():
-                doc = build_doc(row, t.fields, types, {}, ts_field, tz, meta_for(t), ingest_time)
+                doc = build_doc(row, plans[t.path][0], order, tz, meta_for(t), ingest_time, issues)
                 print("  " + json.dumps(doc, ensure_ascii=False)[:700])
                 shown += 1
                 if shown == 2:
@@ -592,7 +487,7 @@ def main():
         sys.exit("\nNot loading: fix the STOP item(s) in the timestamp check first"
                  " (usually by adding --date-order).")
 
-    es = ES(args.es, args.user, args.password, args.insecure)
+    es = engine.ES(args.es, args.user, args.password, args.insecure)
     try:
         status, info = es.call("GET", "/")
     except error.URLError as e:
@@ -601,37 +496,36 @@ def main():
         sys.exit(f"\nElasticsearch returned {status}: {json.dumps(info)[:300]}")
     print(f"\nConnected to Elasticsearch {info.get('version', {}).get('number', '?')} at {args.es}")
 
-    existing = es.existing_fields(index)
-    write, renames = fit_existing(types, existing)
-    if existing is None:
-        es.create_index(index, mapping_props(write, renames))
-        print(f"Created index '{index}'")
-    else:
-        es.add_fields(index, mapping_props(write, renames, skip=existing))
-        print(f"Index '{index}' exists - appending")
-        for f, new in sorted(renames.items()):
-            print(f"  note: '{f}' is mapped as {existing[f]} in the index but this data doesn't fit;"
-                  f" storing it as '{new}'")
+    templates.install(es.call, ARTIFACT_NAME, component, index_tpl)
+    print(f"Installed index template 'sofelk-toolkit-{ARTIFACT_NAME}' ({ARTIFACT_NAME}-*)")
+    art = engine.Artifact(name=ARTIFACT_NAME, tool="BrowsingHistoryView", columns={},
+                          detect_section=lambda p, h: None, dataset_for=lambda s: ARTIFACT_NAME,
+                          time_default=[])
+    print(f"Index '{index}': {es.prepare_index(art, index, body)}")
 
     stats_b = {"ok": 0, "errors": 0, "updated": 0}
-    lines, seen = [], {}
+    lines, seen, issues = [], {}, {}
     for t in tables:
-        meta = meta_for(t)
+        meta, plan = meta_for(t), plans[t.path][0]
         for row in t.rows():
+            # ID = host + row content (+ a counter so identical rows stay separate documents)
             content = dict(sorted(zip(t.raw_header, (c.strip() for c in row))))
-            key = json.dumps([host, FORENSIC_TAG, content], ensure_ascii=False)
+            key = json.dumps([host, "BrowsingHistory", content], ensure_ascii=False)
             n = seen.get(key, 0)
             seen[key] = n + 1
             doc_id = hashlib.sha1(f"{key}|{n}".encode()).hexdigest()
-            doc = build_doc(row, t.fields, write, renames, ts_field, tz, meta, ingest_time)
+            doc = build_doc(row, plan, order, tz, meta, ingest_time, issues)
             lines.append(json.dumps({"index": {"_index": index, "_id": doc_id}}))
             lines.append(json.dumps(doc, ensure_ascii=False))
             if len(lines) >= args.batch_size * 2:
-                es.bulk(lines, stats_b)
-    es.bulk(lines, stats_b)
+                es.send(lines, stats_b)
+    es.send(lines, stats_b)
 
+    if issues:
+        print(f"\nValues that did not fit their field type (kept as text in {ARTIFACT_NAME}.malformed):")
+        for (col, field), n in sorted(issues.items()):
+            print(f"  {col} -> {field}: {n} value(s)")
     new = stats_b["ok"] - stats_b["updated"]
-    log.info("done: index=%s ok=%d errors=%d", index, stats_b["ok"], stats_b["errors"])
     print(f"\nDone: {rows_total} rows read -> {new} new documents, {stats_b['updated']} already in"
           f" index (re-run), {stats_b['errors']} errors.")
     in_index = es.host_count(index, host)
@@ -639,8 +533,8 @@ def main():
         verdict = "matches" if in_index == rows_total else "DOES NOT MATCH"
         print(f"Index check: '{index}' holds {in_index} browsing history documents for host"
               f" '{host}' ({verdict} the {rows_total} rows read).")
-    print(f"In Kibana, create a data view for '{index}' with @timestamp as the time field;"
-          f" useful columns: user.name, url.domain, Title, Web_Browser, Visit_Count.")
+    print(f"In Kibana, use the '{ARTIFACT_NAME}-*' data view (time field @timestamp); useful fields:"
+          f" user.name, url.domain, url.original, browsinghistory.title, browsinghistory.web_browser.")
 
 
 if __name__ == "__main__":

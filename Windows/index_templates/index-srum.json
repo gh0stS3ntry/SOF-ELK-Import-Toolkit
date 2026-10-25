@@ -1,0 +1,226 @@
+{
+  "index_patterns": [
+    "srum-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "srum",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "process": {
+          "properties": {
+            "executable": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "name": {
+              "type": "keyword"
+            }
+          }
+        },
+        "srum": {
+          "properties": {
+            "active_ac_time": {
+              "type": "long"
+            },
+            "active_dc_time": {
+              "type": "long"
+            },
+            "active_discharge_time": {
+              "type": "long"
+            },
+            "active_energy": {
+              "type": "long"
+            },
+            "app_id": {
+              "type": "long"
+            },
+            "background_bytes_read": {
+              "type": "long"
+            },
+            "background_bytes_written": {
+              "type": "long"
+            },
+            "background_context_switches": {
+              "type": "long"
+            },
+            "background_cycle_time": {
+              "type": "long"
+            },
+            "background_num_read_operations": {
+              "type": "long"
+            },
+            "background_num_write_operations": {
+              "type": "long"
+            },
+            "background_number_of_flushes": {
+              "type": "long"
+            },
+            "bytes_received": {
+              "type": "long"
+            },
+            "bytes_sent": {
+              "type": "long"
+            },
+            "charge_level": {
+              "type": "long"
+            },
+            "configuration_hash": {
+              "type": "keyword"
+            },
+            "connect_start_time": {
+              "type": "date"
+            },
+            "connected_time": {
+              "type": "long"
+            },
+            "cs_ac_time": {
+              "type": "long"
+            },
+            "cs_dc_time": {
+              "type": "long"
+            },
+            "cs_discharge_time": {
+              "type": "long"
+            },
+            "cs_energy": {
+              "type": "long"
+            },
+            "cycle_count": {
+              "type": "long"
+            },
+            "designed_capacity": {
+              "type": "long"
+            },
+            "duration": {
+              "type": "long"
+            },
+            "duration_ms": {
+              "type": "long"
+            },
+            "end_time": {
+              "type": "date"
+            },
+            "event_timestamp": {
+              "type": "date"
+            },
+            "exe_info": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "exe_info_description": {
+              "type": "keyword"
+            },
+            "exe_timestamp": {
+              "type": "date"
+            },
+            "face_time": {
+              "type": "long"
+            },
+            "flags": {
+              "type": "long"
+            },
+            "foreground_bytes_read": {
+              "type": "long"
+            },
+            "foreground_bytes_written": {
+              "type": "long"
+            },
+            "foreground_context_switches": {
+              "type": "long"
+            },
+            "foreground_cycle_time": {
+              "type": "long"
+            },
+            "foreground_num_read_operations": {
+              "type": "long"
+            },
+            "foreground_num_write_operations": {
+              "type": "long"
+            },
+            "foreground_number_of_flushes": {
+              "type": "long"
+            },
+            "full_charged_capacity": {
+              "type": "long"
+            },
+            "id": {
+              "type": "long"
+            },
+            "interface_luid": {
+              "type": "long"
+            },
+            "interface_type": {
+              "type": "keyword"
+            },
+            "is_lt": {
+              "type": "boolean"
+            },
+            "l2_profile_flags": {
+              "type": "long"
+            },
+            "l2_profile_id": {
+              "type": "long"
+            },
+            "malformed": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "network_type": {
+              "type": "keyword"
+            },
+            "notification_type": {
+              "type": "keyword"
+            },
+            "payload_size": {
+              "type": "long"
+            },
+            "profile_name": {
+              "type": "keyword"
+            },
+            "sid_type": {
+              "type": "keyword"
+            },
+            "start_time": {
+              "type": "date"
+            },
+            "state_transition": {
+              "type": "long"
+            },
+            "timestamp": {
+              "type": "date"
+            },
+            "user_id": {
+              "type": "long"
+            },
+            "unmapped": {
+              "type": "object",
+              "dynamic": "true"
+            }
+          }
+        },
+        "user": {
+          "properties": {
+            "id": {
+              "type": "keyword"
+            },
+            "name": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Explicit schema for SrumECmd CSV output loaded by srumecmd2sofelk.py",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}
