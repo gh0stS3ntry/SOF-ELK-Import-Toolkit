@@ -136,6 +136,7 @@ def stable_id(index: str, source_file: str, rownum: int, row: dict) -> str:
 def create_index(es: str, index: str, user=None, password=None, insecure=False):
     status, _ = http_json(es, "HEAD", f"/{index}", user=user, password=password, insecure=insecure)
     if status == 200:
+        check_case_mapping(es, index, user, password, insecure)
         return False
     if status != 404:
         raise RuntimeError(f"Cannot inspect index {index}: HTTP {status}")
@@ -167,6 +168,7 @@ def create_index(es: str, index: str, user=None, password=None, insecure=False):
                     }
                 },
                 "host": {"properties": {"name": {"type": "keyword"}}},
+                "case": {"type": "keyword"},
             },
             "dynamic_templates": [
                 {"strings_as_text": {"match_mapping_type": "string", "mapping": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}}}}
@@ -177,6 +179,20 @@ def create_index(es: str, index: str, user=None, password=None, insecure=False):
     if status >= 300:
         raise RuntimeError(f"Failed to create index {index}: HTTP {status}: {json.dumps(result)[:800]}")
     return True
+
+
+def check_case_mapping(es: str, index: str, user=None, password=None, insecure=False):
+    """Older versions stored --case as an object ({"id": ...}); every importer now writes a flat
+    `case` keyword, which an index with the old object mapping would reject."""
+    status, result = http_json(es, "GET", f"/{index}/_mapping", user=user, password=password, insecure=insecure)
+    if status >= 300:
+        raise RuntimeError(f"Cannot read mapping of {index}: HTTP {status}")
+    props = next(iter(result.values()), {}).get("mappings", {}).get("properties", {})
+    if "properties" in props.get("case", {}):
+        raise RuntimeError(
+            f"Index {index} stores 'case' as an object (case.id) from an older version of this "
+            f"importer; documents now use a flat 'case' keyword like the other importers. "
+            f"Delete the index and reload this host: curl -X DELETE '{es.rstrip('/')}/{index}'")
 
 
 def bulk_index(es: str, index: str, batch: list[dict], user=None, password=None, insecure=False):
@@ -313,7 +329,7 @@ def run(args):
                     continue
                 doc = build_document(row, args.hostname, path.name, rownum)
                 if args.case:
-                    doc["case"] = {"id": args.case}
+                    doc["case"] = args.case
                 if not doc.get("@timestamp"):
                     doc["@timestamp"] = now
                 if args.dry_run:
