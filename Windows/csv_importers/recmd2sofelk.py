@@ -5,16 +5,17 @@ Preserves the original recmd2sofelk.py field/type/timestamp and hive metadata be
 that `forensic_tag` is omitted from indexed documents.
 """
 import argparse
-import base64
 import csv
 import datetime as dt
 import hashlib
 import json
 import re
-import ssl
 import sys
 from pathlib import Path
-from urllib import error, request
+from urllib import error
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
+from sof_elk_es_client import EsClient, add_client_arguments, apply_client_arguments, log, resolve_index  # noqa: E402
 
 try:
     csv.field_size_limit(sys.maxsize)
@@ -333,26 +334,11 @@ META_PROPS = {
 
 class ES:
     def __init__(self, url, user=None, password=None, insecure=False):
-        self.url = url.rstrip("/")
-        self.headers = {}
-        if user:
-            token = base64.b64encode(f"{user}:{password or ''}".encode()).decode()
-            self.headers["Authorization"] = f"Basic {token}"
-        self.ctx = ssl._create_unverified_context() if insecure else None
+        self.client = EsClient(url, user, password, insecure)
 
     def call(self, method, path, body=None, ctype="application/json"):
-        data = body.encode("utf-8") if body is not None else None
-        req = request.Request(self.url + path, data=data, method=method,
-                              headers={**self.headers, "Content-Type": ctype})
-        try:
-            with request.urlopen(req, timeout=300, context=self.ctx) as r:
-                status, raw = r.status, r.read()
-        except error.HTTPError as e:
-            status, raw = e.code, e.read()
-        try:
-            return status, (json.loads(raw) if raw else {})
-        except ValueError:
-            return status, {"raw": raw.decode("utf-8", "replace")}
+        """(status, payload); timeouts, connection errors and HTTP 429/5xx are retried."""
+        return self.client.request(method, path, body, ctype)
 
     def existing_fields(self, index):
         """Top-level field -> mapping type for an existing index, or None if it doesn't exist."""
@@ -399,7 +385,7 @@ class ES:
     def bulk(self, lines, stats):
         if not lines:
             return
-        status, resp = self.call("POST", "/_bulk", "\n".join(lines) + "\n", "application/x-ndjson")
+        status, resp = self.client.bulk(lines)  # retries failed requests and rejected items
         if status >= 300:
             sys.exit(f"Bulk request failed ({status}): {json.dumps(resp)[:500]}")
         for item in resp.get("items", []):
@@ -434,7 +420,7 @@ def main():
     ap.add_argument("paths", nargs="+", help="CSV files or folders (searched recursively)")
     ap.add_argument("--hostname", required=True, help="Host the KAPE collection came from")
     ap.add_argument("--case", help="Optional case/incident ID added to every document")
-    ap.add_argument("--index", default=None, help="Override target index (default: registry-<hostname>)")
+    ap.add_argument("--index", default=None, help="Override target index; must still end in -<hostname> (default: registry-<hostname>)")
     ap.add_argument("--local-tz", metavar="+HH:MM",
                     help="UTC offset of the host's clock, used to convert *LOCAL* time columns"
                          " (e.g. +08:00). Without it LOCAL columns are kept as text.")
@@ -445,7 +431,9 @@ def main():
     ap.add_argument("--insecure", action="store_true", help="Skip TLS certificate checks")
     ap.add_argument("--dry-run", action="store_true",
                     help="Show plugins, inferred types and sample docs; send nothing")
+    add_client_arguments(ap)
     args = ap.parse_args()
+    apply_client_arguments(args)
 
     local_tz = None
     if args.local_tz:
@@ -458,9 +446,7 @@ def main():
         host = sanitize_hostname(args.hostname)
     except ValueError as exc:
         sys.exit(str(exc))
-    index = (args.index or f"registry-{host}").lower()
-    if args.index and index != args.index:
-        print(f"note: Elasticsearch index names must be lower-case, using '{index}'\n")
+    index = resolve_index("registry", host, args.index)
 
     files = []
     for p in map(Path, args.paths):
@@ -570,6 +556,7 @@ def main():
         total["ok"] += stats["ok"]
         total["errors"] += stats["errors"]
 
+    log.info("done: index=%s ok=%d errors=%d", index, total["ok"], total["errors"])
     print(f"\nDone: {total['ok']} documents indexed into '{index}', {total['errors']} errors.")
     print(f"In Kibana, create a data view for '{index}' with @timestamp as the time field,"
           f" then filter or break down by host.name.")

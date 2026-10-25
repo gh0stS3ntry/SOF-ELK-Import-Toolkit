@@ -5,18 +5,19 @@ Field extraction, type inference, date-order checks, URL/user enrichment, stable
 Elasticsearch bulk loading follow the original bhv2sofelk.py importer. `forensic_tag` is omitted.
 """
 import argparse
-import base64
 import codecs
 import csv
 import datetime as dt
 import hashlib
 import json
 import re
-import ssl
 import sys
 from pathlib import Path
-from urllib import error, request
+from urllib import error
 from urllib.parse import urlsplit
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
+from sof_elk_es_client import EsClient, add_client_arguments, apply_client_arguments, log, resolve_index  # noqa: E402
 
 try:
     csv.field_size_limit(sys.maxsize)
@@ -402,26 +403,11 @@ META_PROPS = {
 
 class ES:
     def __init__(self, url, user=None, password=None, insecure=False):
-        self.url = url.rstrip("/")
-        self.headers = {}
-        if user:
-            token = base64.b64encode(f"{user}:{password or ''}".encode()).decode()
-            self.headers["Authorization"] = f"Basic {token}"
-        self.ctx = ssl._create_unverified_context() if insecure else None
+        self.client = EsClient(url, user, password, insecure)
 
     def call(self, method, path, body=None, ctype="application/json"):
-        data = body.encode("utf-8") if body is not None else None
-        req = request.Request(self.url + path, data=data, method=method,
-                              headers={**self.headers, "Content-Type": ctype})
-        try:
-            with request.urlopen(req, timeout=300, context=self.ctx) as r:
-                status, raw = r.status, r.read()
-        except error.HTTPError as e:
-            status, raw = e.code, e.read()
-        try:
-            return status, (json.loads(raw) if raw else {})
-        except ValueError:
-            return status, {"raw": raw.decode("utf-8", "replace")}
+        """(status, payload); timeouts, connection errors and HTTP 429/5xx are retried."""
+        return self.client.request(method, path, body, ctype)
 
     def existing_fields(self, index):
         status, _ = self.call("HEAD", f"/{index}")
@@ -460,7 +446,7 @@ class ES:
     def bulk(self, lines, stats):
         if not lines:
             return
-        status, resp = self.call("POST", "/_bulk", "\n".join(lines) + "\n", "application/x-ndjson")
+        status, resp = self.client.bulk(lines)  # retries failed requests and rejected items
         if status >= 300:
             sys.exit(f"Bulk request failed ({status}): {json.dumps(resp)[:500]}")
         for item in resp.get("items", []):
@@ -517,13 +503,14 @@ def main():
     ap.add_argument("--date-order", choices=["dmy", "mdy", "ymd"],
                     help="Force day/month order when it can't be detected")
     ap.add_argument("--case", help="Optional case/incident ID added to every document")
-    ap.add_argument("--index", default=None, help="Override target index (default: browsinghistory-<hostname>)")
+    ap.add_argument("--index", default=None, help="Override target index; must still end in -<hostname> (default: browsinghistory-<hostname>)")
     ap.add_argument("--es", default="http://localhost:9200", help="Elasticsearch URL")
     ap.add_argument("--batch-size", type=int, default=2000)
     ap.add_argument("--user", help="Elasticsearch username, if security is enabled")
     ap.add_argument("--password")
     ap.add_argument("--insecure", action="store_true", help="Skip TLS certificate checks")
     ap.add_argument("--dry-run", action="store_true", help="Check and show samples; send nothing")
+    add_client_arguments(ap)
     # "--tz -05:00" would otherwise be read as an unknown option because of the leading minus
     argv = sys.argv[1:]
     for i, a in enumerate(argv[:-1]):
@@ -531,6 +518,7 @@ def main():
             argv[i:i + 2] = [f"--tz={argv[i + 1]}"]
             break
     args = ap.parse_args(argv)
+    apply_client_arguments(args)
 
     if args.tz.strip().upper() in ("UTC", "GMT", "Z", "+00:00", "0"):
         tz = "Z"
@@ -544,9 +532,7 @@ def main():
         host = sanitize_hostname(args.hostname)
     except ValueError as exc:
         sys.exit(str(exc))
-    index = (args.index or f"browsinghistory-{host}").lower()
-    if args.index and index != args.index:
-        print(f"note: Elasticsearch index names must be lower-case, using '{index}'\n")
+    index = resolve_index("browsinghistory", host, args.index)
 
     files = []
     for p in map(Path, args.paths):
@@ -645,6 +631,7 @@ def main():
     es.bulk(lines, stats_b)
 
     new = stats_b["ok"] - stats_b["updated"]
+    log.info("done: index=%s ok=%d errors=%d", index, stats_b["ok"], stats_b["errors"])
     print(f"\nDone: {rows_total} rows read -> {new} new documents, {stats_b['updated']} already in"
           f" index (re-run), {stats_b['errors']} errors.")
     in_index = es.host_count(index, host)

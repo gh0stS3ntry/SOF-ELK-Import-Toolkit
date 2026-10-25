@@ -2,18 +2,19 @@
 """Shared streaming CSV -> Elasticsearch bulk ingestion helpers."""
 from __future__ import annotations
 
-import base64
 import csv
 import datetime as dt
 import hashlib
 import json
 import re
-import ssl
 import sys
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from urllib import error, request
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
+from sof_elk_es_client import (EsClient, add_client_arguments, apply_client_arguments,  # noqa: E402,F401
+                               log, resolve_index)
 
 try:
     csv.field_size_limit(sys.maxsize)
@@ -64,33 +65,10 @@ def select_csv_files(root: Path, hints, header_match=None) -> list[Path]:
     return out
 
 
-def auth_header(user: str | None, password: str | None) -> dict[str, str]:
-    if not user:
-        return {}
-    token = base64.b64encode(f"{user}:{password or ''}".encode("utf-8")).decode("ascii")
-    return {"Authorization": f"Basic {token}"}
-
-
-def es_call(base_url, method, path, body=None, user=None, password=None, insecure=False, timeout=60):
-    payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
-    headers = {"Content-Type": "application/json", **auth_header(user, password)}
-    req = request.Request(base_url.rstrip("/") + path, data=payload, method=method, headers=headers)
-    ctx = ssl._create_unverified_context() if insecure else None
-    with request.urlopen(req, timeout=timeout, context=ctx) as resp:
-        raw = resp.read()
-        return resp.status, (json.loads(raw) if raw else {})
-
-
-def es_try_call(base_url, method, path, body=None, user=None, password=None, insecure=False, timeout=60):
-    try:
-        return es_call(base_url, method, path, body, user, password, insecure, timeout)
-    except error.HTTPError as exc:
-        raw = exc.read()
-        try:
-            parsed = json.loads(raw) if raw else {}
-        except json.JSONDecodeError:
-            parsed = {"raw": raw.decode("utf-8", "replace")}
-        return exc.code, parsed
+def es_try_call(base_url, method, path, body=None, user=None, password=None, insecure=False):
+    """(status, payload) for one request; timeouts, connection errors and HTTP 429/5xx are
+    retried, and EsUnavailable (a URLError) is raised if Elasticsearch stays unreachable."""
+    return EsClient(base_url, user, password, insecure).request(method, path, body)
 
 
 def sanitize_fields(header: list[str]) -> list[str]:
@@ -343,17 +321,18 @@ def deterministic_id(host, tool, source_file, row_number, row):
 
 
 def bulk_send(es, index, actions, user, password, insecure, workers=2, batch_size=2000):
-    """Send (meta, doc) actions in batches; at most workers*2 batches are held at once."""
+    """Send (meta, doc) actions in batches; at most workers*2 batches are held at once.
+    Failed requests and rejected (429/5xx) items are retried with backoff by EsClient.bulk."""
+    client = EsClient(es, user, password, insecure)
+
     def send(one_batch):
-        ndjson = bytearray()
+        lines = []
         for meta, doc in one_batch:
-            ndjson.extend(json.dumps(meta, ensure_ascii=False).encode("utf-8")); ndjson.extend(b"\n")
-            ndjson.extend(json.dumps(doc, ensure_ascii=False).encode("utf-8")); ndjson.extend(b"\n")
-        req = request.Request(es.rstrip("/") + "/_bulk", data=bytes(ndjson), method="POST",
-                              headers={"Content-Type": "application/x-ndjson", **auth_header(user, password)})
-        ctx = ssl._create_unverified_context() if insecure else None
-        with request.urlopen(req, timeout=180, context=ctx) as resp:
-            body = json.loads(resp.read() or b"{}")
+            lines.append(json.dumps(meta, ensure_ascii=False))
+            lines.append(json.dumps(doc, ensure_ascii=False))
+        status, body = client.bulk(lines)
+        if status >= 300:
+            raise RuntimeError(f"bulk request failed: HTTP {status}: {json.dumps(body, ensure_ascii=False)[:500]}")
         errors = []
         if body.get("errors"):
             for item in body.get("items", []):
@@ -397,6 +376,7 @@ def process_csv_import(paths, *, hostname, tool_key, index, es="http://localhost
                        local_tz=None, time_preferences=None, transform=None, dry_run=False,
                        sample_docs=2):
     hostname = sanitize_hostname(hostname)
+    log.info("start: tool=%s index=%s files=%d case=%s dry_run=%s", tool_key, index, len(paths), case, dry_run)
     plans = []
     for path in paths:
         header, rows = read_header_and_rows(path)
@@ -473,6 +453,7 @@ def process_csv_import(paths, *, hostname, tool_key, index, es="http://localhost
     if status >= 300:
         print(f"WARNING: could not restore refresh interval for '{index}' (HTTP {status})", flush=True)
     print(f"Done: {ok + bad} documents read, {ok} successful bulk items, {bad} errors, {n_batches} bulk request(s).", flush=True)
+    log.info("done: index=%s ok=%d errors=%d batches=%d", index, ok, bad, n_batches)
     for e in errs[:6]:
         print(f"  Elasticsearch item error: {json.dumps(e, ensure_ascii=False)[:700]}", flush=True)
     return 0 if bad == 0 else 2
