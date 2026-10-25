@@ -49,9 +49,10 @@ CSV_IMPORTERS = {
 # CSV importers that do not accept --local-tz.
 NO_LOCAL_TZ = {"NirSoft BrowsingHistoryView", "ConvertUsageLogsTo-CSV"}
 
-BHV_HEADERS = {"url", "title", "visit time", "visit count", "visited from", "visit type",
-               "visit duration", "web browser", "user profile", "browser profile", "url length",
-               "typed count", "history file", "record id"}
+# Columns only BrowsingHistoryView emits; used with "url" to recognise its exports.
+BHV_SIGNATURE = {"visit time", "visit count", "visited from", "visit type", "visit duration",
+                 "web browser", "user profile", "browser profile", "typed count", "history file"}
+BHV_URL_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
 
 
 def norm_header(value: str) -> str:
@@ -85,10 +86,16 @@ def classify_csv(path: Path, headers: list[str]) -> set[str]:
     name = path.name.lower()
     stem = path.stem.lower()
     fields = {norm_header(h) for h in headers}
-    # BrowsingHistoryView: the familiar export name or its characteristic columns.
+    # BrowsingHistoryView: URL plus at least two of its tool-specific columns. A lone
+    # Url/Title column is not enough (RECmd TypedURLs and SCSI plugin CSVs have those).
+    # A headerless export is accepted only with the familiar name and a URL in column 1.
     found: set[str] = set()
-    if ("browsinghistory" in name or bool(fields & BHV_HEADERS)) and path.suffix.lower() in {".csv", ".txt", ".tsv"}:
-        found.add("NirSoft BrowsingHistoryView")
+    if path.suffix.lower() in {".csv", ".txt", ".tsv"}:
+        bhv_header = "url" in fields and len(fields & BHV_SIGNATURE) >= 2
+        bhv_headerless = ("browsinghistory" in name and bool(headers)
+                          and bool(BHV_URL_RE.match(headers[0].strip().lstrip("\ufeff"))))
+        if bhv_header or bhv_headerless:
+            found.add("NirSoft BrowsingHistoryView")
 
     # JLECmd: Automatic/Custom Destinations exports. Avoid classifying arbitrary AppId CSVs.
     if path.suffix.lower() == ".csv" and (
