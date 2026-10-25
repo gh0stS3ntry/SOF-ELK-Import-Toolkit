@@ -45,7 +45,7 @@ sof_elk_all_importers/
         └── sof_elk_json_bulk_common.py
 ```
 
-Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. Every importer loads the shared Elasticsearch client from `Windows/common/sof_elk_es_client.py`, so keep `common/` beside `csv_importers/` and `json_importers/`. Also keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers in `csv_importers/` (the RBCmd, RecentFileCacheParser, SQLECmd, SrumECmd, SumECmd, and WxTCmd importers require it).
+Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. Every importer loads the shared Elasticsearch client from `Windows/common/sof_elk_es_client.py`, so keep `common/` beside `csv_importers/` and `json_importers/`. Also keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers in `csv_importers/` (the RecentFileCacheParser, SQLECmd, and SumECmd importers require it).
 
 ## Quick start: use the wrapper
 
@@ -124,16 +124,16 @@ All thirteen CSV importers accept an input file or directory, search directories
 
 | Importer(s) | Inputs | Additional options |
 |---|---|---|
-| `jlecmd`, `sbecmd`, `amcache`, `shimcache`, `recmd` | one or more files/folders | `--index`, `--local-tz` |
+| `jlecmd`, `sbecmd`, `amcache`, `shimcache`, `recmd`, `rbcmd`, `srumecmd`, `wxtcmd` | one or more files/folders | `--index`, `--local-tz` |
 | `nirsoft_bhv` | one or more files/folders | `--index`, `--tz` (required), `--date-order` |
-| `rbcmd`, `recentfilecache`, `sqlecmd`, `srumecmd`, `sumecmd`, `wxtcmd` | one file or folder | `--local-tz`, `--workers`, `--sample-docs` |
+| `recentfilecache`, `sqlecmd`, `sumecmd` | one file or folder | `--local-tz`, `--workers`, `--sample-docs` |
 | `clrusagelogs` | one file or folder | `--sample-docs` |
 
-Most CSV importers use source filename clues and/or characteristic CSV headers to recognize the appropriate output type. When given a folder, the RBCmd, RecentFileCacheParser, SQLECmd, SrumECmd, and WxTCmd importers select a CSV if its filename contains a tool clue or its header matches the same signature the wrapper uses; SumECmd relies on filename clues only.
+Most CSV importers use source filename clues and/or characteristic CSV headers to recognize the appropriate output type. When given a folder, the RecentFileCacheParser and SQLECmd importers select a CSV if its filename contains a tool clue or its header matches the same signature the wrapper uses; SumECmd relies on filename clues only.
 
 ### 1. `nirsoft_bhv2sofelk.py`
 
-Loads NirSoft BrowsingHistoryView exports into `browsinghistory-<hostname>` by default. It detects UTF-8, UTF-8 BOM, UTF-16, or CP1252 encoding; comma, tab, or semicolon delimiters; and headerless exports. It infers boolean, integer, date, and string fields from the CSV values. It adds normalized `@timestamp`, `Visit_Time_local` when the chosen visit time is converted, `host.name`, `user.name` derived from User Profile when available, `url.domain` / `url.scheme`, `ingest.source_file`, `ingest.timestamp_source`, and optional `case` metadata. Document IDs are deterministic from the host and row content, with a counter to preserve identical rows while preventing duplicate records on a repeat import.
+Loads NirSoft BrowsingHistoryView exports into `browsinghistory-<hostname>` with a fixed schema, installing the `sofelk-toolkit-browsinghistory` index template (`browsinghistory-*`). It detects UTF-8, UTF-8 BOM, UTF-16, or CP1252 encoding; comma, tab, or semicolon delimiters; and headerless exports. The URL is ECS `url.original` (with `url.domain` / `url.scheme`), the profile owner is `user.name`, and the other columns are `browsinghistory.<snake_case>`; `Visit Time` becomes `browsinghistory.visit_time` (UTC, also `@timestamp`) and the exported text is kept in `browsinghistory.visit_time_local`. Each document carries `event.dataset: browsinghistory`, `host.name`, `kape.source_file`, `kape.timestamp_source`, `kape.timestamp_meaning`, and optional `case`. Field reference: [`docs/schemas/browsinghistory.md`](docs/schemas/browsinghistory.md). An index created by the earlier inferred-type version is refused; delete it and reload the host. Document IDs are deterministic from the host and row content, with a counter to preserve identical rows while preventing duplicate records on a repeat import.
 
 Timestamp interpretation must use the timezone of the machine that ran BrowsingHistoryView (unless its GMT option was enabled), not necessarily the suspect host. If date order is ambiguous, the script stops before live loading and asks for `--date-order` rather than guessing.
 
@@ -144,25 +144,7 @@ python3 Windows/csv_importers/nirsoft_bhv2sofelk.py /cases/IR-2026-042/BrowsingH
 python3 Windows/csv_importers/nirsoft_bhv2sofelk.py /cases/IR-2026-042/BrowsingHistory.csv --hostname WS01 --tz +08:00
 ```
 
-The wrapper treats a file as a BrowsingHistoryView export only if its header has `URL` plus at least two BrowsingHistoryView-specific columns (such as `Visit Time`, `Web Browser`, or `History File`), or if it is a headerless file named like `BrowsingHistory*` whose first value is a URL. Older wrapper versions matched any `Url` or `Title` column, so RECmd plugin CSVs (TypedURLs, SCSI) were also loaded into `browsinghistory-<hostname>`. Every RECmd row has a `BatchKeyPath` field and no `URL` field (it has `Url`), while every real BrowsingHistoryView row has `URL`. To find those leftover documents, then remove them:
-
-```esql
-FROM browsinghistory-* METADATA _index
-| WHERE BatchKeyPath IS NOT NULL OR URL IS NULL
-| STATS docs = COUNT(*) BY _index, ingest.source_file
-```
-
-```bash
-curl -s -X POST "http://localhost:9200/browsinghistory-*/_delete_by_query?conflicts=proceed" \
-  -H 'Content-Type: application/json' -d '{
-  "query": {"bool": {"should": [
-    {"exists": {"field": "BatchKeyPath"}},
-    {"bool": {"must_not": {"exists": {"field": "URL"}}}}
-  ], "minimum_should_match": 1}}
-}'
-```
-
-Run the ES|QL check first and confirm that it lists only RECmd files. The ES|QL check fails with an unknown-column error if no index has a `BatchKeyPath` field; that means there is nothing to clean up.
+The wrapper treats a file as a BrowsingHistoryView export only if its header has `URL` plus at least two BrowsingHistoryView-specific columns (such as `Visit Time`, `Web Browser`, or `History File`), or if it is a headerless file named like `BrowsingHistory*` whose first value is a URL. Older wrapper versions matched any `Url` or `Title` column, so RECmd plugin CSVs (TypedURLs, SCSI) were also loaded into `browsinghistory-<hostname>`. Those indexes were built by the inferred-type importer, which the current importer refuses, so deleting and reloading the host also removes the stray RECmd rows.
 
 ### 2. `jlecmd2sofelk.py`
 
@@ -231,7 +213,7 @@ Filename examples include `*_RECmd_Batch_Kroll_Batch_Output.csv` and timestamp-p
 
 ### 7. `rbcmd2sofelk.py`
 
-Loads RBCmd CSV output into `recyclebin-<hostname>`. The importer uses RBCmd/Recycle Bin filename clues and characteristic deletion-related columns to select input, then infers compatible Elasticsearch field types, normalizes recognized timestamps, and adds source/host/case metadata supported by the common CSV ingestion layer. The primary `@timestamp` candidates are deletion-related timestamps, followed by a generic `Timestamp` or `SourceCreated` field when present.
+Loads RBCmd CSV output (`$I` and INFO2 records) into `recyclebin-<hostname>` with a fixed schema, installing the `sofelk-toolkit-recyclebin` index template (`recyclebin-*`). The deleted file's original path is ECS `file.path` (lower-cased; the original case is in `recyclebin.original_path`), its size is `file.size`, and `DeletedOn` is `recyclebin.deleted_on` and `@timestamp`. `user.id` is the SID of the `$Recycle.Bin\<SID>` folder. `event.dataset` is `recyclebin`. Field reference: [`docs/schemas/recyclebin.md`](docs/schemas/recyclebin.md). An index created by the earlier inferred-type version is refused; delete it and reload the host.
 
 Example:
 
@@ -240,7 +222,7 @@ python3 Windows/csv_importers/rbcmd2sofelk.py /cases/IR-2026-042/RecycleBin --ho
 python3 Windows/csv_importers/rbcmd2sofelk.py /cases/IR-2026-042/RecycleBin --hostname WS01
 ```
 
-Expected filename clues include names containing `RBCmd` or `RecycleBin`.
+CSVs are selected by a file name containing `RBCmd` or `RecycleBin`, or by the `SourceName`, `FileName` and `DeletedOn` columns.
 
 ### 8. `recentfilecache2sofelk.py`
 
@@ -266,7 +248,9 @@ python3 Windows/csv_importers/sqlecmd2sofelk.py /cases/IR-2026-042/SQLite --host
 
 ### 10. `srumecmd2sofelk.py`
 
-Loads SrumECmd CSV reports into `srum-<hostname>`. It identifies SrumECmd output from the filename or characteristic SRUM columns such as `Id`, `Timestamp`, `ExeInfo`, `UserId`, `AppId`, `BytesReceived`, `BytesSent`, or `NetworkType`. Preferred time candidates include `Timestamp`, `EventTimestamp`, `StartTime`, `EndTime`, `ConnectedTime`, and `ConnectStartTime`.
+Loads SrumECmd CSV reports into `srum-<hostname>` with a fixed schema, installing the `sofelk-toolkit-srum` index template (`srum-*`). Each SRUM table becomes an `event.dataset` such as `srum.app_resource_use_info` or `srum.network_connections`, taken from the `SrumECmd_<Table>_Output` file name or, for renamed files, the columns. The shared identity columns go to `srum.*`, `user.id` (SID) and `user.name`; when `ExeInfo` is a path it is also ECS `process.executable` / `process.name`. Counters are `srum.<snake_case>` longs. `@timestamp` is the SRUM record `Timestamp` (when Windows wrote the record, roughly hourly), not when the activity started. Field reference: [`docs/schemas/srum.md`](docs/schemas/srum.md). An index created by the earlier inferred-type version is refused; delete it and reload the host.
+
+If SrumECmd reports a dirty database (`SRUDB.dat` was copied from a live system), repair a copy first with `esentutl /r sru /i` in its folder and then `esentutl /p SRUDB.dat`, and re-run SrumECmd.
 
 Example:
 
@@ -288,7 +272,7 @@ python3 Windows/csv_importers/sumecmd2sofelk.py /cases/IR-2026-042/SUM --hostnam
 
 ### 12. `wxtcmd2sofelk.py`
 
-Loads WxTCmd Windows Timeline CSV output into `activitiescache-<hostname>`. It recognizes WxTCmd output using filename clues such as `WxTCmd`, `ActivityOperations`, or `ActivityPackage`, and characteristic columns such as `Id`, `ActivityTypeOrg`, `ActivityType`, `Executable`, and `StartTime`. Preferred timestamp candidates are `StartTime`, `LastModifiedTime`, `CreatedTime`, `EndTime`, `ExpirationTime`, and `Timestamp`.
+Loads WxTCmd Windows Timeline CSV output into `activitiescache-<hostname>` with a fixed schema, installing the `sofelk-toolkit-activitiescache` index template (`activitiescache-*`). The per-user `<user>_Activity.csv`, `<user>_ActivityOperations.csv` and `<user>_Activity_PackageIDs.csv` files become `event.dataset` values `activitiescache.activity`, `activitiescache.operations` and `activitiescache.package_ids`, and the user from the file name is `user.name`. Columns are `activitiescache.<snake_case>` with fixed types. `@timestamp` is `StartTime`, falling back to `LastModifiedTime`; PackageIDs rows use ingest time because their only date is an expiry. Field reference: [`docs/schemas/activitiescache.md`](docs/schemas/activitiescache.md). An index created by the earlier inferred-type version is refused; delete it and reload the host.
 
 Example:
 
@@ -297,11 +281,9 @@ python3 Windows/csv_importers/wxtcmd2sofelk.py /cases/IR-2026-042/WindowsTimelin
 python3 Windows/csv_importers/wxtcmd2sofelk.py /cases/IR-2026-042/WindowsTimeline --hostname WS01
 ```
 
-WxTCmd can emit multiple related CSV report types, so inspect the dry-run discovery summary to confirm that the intended files were selected.
-
 ### 13. `clrusagelogs2sofelk.py`
 
-Loads the CSV produced by `ConvertUsageLogsTo-CSV.ps1` into `clrusagelogs-<hostname>`. The expected columns are `User`, `AssemblyName`, `FirstExecutionTimestamp`, `LastExecutionTimestamp`, and `File`. The importer validates the expected schema, converts the execution timestamps to Elasticsearch-compatible values, uses `LastExecutionTimestamp` as the preferred `@timestamp` with `FirstExecutionTimestamp` as fallback, preserves the user, assembly name, source file, and CLR usage-log information, and uses deterministic IDs for repeatable imports.
+Loads the CSV produced by `ConvertUsageLogsTo-CSV.ps1` into `clrusagelogs-<hostname>`. The expected columns are `User`, `AssemblyName`, `FirstExecutionTimestamp`, `LastExecutionTimestamp`, and `File`. The importer validates the expected schema, converts the execution timestamps to Elasticsearch-compatible values, uses `LastExecutionTimestamp` as the preferred `@timestamp` with `FirstExecutionTimestamp` as fallback, preserves the user, assembly name, source file, and CLR usage-log information, and uses deterministic IDs for repeatable imports. `case` is a flat keyword, as in every other index; a `clrusagelogs-<hostname>` index created when `case` was an object is refused, so delete it and reload the host.
 
 Example:
 
@@ -376,7 +358,7 @@ python3 Windows/json_importers/pecmd2sofelk.py /cases/IR-2026-042 --hostname WS0
 
 - CSV importers preserve the source-specific field transformations and type/timestamp behavior implemented for each importer. The original KAPE-derived CSV importers omit `forensic_tag` from stored documents as requested. The four JSON/CSV hybrid importers preserve their source-specific Logstash-derived transformations where implemented.
 - The evidence hostname is used to form each target index name. It is normalized to lowercase because Elasticsearch index names must be lowercase.
-- The AmcacheParser, ShimCache, RECmd, JLECmd and SBECmd importers use a fixed, template-defined schema (see [`docs/schemas/`](docs/schemas/)). The other scripts create an index if it does not exist, define explicit mappings for recognized non-string fields, and use dynamic string mappings. Existing mappings are checked before writing. CSV importers route incompatible field types to `<field>_text` where supported. JSON/CSV hybrid importers report bulk indexing rejections and exit non-zero when any documents are rejected.
+- The AmcacheParser, ShimCache, RECmd, JLECmd, SBECmd, RBCmd, WxTCmd, SrumECmd and BrowsingHistoryView importers use a fixed, template-defined schema (see [`docs/schemas/`](docs/schemas/)). The other scripts create an index if it does not exist, define explicit mappings for recognized non-string fields, and use dynamic string mappings. Existing mappings are checked before writing. CSV importers route incompatible field types to `<field>_text` where supported. JSON/CSV hybrid importers report bulk indexing rejections and exit non-zero when any documents are rejected.
 - Importers use deterministic document IDs based on host and stable file/record properties so rerunning the same exports does not create duplicate logical documents. Identical rows within one file are kept as separate documents (by row position, or by a counter for BrowsingHistoryView).
 - **Upgrade note:** the document-ID scheme changed for the RECmd, JLECmd, SBECmd, and CLR usage-log importers. If a host was loaded with an earlier version of these importers, delete that host's documents (or its index) before re-importing, otherwise the old and new IDs produce duplicates.
 - `--dry-run` previews parsing/transformation and prints sample documents, but it does not prove that a live Elasticsearch cluster will accept every mapping. Always test representative output from your installed tool versions before loading production evidence.
