@@ -10,7 +10,7 @@ import hashlib
 import json
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
@@ -24,6 +24,38 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+# EZ Tools write "2023-01-23 06:51:25.5665168" (7-digit fraction, no zone). datetime.fromisoformat
+# only accepts that from Python 3.11, so parse the ISO shapes here and keep 3.9+ working.
+ISO_TS_RE = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d+))?)?"
+    r"\s*(Z|[+-]\d{2}(?::?\d{2})?)?$",
+    re.IGNORECASE,
+)
+
+
+def _format_utc(parsed):
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _parse_iso(s):
+    m = ISO_TS_RE.match(s)
+    if not m:
+        return None
+    year, month, day, hour, minute, second, frac, tz = m.groups()
+    micro = int((frac or "0")[:6].ljust(6, "0"))
+    tzinfo = timezone.utc
+    if tz and tz.upper() != "Z":
+        digits = tz[1:].replace(":", "")
+        offset = timedelta(hours=int(digits[:2]), minutes=int(digits[2:4] or 0))
+        tzinfo = timezone(offset if tz[0] == "+" else -offset)
+    try:
+        return datetime(int(year), int(month), int(day), int(hour), int(minute), int(second or 0), micro, tzinfo)
+    except ValueError:
+        return None
+
+
 def parse_timestamp(value, formats=()):
     """Normalize ISO / common EZ Tools timestamp to UTC ISO8601 milliseconds."""
     if value is None or isinstance(value, (dict, list, bool)):
@@ -31,23 +63,108 @@ def parse_timestamp(value, formats=()):
     s = str(value).strip()
     if not s:
         return None
-    candidates = [s]
-    if s.endswith("Z"):
-        candidates.insert(0, s[:-1] + "+00:00")
-    for candidate in candidates:
-        try:
-            parsed = datetime.fromisoformat(candidate)
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
-            return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-        except ValueError:
-            pass
+    try:
+        parsed = _parse_iso(s)
+        if parsed is not None:
+            return _format_utc(parsed)
+    except (OverflowError, ValueError):
+        # Year 0001 with a negative offset cannot move to UTC.
+        return None
+    try:
+        return _format_utc(datetime.fromisoformat(s[:-1] + "+00:00" if s.endswith("Z") else s))
+    except (OverflowError, ValueError):
+        pass
     for fmt in formats:
         try:
-            parsed = datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
-            return parsed.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            return _format_utc(datetime.strptime(s, fmt))
         except ValueError:
             pass
+    return None
+
+
+class DateStats:
+    """Counts date values the importers could not use, so the run can warn instead of dropping them silently."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.empty = {}
+        self.invalid = {}
+        self.examples = {}
+        self.ingest_fallback = 0
+
+    def add_empty(self, field):
+        self.empty[field] = self.empty.get(field, 0) + 1
+
+    def add_invalid(self, field, value):
+        self.invalid[field] = self.invalid.get(field, 0) + 1
+        self.examples.setdefault(field, str(value)[:80])
+
+    def report(self, label, records):
+        """Warn (console and --log-file) about omitted dates and ingest-time fallbacks."""
+        if self.invalid:
+            detail = ", ".join(f"{f}={n} (e.g. {self.examples[f]!r})" for f, n in sorted(self.invalid.items()))
+            log.warning("%s: omitted %d unparseable date value(s): %s", label, sum(self.invalid.values()), detail)
+        if self.empty:
+            detail = ", ".join(f"{f}={n}" for f, n in sorted(self.empty.items()))
+            log.warning("%s: omitted %d empty date value(s): %s", label, sum(self.empty.values()), detail)
+        if self.ingest_fallback:
+            log.warning("%s: @timestamp fell back to ingest time for %d of %d record(s) (no usable source time)",
+                        label, self.ingest_fallback, records)
+
+    def merge(self, other):
+        for field, n in other.empty.items():
+            self.empty[field] = self.empty.get(field, 0) + n
+        for field, n in other.invalid.items():
+            self.invalid[field] = self.invalid.get(field, 0) + n
+            self.examples.setdefault(field, other.examples[field])
+        self.ingest_fallback += other.ingest_fallback
+
+
+# Per-file counters filled by normalize_date_field() and reported by run_import().
+DATE_STATS = DateStats()
+
+
+def get_nested(doc, dotted):
+    cur = doc
+    for part in dotted.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur
+
+
+def remove_nested(doc, dotted):
+    """Remove a dotted field, and any parent objects it leaves empty."""
+    parts = dotted.split(".")
+    chain = [doc]
+    for part in parts[:-1]:
+        cur = chain[-1].get(part) if isinstance(chain[-1], dict) else None
+        if not isinstance(cur, dict):
+            return
+        chain.append(cur)
+    chain[-1].pop(parts[-1], None)
+    for depth in range(len(parts) - 1, 0, -1):
+        if chain[depth]:
+            break
+        chain[depth - 1].pop(parts[depth - 1], None)
+
+
+def normalize_date_field(doc, dotted, formats=()):
+    """Rewrite a date field as UTC ISO8601, or omit it (and count it) when empty or unparseable."""
+    value = get_nested(doc, dotted)
+    if value is None:
+        return None
+    normalized = parse_timestamp(value, formats)
+    if normalized:
+        set_nested(doc, dotted, normalized)
+        return normalized
+    remove_nested(doc, dotted)
+    if isinstance(value, str) and not value.strip():
+        DATE_STATS.add_empty(dotted)
+    else:
+        DATE_STATS.add_invalid(dotted, value)
     return None
 
 
@@ -476,6 +593,8 @@ def run_import(args, label_type, index_prefix, patterns, exclude_patterns, mappi
         raise SystemExit("--batch-size and --workers must be positive integers.")
     ingest_time = utc_now()
     dry_samples = max(0, args.sample_docs)
+    run_dates = DateStats()
+    DATE_STATS.reset()
     if args.dry_run:
         total = 0
         for path in files:
@@ -486,6 +605,8 @@ def run_import(args, label_type, index_prefix, patterns, exclude_patterns, mappi
                     if path.suffix.lower() != ".csv":
                         record = normalize_boolean_strings(record)
                     doc = add_host_and_case(transform(record, path, hostname, label_type, ingest_time), hostname, case)
+                    if doc.get("@timestamp") == ingest_time:
+                        DATE_STATS.ingest_fallback += 1
                     if total < dry_samples:
                         print(json.dumps(doc, ensure_ascii=False, indent=2)[:12000])
                     total += 1
@@ -493,7 +614,12 @@ def run_import(args, label_type, index_prefix, patterns, exclude_patterns, mappi
             except (OSError, ValueError, csv.Error) as exc:
                 raise SystemExit(f"Failed to parse {path}: {exc}") from exc
             print(f"  {path.name}: {in_file} record(s)")
+            run_dates.merge(DATE_STATS)
+            DATE_STATS.report(path.name, in_file)
+            DATE_STATS.reset()
         print(f"Dry run complete: {total} record(s) parsed; nothing sent to Elasticsearch.")
+        if len(files) > 1:
+            run_dates.report("all files", total)
         return
 
     es = Elasticsearch(args.es, args.user, args.password, args.insecure)
@@ -513,10 +639,15 @@ def run_import(args, label_type, index_prefix, patterns, exclude_patterns, mappi
                 if path.suffix.lower() != ".csv":
                     record = normalize_boolean_strings(record)
                 doc = add_host_and_case(transform(record, path, hostname, label_type, ingest_time), hostname, case)
+                if doc.get("@timestamp") == ingest_time:
+                    DATE_STATS.ingest_fallback += 1
                 writer.add(document_id(hostname, path, ordinal, record), doc)
                 read_count += 1
                 per_file += 1
             print(f"  {path.name}: {per_file} record(s) queued")
+            run_dates.merge(DATE_STATS)
+            DATE_STATS.report(path.name, per_file)
+            DATE_STATS.reset()
         stats = writer.finish()
     except Exception:
         try:
@@ -529,6 +660,8 @@ def run_import(args, label_type, index_prefix, patterns, exclude_patterns, mappi
         es.finish_index(index, created)
     print(f"Done: {read_count} record(s), {stats['ok']} successful bulk items, {stats['errors']} item errors, {stats['batches']} bulk request(s).")
     log.info("done: index=%s records=%d ok=%d errors=%d batches=%d", index, read_count, stats["ok"], stats["errors"], stats["batches"])
+    if len(files) > 1:
+        run_dates.report("all files", read_count)
     for reason in stats["examples"]:
         print(f"  Elasticsearch item error: {reason}", file=sys.stderr)
     if stats["errors"]:

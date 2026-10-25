@@ -104,8 +104,8 @@ RD01 dry run: 428,361 `$MFT` rows, 365,943 `$J` rows, plus 9,369 rows from `$Boo
 | `file.update_timestamp` | UpdateTimestamp ($J) | date (dynamic date detection on ISO string) | text+keyword | **differs** | Not converted in place by either; toolkit disables date_detection |
 | `file.offset_to_data` | OffsetToData ($J) | long | long | match |  |
 | `file.source_file` | SourceFile | text+keyword | text+keyword | match |  |
-| `file.attributes.<flag>` | SiFlags ($MFT, integer) / FileAttributes ($J, names joined by \|) | boolean x19 | boolean x19 | **broken (CSV)** | $MFT CSV gives names, not an integer; toolkit sets every flag false |
-| `file.type` | isDirectory -> dir / file | text+keyword | text+keyword | **broken (CSV)** | CSV header is IsDirectory; toolkit reads isDirectory, so every row is 'file' |
+| `file.attributes.<flag>` | SiFlags ($MFT, integer) / FileAttributes ($J, names joined by \|) | boolean x19 | boolean x19 | match | $MFT CSV gives names (`Hidden\|System`), not an integer; the toolkit accepts both |
+| `file.type` | isDirectory -> dir / file | text+keyword | text+keyword | match | Toolkit reads both isDirectory (JSON) and IsDirectory (CSV) |
 | `kape.mft.inuse` | InUse | boolean | boolean | match |  |
 | `kape.mft.hasads` | HasAds | boolean | boolean | match |  |
 | `kape.mft.isads` | IsAds | boolean | boolean | match |  |
@@ -129,7 +129,7 @@ RD01 dry run: 249,672 events, 295 distinct `winlog.payload.event_data.*` names, 
 | `winlog.channel` | Channel | text+keyword | text+keyword | match |  |
 | `winlog.provider_name` | Provider | text+keyword | text+keyword | match |  |
 | `winlog.computer_name` | Computer | text+keyword | text+keyword | match | FQDN from the event, e.g. rd01.shieldbase.com |
-| `winlog.user.identifier` | UserId | text+keyword | (written as winlog.user.identifer) | **differs** | Toolkit misspells the field name |
+| `winlog.user.identifier` | UserId | text+keyword | text+keyword | match | Toolkit also copies it to `user.id` |
 | `user.id` | copy of winlog.user.identifier | (never set) | text+keyword | **differs** | Native copy reads a misspelled source field, so it is always empty natively |
 | `winlog.user.name` | UserName | text+keyword | text+keyword | match |  |
 | `winlog.process.pid` | ProcessId | long | long | match | Process that logged the event, not the subject process |
@@ -182,15 +182,15 @@ RD01 dry run: 294 shortcuts.
 | `file.target.drivetype` | DriveType | text+keyword | text+keyword | match | Removed when '(None)' |
 | `file.target.volume.label` | VolumeLabel | text+keyword | text+keyword | match |  |
 | `volume.serial_number` | VolumeSerialNumber | text+keyword | text+keyword | match | Pivot to prefetch volume.serial_number |
-| `file.target.inode` | TargetMFTEntryNumber | long | (dropped) | **broken (CSV)** | Value is hex (0x44EF2); toolkit int() fails and drops it |
-| `file.target.sequence_number` | TargetMFTSequenceNumber | long | (dropped) | **broken (CSV)** | Same hex problem |
+| `file.target.inode` | TargetMFTEntryNumber | long | long | match | CSV value is hex (0x44EF2); toolkit parses hex and decimal |
+| `file.target.sequence_number` | TargetMFTSequenceNumber | long | long | match | Same hex handling |
 | `file.tracker.machine_id` | MachineID | text+keyword | text+keyword | match | NetBIOS name of the creating machine |
 | `file.tracker.mac` | MachineMACAddress | text+keyword | text+keyword | match |  |
 | `file.tracker.mac_vendor` | MACVendor | text+keyword | text+keyword | match |  |
 | `file.tracker.creation` | TrackerCreatedOn | date if ISO (dynamic detection), else text | text+keyword | **differs** | Native date{} targets a misspelled field, so neither converts it |
 | `file.header_flags.<flag>` | HeaderFlags | boolean x27 | boolean x27 | match |  |
 | `file.attributes.<flag>` | FileAttributes | boolean x19 | boolean x19 | match |  |
-| `file.extra_blocks` | ExtraBlocks_Present (JSON) / ExtraBlocksPresent (CSV) | text+keyword (array) | (absent) | **broken (CSV)** | Toolkit only knows the JSON column name |
+| `file.extra_blocks` | ExtraBlocks_Present (JSON) / ExtraBlocksPresent (CSV) | text+keyword (array) | text+keyword (array) | match | Toolkit maps both column names |
 
 `file.header_flags.<flag>` is one boolean per LNK header flag (`data_flags_to_array.rb`): `hastargetidlist`, `haslinkinfo`, `hasname`, `hasrelativepath`, `hasworkingdir`, `hasarguments`, `hasiconlocation`, `isunicode`, `forcenolinkinfo`, `hasexpstring`, `runinseparateprocess`, `reserved0`, `hasdarwinid`, `runasuser`, `hasexpicon`, `nopidlalias`, `reserved1`, `runwithshimlayer`, `forcenolinktrack`, `enabletargetmetadata`, `disablelinkpathtracking`, `disableknownfoldertracking`, `disableknownfolderalias`, `allowlinktolink`, `unaliasonsave`, `preferenvironmentpath`, `keeplocalidlistforunctarget`.
 
@@ -237,32 +237,34 @@ RD01 dry run: 400 prefetch files, with 1,653 previous-run timestamps between the
 
 ## 3. Discrepancies found in the RD01 dry run
 
-These are differences between the toolkit and native SOF-ELK, or data problems that the dry run exposed. This change does not fix any of them. They are listed so the template and ES|QL work knows what to expect, and so each can be picked up as its own fix.
+These are differences between the toolkit and native SOF-ELK, or data problems that the dry run exposed. Items marked **Fixed** have since been corrected in the toolkit; the rest are still open. They are listed so the template and ES|QL work knows what to expect, and so each can be picked up as its own fix.
 
 ### 3.1 RD01 EvtxECmd CSV has no usable dates
 
-Every one of the 249,672 `TimeCreated` values in `EventLogs/20261025081931_EvtxECmd_Output.csv` looks like `43:24.1` (minutes:seconds.tenths). This is the pattern a CSV shows after it has been opened and re-saved in Excel. The importer cannot parse it. Every event then gets `@timestamp` = ingest time, and `winlog.time_created` is dropped from the index by `ignore_malformed`. The importer prints no warning. Any `evtxlogs-rd01` built from this file has no usable timeline. Re-export with EvtxECmd (JSON preferred) or use the original KAPE CSV.
+Every one of the 249,672 `TimeCreated` values in `EventLogs/20261025081931_EvtxECmd_Output.csv` looks like `43:24.1` (minutes:seconds.tenths). This is the pattern a CSV shows after it has been opened and re-saved in Excel. The importer cannot parse it. Every event then gets `@timestamp` = ingest time and `winlog.time_created` is omitted. The importer now prints a warning with the count and an example value (`winlog.time_created=249672 (e.g. '43:24.1')`). Any `evtxlogs-rd01` built from this file has no usable timeline. Re-export with EvtxECmd (JSON preferred) or use the original KAPE CSV.
 
 ### 3.2 MFTECmd CSV: attributes and directory flag
 
-- `$MFT` CSV writes `SiFlags` as names (`Archive|SparseFile|ReparsePoint`), not as the integer that the JSON output and SOF-ELK's `source_type => "int"` expect. The importer's `int()` fails, the mask becomes 0, and **every `file.attributes.*` flag is `false` for all 428,361 `$MFT` rows**. (`$J` rows use `FileAttributes` names and are correct.)
-- The CSV header is `IsDirectory`, but the importer reads `isDirectory` (the JSON spelling). As a result, **`file.type` is `file` for every row** and `file.attributes.directory` is never set from it.
+- **Fixed.** `$MFT` CSV writes `SiFlags` as names (`Archive|SparseFile|ReparsePoint`), not as the integer that the JSON output and SOF-ELK's `source_type => "int"` expect. The importer used to set every `file.attributes.*` flag to `false` for all 428,361 `$MFT` rows. It now reads names as well as integers (454,318 flags set on RD01).
+- **Fixed.** The CSV header is `IsDirectory`, but the importer read only `isDirectory` (the JSON spelling), so `file.type` was `file` for every row. It now reads both (RD01: 97,743 `dir`, 330,618 `file`).
 - The CSV-only timestomping indicators `SI<FN` and `uSecZeros` are discarded. `kape.mft.timestomped` is mapped natively, but current MFTECmd no longer emits a `Timestomped` column, so neither pipeline populates it.
 
 ### 3.3 EvtxECmd: field name and PayloadData parsing
 
-- Native `6504` renames `UserId` to **`winlog.user.identifier`**. The toolkit writes **`winlog.user.identifer`** (misspelled). Its code comment blames the Logstash rename, but the misspelling is actually in `8005`'s `copy` to `user.id`. Natively that copy reads a field that never exists, so `user.id` is never set. The toolkit does set `user.id`, which is useful, but the `winlog.user.*` name does not match.
+- **Fixed.** Native `6504` renames `UserId` to **`winlog.user.identifier`**. The toolkit wrote **`winlog.user.identifer`** (misspelled) and now writes `winlog.user.identifier`. Its code comment blames the Logstash rename, but the misspelling is actually in `8005`'s `copy` to `user.id`. Natively that copy reads a field that never exists, so `user.id` is never set. The toolkit does set `user.id`, which is useful, but the `winlog.user.*` name does not match.
 - Native grok `%{WORD:name}: %{GREEDYDATA:value}` is unanchored. The toolkit's regex is anchored at the start of the value. Values with a space in the label (`Command Name: Remove-AppxProvisionedPackage`, `Host Name: ConsoleHost`, `Script Name: ...`) are parsed natively as `winlog.payload_data.Name`. The toolkit fails on them and only adds a `_grokparsefail_6504-0N` tag. On RD01 that is **130,759 PayloadData values** that native SOF-ELK would have kept.
 - `winlog.payload.event_data.SystemTime`, `LoaderTime`, `OldTime` and `NewTime`: `8005` replaces the space with `T` so that Elasticsearch detects them as dates. The toolkit skips this and has date detection off, so they stay text.
 
 ### 3.4 Python < 3.11 cannot parse EZ Tools timestamps
 
+**Fixed.** `parse_timestamp` now parses the ISO shapes itself, so Python 3.9, 3.10 and 3.13 give identical output on RD01. Empty or unparseable date values are left out and counted in a warning, instead of being sent as raw text. Original finding:
+
 `parse_timestamp` relies on `datetime.fromisoformat`. Before Python 3.11 that function rejects the 7-digit fractional seconds that MFTECmd, PECmd and EvtxECmd write (`2023-01-23 06:51:25.5665168`). On Python 3.9 those values come back as `None`: `@timestamp` falls back to ingest time and the MACB fields are dropped by `ignore_malformed`. The README says Python 3.9+ is supported. The RD01 dry run used Python 3.13, where parsing works.
 
 ### 3.5 LECmd CSV: hex MFT references, extra blocks, arguments
 
-- In LECmd CSV, `TargetMFTEntryNumber` and `TargetMFTSequenceNumber` are hex strings (`0x44EF2`). Native Ruby `Integer()` parses hex. The toolkit pops the value before `int()` fails, so **both fields are dropped** (235 of 294 RD01 shortcuts had a value). That removes the LNK→MFT pivot on `file.target.inode` = `file.inode`.
-- The CSV column is `ExtraBlocksPresent`. The importer only maps the JSON name `ExtraBlocks_Present`, so `file.extra_blocks` is never written from CSV.
+- **Fixed** (RD01: 235 `file.target.inode`, 193 `file.target.sequence_number`). In LECmd CSV, `TargetMFTEntryNumber` and `TargetMFTSequenceNumber` are hex strings (`0x44EF2`). Native Ruby `Integer()` parses hex. The toolkit popped the value before `int()` fails, so **both fields are dropped** (235 of 294 RD01 shortcuts had a value). That removes the LNK→MFT pivot on `file.target.inode` = `file.inode`.
+- **Fixed.** The CSV column is `ExtraBlocksPresent`. The importer only mapped the JSON name `ExtraBlocks_Present`, so `file.extra_blocks` is never written from CSV.
 - `Arguments` is renamed to `file.target.path.arguments` and then overwritten when `file.target.path` is copied from `local_path` or `absolute_path`. **Both** pipelines therefore lose the command-line arguments. If there is no path to copy, natively `file.target.path` becomes an object and conflicts with its text mapping. The toolkit instead turns it into the JSON string `{"arguments":"..."}`. RD01 has 9 shortcuts with arguments.
 - The toolkit maps `file.target.path` as `text` with no `.keyword`, so it cannot be used for `STATS ... BY` or exact match. Native gives it `.keyword`.
 
