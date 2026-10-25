@@ -258,7 +258,7 @@ Built from the RD01 KAPE AmcacheParser output. Column names are matched case-ins
 | `LanguageID` | `amcache.language` | long |  |
 ## Changing the schema
 
-1. Edit the column map in `amcache2sofelk.py` (`COLUMNS` / `SECTION_COLUMNS`) and the matching field in `index-amcache.json`. The importer refuses to run if the two disagree.
+1. Edit the column map in `amcache2sofelk.py` (`COLUMNS` / `SECTION_COLUMNS`; the loading engine is `sof_elk_template_importer.py`) and the matching field in `index-amcache.json`. The importer refuses to run if the two disagree.
 2. Adding a field is safe for existing indexes: the importer pushes new fields to an existing `amcache-*` index on its next run.
 3. Changing an existing field's type is not: bump `toolkit_schema_version`, then delete and reload the affected `amcache-<hostname>` indexes.
 
