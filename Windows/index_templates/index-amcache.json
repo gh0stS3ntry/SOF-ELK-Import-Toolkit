@@ -1,0 +1,344 @@
+{
+  "index_patterns": [
+    "amcache-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "amcache",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "amcache": {
+          "properties": {
+            "application_name": {
+              "type": "keyword"
+            },
+            "bin_file_version": {
+              "type": "keyword"
+            },
+            "bin_product_version": {
+              "type": "keyword"
+            },
+            "binary_type": {
+              "type": "keyword"
+            },
+            "bundle_manifest_path": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "bus_reported_description": {
+              "type": "keyword"
+            },
+            "categories": {
+              "type": "keyword"
+            },
+            "class": {
+              "type": "keyword"
+            },
+            "class_guid": {
+              "type": "keyword"
+            },
+            "compid": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "compile_time": {
+              "type": "date"
+            },
+            "container_id": {
+              "type": "keyword"
+            },
+            "description": {
+              "type": "keyword"
+            },
+            "directory": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "discovery_method": {
+              "type": "keyword"
+            },
+            "driver_checksum": {
+              "type": "long"
+            },
+            "driver_date": {
+              "type": "date"
+            },
+            "driver_id": {
+              "type": "keyword"
+            },
+            "driver_in_box": {
+              "type": "boolean"
+            },
+            "driver_is_kernel_mode": {
+              "type": "boolean"
+            },
+            "driver_name": {
+              "type": "keyword"
+            },
+            "driver_package_strong_name": {
+              "type": "keyword"
+            },
+            "driver_signed": {
+              "type": "boolean"
+            },
+            "driver_type": {
+              "type": "long"
+            },
+            "driver_ver_date": {
+              "type": "date"
+            },
+            "driver_ver_version": {
+              "type": "keyword"
+            },
+            "enumerator": {
+              "type": "keyword"
+            },
+            "file_id": {
+              "type": "keyword"
+            },
+            "file_key_last_write": {
+              "type": "date"
+            },
+            "file_version_number": {
+              "type": "keyword"
+            },
+            "friendly_name": {
+              "type": "keyword"
+            },
+            "hidden_arp": {
+              "type": "boolean"
+            },
+            "hwid": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "icon": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "image_size": {
+              "type": "long"
+            },
+            "inbox_modern_app": {
+              "type": "boolean"
+            },
+            "inf": {
+              "type": "keyword"
+            },
+            "install_date_arp_last_modified": {
+              "type": "date"
+            },
+            "install_date_from_link_file": {
+              "type": "date"
+            },
+            "install_date_msi": {
+              "type": "date"
+            },
+            "install_state": {
+              "type": "long"
+            },
+            "is_active": {
+              "type": "boolean"
+            },
+            "is_connected": {
+              "type": "boolean"
+            },
+            "is_machine_container": {
+              "type": "boolean"
+            },
+            "is_networked": {
+              "type": "boolean"
+            },
+            "is_os_component": {
+              "type": "boolean"
+            },
+            "is_paired": {
+              "type": "boolean"
+            },
+            "is_pe_file": {
+              "type": "boolean"
+            },
+            "key_last_write": {
+              "type": "date"
+            },
+            "key_name": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "language": {
+              "type": "long"
+            },
+            "last_modified2": {
+              "type": "date"
+            },
+            "link_date": {
+              "type": "date"
+            },
+            "long_path_hash": {
+              "type": "keyword"
+            },
+            "malformed": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "manifest_path": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "manufacturer": {
+              "type": "keyword"
+            },
+            "matching_id": {
+              "type": "keyword"
+            },
+            "mft_entry_number": {
+              "type": "long"
+            },
+            "mft_sequence_number": {
+              "type": "long"
+            },
+            "model": {
+              "type": "keyword"
+            },
+            "model_id": {
+              "type": "keyword"
+            },
+            "model_name": {
+              "type": "keyword"
+            },
+            "model_number": {
+              "type": "keyword"
+            },
+            "msi_package_code": {
+              "type": "keyword"
+            },
+            "msi_product_code": {
+              "type": "keyword"
+            },
+            "name": {
+              "type": "keyword"
+            },
+            "os_version_at_install_time": {
+              "type": "keyword"
+            },
+            "package_full_name": {
+              "type": "keyword"
+            },
+            "parent_id": {
+              "type": "keyword"
+            },
+            "pe_header_checksum": {
+              "type": "long"
+            },
+            "pe_header_hash": {
+              "type": "keyword"
+            },
+            "primary_category": {
+              "type": "keyword"
+            },
+            "problem_code": {
+              "type": "long"
+            },
+            "product_version": {
+              "type": "keyword"
+            },
+            "program_id": {
+              "type": "keyword"
+            },
+            "program_instance_id": {
+              "type": "keyword"
+            },
+            "provider": {
+              "type": "keyword"
+            },
+            "publisher": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "registry_key_path": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "service": {
+              "type": "keyword"
+            },
+            "source": {
+              "type": "keyword"
+            },
+            "stack_id": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "state": {
+              "type": "long"
+            },
+            "store_app_type": {
+              "type": "keyword"
+            },
+            "submission_id": {
+              "type": "keyword"
+            },
+            "sys_file": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "type": {
+              "type": "keyword"
+            },
+            "uninstall_string": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "usn": {
+              "type": "long"
+            },
+            "version": {
+              "type": "keyword"
+            },
+            "volume_id": {
+              "type": "keyword"
+            },
+            "volume_id_last_write": {
+              "type": "date"
+            },
+            "wdf_version": {
+              "type": "keyword"
+            },
+            "unmapped": {
+              "type": "object",
+              "dynamic": "true"
+            }
+          }
+        },
+        "package": {
+          "properties": {
+            "installed": {
+              "type": "date"
+            },
+            "name": {
+              "type": "keyword"
+            },
+            "path": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "version": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Explicit schema for AmcacheParser CSV output loaded by amcache2sofelk.py: ECS file.* / package.* where they fit, amcache.* for the rest",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}

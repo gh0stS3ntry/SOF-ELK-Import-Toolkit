@@ -25,7 +25,11 @@ sof_elk_all_importers/
     │   ├── wxtcmd2sofelk.py
     │   ├── recmd2sofelk.py
     │   ├── clrusagelogs2sofelk.py
-    │   └── sof_elk_csv_bulk_common.py
+    │   ├── sof_elk_csv_bulk_common.py
+    │   └── sof_elk_index_templates.py
+    ├── index_templates/
+    │   ├── component-toolkit-common.json
+    │   └── index-amcache.json
     └── json_importers/
         ├── mftecmd2sofelk.py
         ├── evtxecmd2sofelk.py
@@ -34,7 +38,7 @@ sof_elk_all_importers/
         └── sof_elk_json_bulk_common.py
 ```
 
-Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. In particular, keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers in `csv_importers/` (the RBCmd, RecentFileCacheParser, SQLECmd, SrumECmd, SumECmd, and WxTCmd importers require it).
+Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. In particular, keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers in `csv_importers/` (the RBCmd, RecentFileCacheParser, SQLECmd, SrumECmd, SumECmd, and WxTCmd importers require it). The AmcacheParser importer needs `sof_elk_index_templates.py` beside it and the `index_templates/` folder next to `csv_importers/`.
 
 ## Quick start: use the wrapper
 
@@ -157,7 +161,11 @@ SBECmd filenames can vary by export workflow, so ensure its CSV headers identify
 
 ### 4. `amcache2sofelk.py`
 
-Loads AmcacheParser section CSVs into `amcache-<hostname>`. It recognizes section names in timestamp-prefixed filenames such as `*_Amcache_ProgramEntries.csv`, `*_Amcache_AssociatedFileEntries.csv`, and `*_Amcache_UnassociatedFileEntries.csv`, while also inspecting characteristic headers. Fields are typed from source values; incompatible types found across Amcache sections are handled as strings. Timestamps are normalized, with `@timestamp` selected by section, and `kape.source_file`, `kape.timestamp_source`, `host.name`, and optional `case` are added. `--local-tz` controls how columns explicitly marked LOCAL are interpreted.
+Loads AmcacheParser section CSVs into `amcache-<hostname>` with a fixed schema. It recognizes section names in timestamp-prefixed filenames such as `*_Amcache_ProgramEntries.csv`, `*_Amcache_AssociatedFileEntries.csv`, and `*_Amcache_UnassociatedFileEntries.csv`, while also inspecting characteristic headers.
+
+Every column maps to a fixed field and type defined in `Windows/index_templates/index-amcache.json` (composed with `component-toolkit-common.json`): ECS names where they fit (`file.path`, `file.name`, `file.hash.sha1`, `file.size`, `file.pe.*`, `package.*`) and `amcache.<snake_case>` for the rest. Each document carries `event.dataset` (e.g. `amcache.program_entries`), `host.name`, `kape.source_file`, `kape.timestamp_source`, `kape.timestamp_meaning`, and optional `case`. Before loading, the importer installs the `sofelk-toolkit-amcache` index template (pattern `amcache-*`) and creates the index from it, so every host's index has identical types. Unknown columns go to `amcache.unmapped.*`; values that do not fit their type are kept in `amcache.malformed`. The full column-to-field reference is in [`docs/schemas/amcache.md`](docs/schemas/amcache.md).
+
+AmcacheParser timestamps are UTC, so `--local-tz` is accepted (the wrapper passes it) but not used. An `amcache-<hostname>` index created by the earlier inferred-type version is refused; delete it and reload the host.
 
 Example:
 
@@ -333,7 +341,7 @@ python3 Windows/json_importers/pecmd2sofelk.py /cases/IR-2026-042 --hostname WS0
 
 - CSV importers preserve the source-specific field transformations and type/timestamp behavior implemented for each importer. The original KAPE-derived CSV importers omit `forensic_tag` from stored documents as requested. The four JSON/CSV hybrid importers preserve their source-specific Logstash-derived transformations where implemented.
 - The evidence hostname is used to form each target index name. It is normalized to lowercase because Elasticsearch index names must be lowercase.
-- The scripts create an index if it does not exist, define explicit mappings for recognized non-string fields, and use dynamic string mappings. Existing mappings are checked before writing. CSV importers route incompatible field types to `<field>_text` where supported. JSON/CSV hybrid importers report bulk indexing rejections and exit non-zero when any documents are rejected.
+- The AmcacheParser importer uses a fixed, template-defined schema (see [`docs/schemas/amcache.md`](docs/schemas/amcache.md)). The other scripts create an index if it does not exist, define explicit mappings for recognized non-string fields, and use dynamic string mappings. Existing mappings are checked before writing. CSV importers route incompatible field types to `<field>_text` where supported. JSON/CSV hybrid importers report bulk indexing rejections and exit non-zero when any documents are rejected.
 - Importers use deterministic document IDs based on host and stable file/record properties so rerunning the same exports does not create duplicate logical documents. Identical rows within one file are kept as separate documents (by row position, or by a counter for BrowsingHistoryView).
 - **Upgrade note:** the document-ID scheme changed for the RECmd, JLECmd, SBECmd, and CLR usage-log importers. If a host was loaded with an earlier version of these importers, delete that host's documents (or its index) before re-importing, otherwise the old and new IDs produce duplicates.
 - `--dry-run` previews parsing/transformation and prints sample documents, but it does not prove that a live Elasticsearch cluster will accept every mapping. Always test representative output from your installed tool versions before loading production evidence.
