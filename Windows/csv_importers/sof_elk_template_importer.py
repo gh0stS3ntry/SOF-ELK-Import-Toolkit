@@ -33,6 +33,9 @@ ISO_RE = re.compile(
 )
 # Month-day-year dates, e.g. 06-21-2006 (Amcache DevicePnps DriverVerDate)
 MDY_RE = re.compile(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$")
+# .NET en-US DateTimeOffset text, e.g. "8/31/2022 7:34:40 PM +00:00" (RECmd ETW plugin)
+US_DT_RE = re.compile(
+    r"^(\d{1,2})/(\d{1,2})/(\d{4}) (\d{1,2}):(\d{2}):(\d{2}) ([AP]M)(?: ([+-]\d{2}):?(\d{2}))?$", re.I)
 INT_RE = re.compile(r"^-?\d{1,19}$")
 BOOLS = {"true": True, "false": False}
 INT64_MAX = 2**63 - 1
@@ -40,7 +43,7 @@ TZ_ARG_RE = re.compile(r"^([+-])(\d{1,2}):?(\d{2})?$")
 
 # Conversions a column map can use, and the template type each must land in:
 #   keyword  value as-is (trimmed)
-#   date     EZ Tools UTC timestamp -> ISO 8601 (ms)
+#   date     EZ Tools UTC timestamp (or en-US "M/D/YYYY h:mm:ss AM +00:00") -> ISO 8601 (ms)
 #   mdy      MM-DD-YYYY date -> ISO 8601 midnight UTC
 #   long     integer
 #   boolean  True / False
@@ -65,10 +68,15 @@ class Artifact:
     time_prefs       section kind -> ordered @timestamp candidate fields
     time_default     candidates for kinds not in time_prefs
     time_meaning     lower-case source column -> what it means (kape.timestamp_meaning)
+    isolated_kinds   section kinds that use only their section_columns, never `columns`
+    open_field       (kind, snake_name) -> field for columns not in the map, if that kind
+                     expects open-ended columns (not reported as unknown); None = default
+    enrich           (doc, meta) -> None, adds derived fields after the columns are mapped
     """
 
     def __init__(self, name, tool, columns, detect_section, dataset_for, time_default,
-                 section_columns=None, section_kind=None, time_prefs=None, time_meaning=None):
+                 section_columns=None, section_kind=None, time_prefs=None, time_meaning=None,
+                 isolated_kinds=(), open_field=None, enrich=None):
         self.name = name
         self.tool = tool
         self.columns = columns
@@ -80,6 +88,9 @@ class Artifact:
         self.time_default = time_default
         self.time_meaning = {"ingest_time": "No usable time in this row - time the row was loaded",
                              **(time_meaning or {})}
+        self.isolated_kinds = set(isolated_kinds)
+        self.open_field = open_field or (lambda kind, name: None)
+        self.enrich = enrich
 
 
 # --------------------------------------------------------------------------- helpers
@@ -98,6 +109,21 @@ def parse_ts(value):
     return f"{date}T{time}.{frac}{tz}"
 
 
+def parse_us_dt(value):
+    """"8/31/2022 7:34:40 PM +00:00" -> ISO 8601, or None. No offset = UTC."""
+    m = US_DT_RE.match(value)
+    if not m:
+        return None
+    mo, d, y, h, mi, sec, ampm, oh, om = m.groups()
+    h = int(h) % 12 + (12 if ampm.upper() == "PM" else 0)
+    try:
+        stamp = dt.datetime(int(y), int(mo), int(d), h, int(mi), int(sec))
+    except ValueError:
+        return None
+    tz = "Z" if not oh or (oh in ("+00", "-00") and om == "00") else f"{oh}:{om}"
+    return stamp.strftime("%Y-%m-%dT%H:%M:%S") + ".000" + tz
+
+
 def parse_mdy(value):
     m = MDY_RE.match(value)
     if not m:
@@ -114,7 +140,7 @@ def convert(value, conv):
     if conv == "keyword":
         return value
     if conv == "date":
-        return parse_ts(value)
+        return parse_ts(value) or parse_us_dt(value)
     if conv == "mdy":
         return parse_mdy(value)
     if conv == "long":
@@ -167,19 +193,24 @@ def sanitize_hostname(hostname):
 def column_plan(art, section, header):
     """Per-column targets for one file: list of (column, [(field, conv), ...]) in header order,
     plus the columns that are not in the artifact's map."""
-    overrides = art.section_columns.get(art.section_kind(section), {})
+    kind = art.section_kind(section)
+    overrides = art.section_columns.get(kind, {})
+    columns = {} if kind in art.isolated_kinds else art.columns
     plan, unknown, used = [], [], set()
     for col in header:
         key = col.strip().lower()
-        targets = overrides.get(key) or art.columns.get(key)
+        targets = overrides.get(key) or columns.get(key)
         if targets is None:
             name = snake(col)
             base, i = name, 2
             while name in used:
                 name, i = f"{base}_{i}", i + 1
             used.add(name)
-            targets = [(f"{art.name}.unmapped.{name}", "keyword")]
-            unknown.append(col.strip())
+            field = art.open_field(kind, name)
+            if field is None:
+                field = f"{art.name}.unmapped.{name}"
+                unknown.append(col.strip())
+            targets = [(field, "keyword")]
         plan.append((col.strip(), targets))
     return plan, unknown
 
@@ -256,6 +287,8 @@ def build_doc(art, row, plan, kind, meta, ingest_time, issues):
     }
     if meta.get("case"):
         doc["case"] = meta["case"]
+    if art.enrich:
+        art.enrich(doc, meta)
     return doc
 
 
@@ -440,7 +473,7 @@ def run(art, description):
 
     def file_meta(f, s):
         return {"host": host, "dataset": art.dataset_for(s["section"]), "source_file": f.name,
-                "case": args.case}
+                "path": f, "case": args.case}
 
     if args.dry_run:
         print("\nColumn -> field per section:")

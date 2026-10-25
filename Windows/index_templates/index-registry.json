@@ -1,0 +1,191 @@
+{
+  "index_patterns": [
+    "registry-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "registry",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "registry": {
+          "properties": {
+            "batch_value_name": {
+              "type": "keyword"
+            },
+            "category": {
+              "type": "keyword"
+            },
+            "comment": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "data": {
+              "properties": {
+                "strings": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "type": {
+                  "type": "keyword"
+                }
+              }
+            },
+            "deleted": {
+              "type": "boolean"
+            },
+            "description": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "hive_path": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "hive_type": {
+              "type": "keyword"
+            },
+            "key": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "last_write": {
+              "type": "date"
+            },
+            "malformed": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "plugin": {
+              "properties": {
+                "created_on": {
+                  "type": "date"
+                },
+                "executed_on": {
+                  "type": "date"
+                },
+                "execution_time": {
+                  "type": "date"
+                },
+                "extension_last_opened": {
+                  "type": "date"
+                },
+                "first_installed": {
+                  "type": "date"
+                },
+                "initial_timestamp": {
+                  "type": "date"
+                },
+                "installed": {
+                  "type": "date"
+                },
+                "last_closed": {
+                  "type": "date"
+                },
+                "last_connected": {
+                  "type": "date"
+                },
+                "last_detection_time": {
+                  "type": "date"
+                },
+                "last_executed": {
+                  "type": "date"
+                },
+                "last_incorrect_password": {
+                  "type": "date"
+                },
+                "last_login_time": {
+                  "type": "date"
+                },
+                "last_logoff_time": {
+                  "type": "date"
+                },
+                "last_logon_time": {
+                  "type": "date"
+                },
+                "last_modified": {
+                  "type": "date"
+                },
+                "last_opened": {
+                  "type": "date"
+                },
+                "last_password_change": {
+                  "type": "date"
+                },
+                "last_start": {
+                  "type": "date"
+                },
+                "last_stop": {
+                  "type": "date"
+                },
+                "modified_time": {
+                  "type": "date"
+                },
+                "name_key_last_write": {
+                  "type": "date"
+                },
+                "opened_on": {
+                  "type": "date"
+                },
+                "parameters_key_last_write": {
+                  "type": "date"
+                },
+                "timestamp": {
+                  "type": "date"
+                }
+              },
+              "dynamic": "true"
+            },
+            "plugin_detail_file": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "recursive": {
+              "type": "boolean"
+            },
+            "value": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "value_data2": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "value_data3": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "unmapped": {
+              "type": "object",
+              "dynamic": "true"
+            }
+          }
+        },
+        "user": {
+          "properties": {
+            "name": {
+              "type": "keyword"
+            }
+          }
+        },
+        "kape": {
+          "properties": {
+            "source_hive": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Explicit schema for RECmd output loaded by recmd2sofelk.py: ECS registry.key/value/data.* and user.name, fixed registry.* for the batch CSV, open-ended registry.plugin.* keywords (typed timestamp columns) for plugin-detail CSVs",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}

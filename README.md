@@ -31,6 +31,7 @@ sof_elk_all_importers/
     ├── index_templates/
     │   ├── component-toolkit-common.json
     │   ├── index-amcache.json
+    │   ├── index-registry.json
     │   └── index-shimcache.json
     └── json_importers/
         ├── mftecmd2sofelk.py
@@ -40,7 +41,7 @@ sof_elk_all_importers/
         └── sof_elk_json_bulk_common.py
 ```
 
-Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. In particular, keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers in `csv_importers/` (the RBCmd, RecentFileCacheParser, SQLECmd, SrumECmd, SumECmd, and WxTCmd importers require it). The AmcacheParser and ShimCache importers need `sof_elk_template_importer.py` and `sof_elk_index_templates.py` beside them, and the `index_templates/` folder next to `csv_importers/`.
+Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. In particular, keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers in `csv_importers/` (the RBCmd, RecentFileCacheParser, SQLECmd, SrumECmd, SumECmd, and WxTCmd importers require it). The AmcacheParser, ShimCache and RECmd importers need `sof_elk_template_importer.py` and `sof_elk_index_templates.py` beside them, and the `index_templates/` folder next to `csv_importers/`.
 
 ## Quick start: use the wrapper
 
@@ -189,7 +190,7 @@ python3 Windows/csv_importers/shimcache2sofelk.py /cases/IR-2026-042/ProgramExec
 
 ### 6. `recmd2sofelk.py`
 
-Loads RECmd batch output and plugin-detail CSVs into `registry-<hostname>`. It derives plugin tags and, where present, hive information from the filename after removing the KAPE timestamp prefix. It infers types per plugin and reconciles them across the common index; disagreements become strings to avoid index mapping conflicts. It converts EZ Tools timestamps to ISO 8601, selects a suitable date field for `@timestamp`, and adds `kape.source_file`, optional `kape.source_hive`, `kape.timestamp_source`, `host.name`, and optional `case`. LOCAL timestamp fields remain text unless `--local-tz` is supplied. Stable IDs make repeat imports idempotent for the same file and row.
+Loads RECmd batch output and plugin-detail CSVs into `registry-<hostname>` with a fixed schema, installing the `sofelk-toolkit-registry` index template (`registry-*`). The batch CSV's columns map to fixed fields: ECS `registry.key`, `registry.value`, `registry.data.type` and `registry.data.strings`, plus `registry.<snake_case>` for the rest. Plugin-detail CSVs (one schema per plugin) share `registry.key` with the batch CSV and put their other columns under `registry.plugin.<snake_case>`. Those are keywords, except known timestamp columns, which are dates and feed `@timestamp`. `event.dataset` names the plugin (`registry.userassist`, `registry.services`, ...). `user.name` is added for per-user hives, and `kape.source_hive` from plugin file names. Field reference: [`docs/schemas/registry.md`](docs/schemas/registry.md). `--local-tz` is accepted but not used: `*LOCAL` columns stay keywords. An index created by the earlier inferred-type version is refused; delete it and reload the host.
 
 Examples:
 
@@ -343,7 +344,7 @@ python3 Windows/json_importers/pecmd2sofelk.py /cases/IR-2026-042 --hostname WS0
 
 - CSV importers preserve the source-specific field transformations and type/timestamp behavior implemented for each importer. The original KAPE-derived CSV importers omit `forensic_tag` from stored documents as requested. The four JSON/CSV hybrid importers preserve their source-specific Logstash-derived transformations where implemented.
 - The evidence hostname is used to form each target index name. It is normalized to lowercase because Elasticsearch index names must be lowercase.
-- The AmcacheParser and ShimCache importers use a fixed, template-defined schema (see [`docs/schemas/`](docs/schemas/)). The other scripts create an index if it does not exist, define explicit mappings for recognized non-string fields, and use dynamic string mappings. Existing mappings are checked before writing. CSV importers route incompatible field types to `<field>_text` where supported. JSON/CSV hybrid importers report bulk indexing rejections and exit non-zero when any documents are rejected.
+- The AmcacheParser, ShimCache and RECmd importers use a fixed, template-defined schema (see [`docs/schemas/`](docs/schemas/)). The other scripts create an index if it does not exist, define explicit mappings for recognized non-string fields, and use dynamic string mappings. Existing mappings are checked before writing. CSV importers route incompatible field types to `<field>_text` where supported. JSON/CSV hybrid importers report bulk indexing rejections and exit non-zero when any documents are rejected.
 - Importers use deterministic document IDs based on host and stable file/record properties so rerunning the same exports does not create duplicate logical documents. Identical rows within one file are kept as separate documents (by row position, or by a counter for BrowsingHistoryView).
 - **Upgrade note:** the document-ID scheme changed for the RECmd, JLECmd, SBECmd, and CLR usage-log importers. If a host was loaded with an earlier version of these importers, delete that host's documents (or its index) before re-importing, otherwise the old and new IDs produce duplicates.
 - `--dry-run` previews parsing/transformation and prints sample documents, but it does not prove that a live Elasticsearch cluster will accept every mapping. Always test representative output from your installed tool versions before loading production evidence.
