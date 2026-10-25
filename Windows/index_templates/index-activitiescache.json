@@ -1,0 +1,128 @@
+{
+  "index_patterns": [
+    "activitiescache-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "activitiescache",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "activitiescache": {
+          "properties": {
+            "activity_type": {
+              "type": "keyword"
+            },
+            "activity_type_org": {
+              "type": "long"
+            },
+            "additional_information": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "clipboard_payload": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "content_info": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "created_in_cloud": {
+              "type": "date"
+            },
+            "device_platform": {
+              "type": "keyword"
+            },
+            "display_text": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "duration": {
+              "type": "keyword"
+            },
+            "end_time": {
+              "type": "date"
+            },
+            "etag": {
+              "type": "long"
+            },
+            "executable": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "expiration_time": {
+              "type": "date"
+            },
+            "id": {
+              "type": "keyword"
+            },
+            "is_local_only": {
+              "type": "boolean"
+            },
+            "last_modified_on_client": {
+              "type": "date"
+            },
+            "last_modified_time": {
+              "type": "date"
+            },
+            "malformed": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "operation_type": {
+              "type": "keyword"
+            },
+            "original_last_modified_on_client": {
+              "type": "date"
+            },
+            "package_id_hash": {
+              "type": "keyword"
+            },
+            "package_name": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "payload": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "platform": {
+              "type": "keyword"
+            },
+            "platform_device_id": {
+              "type": "keyword"
+            },
+            "start_time": {
+              "type": "date"
+            },
+            "time_zone": {
+              "type": "keyword"
+            },
+            "unmapped": {
+              "type": "object",
+              "dynamic": "true"
+            }
+          }
+        },
+        "user": {
+          "properties": {
+            "name": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Explicit schema for WxTCmd CSV output loaded by wxtcmd2sofelk.py",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}
