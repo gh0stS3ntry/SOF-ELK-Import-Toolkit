@@ -27,7 +27,14 @@ sof_elk_all_importers/
     │   ├── wxtcmd2sofelk.py
     │   ├── recmd2sofelk.py
     │   ├── clrusagelogs2sofelk.py
-    │   └── sof_elk_csv_bulk_common.py
+    │   ├── sof_elk_csv_bulk_common.py
+    │   ├── sof_elk_index_templates.py
+    │   └── sof_elk_template_importer.py
+    ├── index_templates/
+    │   ├── component-toolkit-common.json
+    │   ├── index-amcache.json
+    │   ├── index-registry.json
+    │   └── index-shimcache.json
     └── json_importers/
         ├── mftecmd2sofelk.py
         ├── evtxecmd2sofelk.py
@@ -183,7 +190,11 @@ SBECmd filenames can vary by export workflow, so ensure its CSV headers identify
 
 ### 4. `amcache2sofelk.py`
 
-Loads AmcacheParser section CSVs into `amcache-<hostname>`. It recognizes section names in timestamp-prefixed filenames such as `*_Amcache_ProgramEntries.csv`, `*_Amcache_AssociatedFileEntries.csv`, and `*_Amcache_UnassociatedFileEntries.csv`, while also inspecting characteristic headers. Fields are typed from source values; incompatible types found across Amcache sections are handled as strings. Timestamps are normalized, with `@timestamp` selected by section, and `kape.source_file`, `kape.timestamp_source`, `host.name`, and optional `case` are added. `--local-tz` controls how columns explicitly marked LOCAL are interpreted.
+Loads AmcacheParser section CSVs into `amcache-<hostname>` with a fixed schema. It recognizes section names in timestamp-prefixed filenames such as `*_Amcache_ProgramEntries.csv`, `*_Amcache_AssociatedFileEntries.csv`, and `*_Amcache_UnassociatedFileEntries.csv`, while also inspecting characteristic headers.
+
+Every column maps to a fixed field and type defined in `Windows/index_templates/index-amcache.json` (composed with `component-toolkit-common.json`): ECS names where they fit (`file.path`, `file.name`, `file.hash.sha1`, `file.size`, `file.pe.*`, `package.*`) and `amcache.<snake_case>` for the rest. Each document carries `event.dataset` (e.g. `amcache.program_entries`), `host.name`, `kape.source_file`, `kape.timestamp_source`, `kape.timestamp_meaning`, and optional `case`. Before loading, the importer installs the `sofelk-toolkit-amcache` index template (pattern `amcache-*`) and creates the index from it, so every host's index has identical types. Unknown columns go to `amcache.unmapped.*`; values that do not fit their type are kept in `amcache.malformed`. The full column-to-field reference is in [`docs/schemas/amcache.md`](docs/schemas/amcache.md).
+
+AmcacheParser timestamps are UTC, so `--local-tz` is accepted (the wrapper passes it) but not used. An `amcache-<hostname>` index created by the earlier inferred-type version is refused; delete it and reload the host.
 
 Example:
 
@@ -194,7 +205,7 @@ python3 Windows/csv_importers/amcache2sofelk.py /cases/IR-2026-042/ProgramExecut
 
 ### 5. `shimcache2sofelk.py`
 
-Loads AppCompatCacheParser / ShimCache CSVs into `shimcache-<hostname>`. It recognizes filename clues such as `AppCompatCache` or `ShimCache` and characteristic headers such as `CacheEntryPosition` and `LastModifiedTimeUTC`. Timestamp fields are normalized where recognized, and the importer adds the host and KAPE source metadata. This importer treats the chosen event time as the file metadata time represented by ShimCache; it should not be interpreted as proof that a program executed at that time.
+Loads AppCompatCacheParser / ShimCache CSVs into `shimcache-<hostname>` with a fixed schema, the same way as the Amcache importer: it installs the `sofelk-toolkit-shimcache` index template (`shimcache-*`) and maps each column to a fixed field. The entry's path goes to `file.path` (lower-cased; the original is kept in `shimcache.path`), and `LastModifiedTimeUTC` goes to `file.mtime` and `@timestamp`. That time is the file's $SI last-modified time, **not proof of execution**. Recognized by filename clues such as `AppCompatCache` or `ShimCache` and by the `CacheEntryPosition` + `LastModifiedTimeUTC` headers. Field reference: [`docs/schemas/shimcache.md`](docs/schemas/shimcache.md). An index created by the earlier inferred-type version is refused; delete it and reload the host.
 
 Example:
 
@@ -205,7 +216,7 @@ python3 Windows/csv_importers/shimcache2sofelk.py /cases/IR-2026-042/ProgramExec
 
 ### 6. `recmd2sofelk.py`
 
-Loads RECmd batch output and plugin-detail CSVs into `registry-<hostname>`. It derives plugin tags and, where present, hive information from the filename after removing the KAPE timestamp prefix. It infers types per plugin and reconciles them across the common index; disagreements become strings to avoid index mapping conflicts. It converts EZ Tools timestamps to ISO 8601, selects a suitable date field for `@timestamp`, and adds `kape.source_file`, optional `kape.source_hive`, `kape.timestamp_source`, `host.name`, and optional `case`. LOCAL timestamp fields remain text unless `--local-tz` is supplied. Stable IDs make repeat imports idempotent for the same file and row.
+Loads RECmd batch output and plugin-detail CSVs into `registry-<hostname>` with a fixed schema, installing the `sofelk-toolkit-registry` index template (`registry-*`). The batch CSV's columns map to fixed fields: ECS `registry.key`, `registry.value`, `registry.data.type` and `registry.data.strings`, plus `registry.<snake_case>` for the rest. Plugin-detail CSVs (one schema per plugin) share `registry.key` with the batch CSV and put their other columns under `registry.plugin.<snake_case>`. Those are keywords, except known timestamp columns, which are dates and feed `@timestamp`. `event.dataset` names the plugin (`registry.userassist`, `registry.services`, ...). `user.name` is added for per-user hives, and `kape.source_hive` from plugin file names. Field reference: [`docs/schemas/registry.md`](docs/schemas/registry.md). `--local-tz` is accepted but not used: `*LOCAL` columns stay keywords. An index created by the earlier inferred-type version is refused; delete it and reload the host.
 
 Examples:
 
@@ -361,7 +372,7 @@ python3 Windows/json_importers/pecmd2sofelk.py /cases/IR-2026-042 --hostname WS0
 
 - CSV importers preserve the source-specific field transformations and type/timestamp behavior implemented for each importer. The original KAPE-derived CSV importers omit `forensic_tag` from stored documents as requested. The four JSON/CSV hybrid importers preserve their source-specific Logstash-derived transformations where implemented.
 - The evidence hostname is used to form each target index name. It is normalized to lowercase because Elasticsearch index names must be lowercase.
-- The scripts create an index if it does not exist, define explicit mappings for recognized non-string fields, and use dynamic string mappings. Existing mappings are checked before writing. CSV importers route incompatible field types to `<field>_text` where supported. JSON/CSV hybrid importers report bulk indexing rejections and exit non-zero when any documents are rejected.
+- The AmcacheParser, ShimCache and RECmd importers use a fixed, template-defined schema (see [`docs/schemas/`](docs/schemas/)). The other scripts create an index if it does not exist, define explicit mappings for recognized non-string fields, and use dynamic string mappings. Existing mappings are checked before writing. CSV importers route incompatible field types to `<field>_text` where supported. JSON/CSV hybrid importers report bulk indexing rejections and exit non-zero when any documents are rejected.
 - Importers use deterministic document IDs based on host and stable file/record properties so rerunning the same exports does not create duplicate logical documents. Identical rows within one file are kept as separate documents (by row position, or by a counter for BrowsingHistoryView).
 - **Upgrade note:** the document-ID scheme changed for the RECmd, JLECmd, SBECmd, and CLR usage-log importers. If a host was loaded with an earlier version of these importers, delete that host's documents (or its index) before re-importing, otherwise the old and new IDs produce duplicates.
 - `--dry-run` previews parsing/transformation and prints sample documents, but it does not prove that a live Elasticsearch cluster will accept every mapping. Always test representative output from your installed tool versions before loading production evidence.

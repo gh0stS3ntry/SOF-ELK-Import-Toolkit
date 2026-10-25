@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Load AppCompatCache / ShimCache CSVs into shimcache-<hostname>.
+"""Load AppCompatCacheParser (ShimCache) CSVs into shimcache-<hostname>.
 
-Preserves the original pe2sofelk.py ShimCache field mappings and timestamp meaning while
-omitting `forensic_tag`. ShimCache last-modified times are not asserted to be execution times.
+Every column is mapped to a fixed field with a fixed type, defined by the explicit index template
+in Windows/index_templates/index-shimcache.json (plus the shared component-toolkit-common.json).
+The entry's path is in ECS file.path (lower-cased) and its $SI last-modified time in file.mtime,
+which also feeds @timestamp. That time is file metadata, not proof of execution.
+
+The loading itself (template install, index creation, bulk) is in sof_elk_template_importer.py.
+Full field reference: docs/schemas/shimcache.md.
 """
 import argparse
 import csv
@@ -43,101 +48,32 @@ def time_prefs(tag):
         return ["KeyLastWriteTimestamp", "FileKeyLastWriteTimestamp"]
     return []
 
+import sof_elk_template_importer as engine
 
-# What each @timestamp source means (stored in kape.timestamp_meaning)
+# Lower-case CSV column -> list of (field, conversion). A column can feed more than one field.
+# Conversions are listed in sof_elk_template_importer.CONV_TYPE.
+COLUMNS = {
+    "controlset": [("shimcache.control_set", "long")],
+    "cacheentryposition": [("shimcache.cache_entry_position", "long")],
+    # Path as recorded (original case, may be \??\ or SYSVOL-prefixed) and the normalized form
+    "path": [("file.path", "path"), ("shimcache.path", "keyword")],
+    "lastmodifiedtimeutc": [("file.mtime", "date")],
+    "executed": [("shimcache.executed", "keyword")],  # Yes / No / NA
+    "duplicate": [("shimcache.duplicate", "boolean")],
+    "sourcefile": [("shimcache.source_hive", "keyword")],  # SYSTEM hive the entry came from
+}
+
 TIME_MEANING = {
     "lastmodifiedtimeutc": "File last-modified time ($SI) recorded in ShimCache - NOT an execution time",
-    "filekeylastwritetimestamp": "Amcache file key last write - often close to first execution, not proof of it",
-    "keylastwritetimestamp": "Amcache registry key last write time",
-    "installdate": "Program install date recorded in Amcache",
-    "ingest_time": "No usable time in this row - time the row was loaded",
-}
-
-# Fallback for unrecognised CSVs: column names (lower-case, no underscores) in order
-TIME_PRIORITY = [
-    "lastinteracted", "lastaccessed", "sourcemodified",
-    "lastwritetimestamp", "lastwritetime", "lastwrite", "lastexecuted", "lastexecution",
-    "lastrun", "lastruntime", "executedon", "timestamp", "lastmodified", "modified",
-    "lastopened", "opened", "lastconnected", "lastupdated", "created", "createdon",
-    "firstconnected",
-]
-
-# Column names that suggest a time value (used only by the timestamp check)
-TIME_NAME_RE = re.compile(
-    r"time|date|stamp|last|first|created|modified|connected|opened|executed|installed|accessed|updated",
-    re.I)
-# A date written in some other format, e.g. 10/08/2026 or 08.10.2026
-OTHER_DATE_RE = re.compile(r"\b(?:\d{1,2}[-/.]\d{1,2}[-/.]\d{4}|\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\b")
-# Columns holding the host's local time rather than UTC, e.g. "Last Connected LOCAL"
-LOCAL_RE = re.compile(r"local", re.I)
-TZ_ARG_RE = re.compile(r"^([+-])(\d{1,2}):?(\d{2})?$")
-
-# Fields the script adds itself; CSV columns with these names get a suffix
-RESERVED = {"@timestamp", "forensic_tag", "host", "file", "kape", "case"}
-
-# Columns that hold the executable's path, in order of preference
-PATH_COLUMNS = ["path", "fullpath", "lowercaselongpath"]
-
-# Elasticsearch mapping type -> our type family
-ES_FAMILY = {
-    "text": "string", "keyword": "string", "match_only_text": "string", "wildcard": "string",
-    "long": "long", "integer": "long", "short": "long", "byte": "long",
-    "date": "date", "date_nanos": "date", "boolean": "boolean",
 }
 
 
-# --------------------------------------------------------------------------- helpers
-
-def parse_ts(value, default_tz="Z"):
-    """EZ Tools timestamp -> ISO 8601 with millisecond precision, or None.
-    default_tz is applied when the value has no offset (UTC unless it's a LOCAL column)."""
-    m = ISO_RE.match(value.strip())
-    if not m:
-        return None
-    date, time, frac, tz = m.groups()
-    frac = (frac or "")[:3].ljust(3, "0")
-    if not tz:
-        tz = default_tz  # EZ Tools output is UTC unless the column says LOCAL
-    elif tz != "Z" and ":" not in tz:
-        tz = tz[:3] + ":" + tz[3:]
-    return f"{date}T{time}.{frac}{tz}"
-
-
-def sanitize_hostname(hostname):
-    """Lower-case host name safe for an Elasticsearch index name."""
-    value = re.sub(r"[^a-z0-9._-]+", "-", hostname.strip().lower()).strip("._-")
-    if not value:
-        raise ValueError("--hostname must contain at least one letter or digit")
-    return value
-
-
-def clean_fields(header):
-    """CSV header -> Elasticsearch-safe, unique field names (no dots, no leading _)."""
-    used, out = set(RESERVED), []
-    for name in header:
-        f = re.sub(r"[^\w]+", "_", name.strip()).strip("_") or "field"
-        if f[0].isdigit():
-            f = "f_" + f
-        base, i = f, 2
-        while f in used:
-            f, i = f"{base}_{i}", i + 1
-        used.add(f)
-        out.append(f)
-    return out
-
-
-def detect_tag(path, fields):
-    """AppCompatCache / Amcache_<Section> from the file name or columns; None = not ours."""
-    h = {f.lower() for f in fields}
+def detect_section(path, header):
+    """'AppCompatCache' for ShimCache CSVs (file name or columns), otherwise None."""
+    h = {c.strip().lower() for c in header}
     stem = re.sub(r"^\d{8,}_", "", path.stem)
     if re.search(r"appcompatcache|shimcache", stem, re.I) or {"cacheentryposition", "lastmodifiedtimeutc"} <= h:
         return "AppCompatCache"
-    m = re.search(r"amcache[_ -]+(.+)$", stem, re.I)
-    if m:
-        section = re.sub(r"[^A-Za-z0-9]+", "_", m.group(1)).strip("_")[:50]
-        return f"Amcache_{section}" if section else "Amcache"
-    if "filekeylastwritetimestamp" in h or ("sha1" in h and "programid" in h):
-        return "Amcache_FileEntries"
     return None
 
 
@@ -701,4 +637,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    engine.run(ARTIFACT, "Load AppCompatCacheParser CSVs into a host-specific SOF-ELK index with a"
+                         " fixed schema.")

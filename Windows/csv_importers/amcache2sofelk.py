@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """Load AmcacheParser CSV sections into amcache-<hostname>.
 
-Preserves the original pe2sofelk.py Amcache field mappings, timestamp choices, file-path/hash
-enrichment, type conflict handling, and stable IDs, while omitting `forensic_tag`.
+Every AmcacheParser column is mapped to a fixed field with a fixed type, defined by the explicit
+index template in Windows/index_templates/index-amcache.json (plus the shared
+component-toolkit-common.json). ECS names are used where they fit (file.*, package.*), and
+everything else lives under amcache.* in snake_case. Nothing is inferred per run, so every host's
+amcache-<hostname> index has the same schema and ES|QL queries work across amcache-*.
+
+The loading itself (template install, index creation, bulk) is in sof_elk_template_importer.py.
+Full field reference: docs/schemas/amcache.md.
 """
 import argparse
 import csv
@@ -17,307 +23,226 @@ from urllib import error
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 from sof_elk_es_client import EsClient, add_client_arguments, apply_client_arguments, log, resolve_index  # noqa: E402
 
-try:
-    csv.field_size_limit(sys.maxsize)
-except OverflowError:  # Windows: C long is 32-bit
-    csv.field_size_limit(2**31 - 1)
+import sof_elk_template_importer as engine
 
-# EZ Tools write UTC timestamps like "2026-10-08 09:12:44.1234567" (7 fractional digits)
-ISO_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.(\d+))?\s*(Z|[+-]\d{2}:?\d{2})?$"
-)
-# Numbers only; leading zeros (IDs like 0000, 0001) stay text so nothing is lost
-INT_RE = re.compile(r"^-?(?:0|[1-9]\d{0,18})$")
-BOOLS = {"true": True, "false": False}
-INT64_MAX = 2**63 - 1
+# --------------------------------------------------------------------------- column map
+#
+# Lower-case CSV column -> list of (field, conversion). A column can feed more than one field.
+# Conversions are listed in sof_elk_template_importer.CONV_TYPE.
 
-# Preferred @timestamp columns per tool (first one with a value in the row wins)
-def time_prefs(tag):
-    if tag == "AppCompatCache":
-        return ["LastModifiedTimeUTC"]
-    if tag.endswith("FileEntries"):
-        return ["FileKeyLastWriteTimestamp", "KeyLastWriteTimestamp"]
-    if tag == "Amcache_ProgramEntries":
-        return ["InstallDate", "KeyLastWriteTimestamp"]
-    if tag.startswith("Amcache_"):
-        return ["KeyLastWriteTimestamp", "FileKeyLastWriteTimestamp"]
-    return []
+COLUMNS = {
+    # Present in several sections
+    "keyname": [("amcache.key_name", "keyword")],
+    "keylastwritetimestamp": [("amcache.key_last_write", "date")],
+    "programid": [("amcache.program_id", "keyword")],
+    "programinstanceid": [("amcache.program_instance_id", "keyword")],
+    "language": [("amcache.language", "long")],
+    "manufacturer": [("amcache.manufacturer", "keyword")],
+    "description": [("amcache.description", "keyword")],
+    "name": [("amcache.name", "keyword")],
+    "version": [("amcache.version", "keyword")],
+    "productversion": [("amcache.product_version", "keyword")],
+    "class": [("amcache.class", "keyword")],
+    "inf": [("amcache.inf", "keyword")],
+    "provider": [("amcache.provider", "keyword")],
+    "service": [("amcache.service", "keyword")],
+    "driverid": [("amcache.driver_id", "keyword")],
+    "drivername": [("amcache.driver_name", "keyword")],
+    "driverpackagestrongname": [("amcache.driver_package_strong_name", "keyword")],
+    "driverinbox": [("amcache.driver_in_box", "boolean")],
 
+    # AssociatedFileEntries / UnassociatedFileEntries (InventoryApplicationFile)
+    "applicationname": [("amcache.application_name", "keyword")],
+    "filekeylastwritetimestamp": [("amcache.file_key_last_write", "date")],
+    "sha1": [("file.hash.sha1", "sha1")],
+    "isoscomponent": [("amcache.is_os_component", "boolean")],
+    "fullpath": [("file.path", "path")],
+    "fileextension": [("file.extension", "ext")],
+    "linkdate": [("amcache.link_date", "date")],
+    "productname": [("file.pe.product", "keyword")],
+    "size": [("file.size", "long")],
+    "longpathhash": [("amcache.long_path_hash", "keyword")],
+    "binarytype": [("amcache.binary_type", "keyword")],
+    "ispefile": [("amcache.is_pe_file", "boolean")],
+    "binfileversion": [("amcache.bin_file_version", "keyword")],
+    "binproductversion": [("amcache.bin_product_version", "keyword")],
+    "usn": [("amcache.usn", "long")],
 
-# What each @timestamp source means (stored in kape.timestamp_meaning)
+    # ProgramEntries (InventoryApplication)
+    "publisher": [("amcache.publisher", "keyword")],
+    "installdate": [("package.installed", "date")],
+    "installdatearplastmodified": [("amcache.install_date_arp_last_modified", "date")],
+    "installdatemsi": [("amcache.install_date_msi", "date")],
+    "installdatefromlinkfile": [("amcache.install_date_from_link_file", "date")],
+    "osversionatinstalltime": [("amcache.os_version_at_install_time", "keyword")],
+    "bundlemanifestpath": [("amcache.bundle_manifest_path", "keyword")],
+    "hiddenarp": [("amcache.hidden_arp", "boolean")],
+    "inboxmodernapp": [("amcache.inbox_modern_app", "boolean")],
+    "manifestpath": [("amcache.manifest_path", "keyword")],
+    "msipackagecode": [("amcache.msi_package_code", "keyword")],
+    "msiproductcode": [("amcache.msi_product_code", "keyword")],
+    "packagefullname": [("amcache.package_full_name", "keyword")],
+    "registrykeypath": [("amcache.registry_key_path", "keyword")],
+    "rootdirpath": [("package.path", "keyword")],
+    "type": [("amcache.type", "keyword")],
+    "source": [("amcache.source", "keyword")],
+    "storeapptype": [("amcache.store_app_type", "keyword")],
+    "uninstallstring": [("amcache.uninstall_string", "keyword")],
+
+    # DeviceContainers
+    "categories": [("amcache.categories", "keyword")],
+    "discoverymethod": [("amcache.discovery_method", "keyword")],
+    "friendlyname": [("amcache.friendly_name", "keyword")],
+    "icon": [("amcache.icon", "keyword")],
+    "isactive": [("amcache.is_active", "boolean")],
+    "isconnected": [("amcache.is_connected", "boolean")],
+    "ismachinecontainer": [("amcache.is_machine_container", "boolean")],
+    "isnetworked": [("amcache.is_networked", "boolean")],
+    "ispaired": [("amcache.is_paired", "boolean")],
+    "modelid": [("amcache.model_id", "keyword")],
+    "modelname": [("amcache.model_name", "keyword")],
+    "modelnumber": [("amcache.model_number", "keyword")],
+    "primarycategory": [("amcache.primary_category", "keyword")],
+    "state": [("amcache.state", "long")],
+
+    # DevicePnps
+    "busreporteddescription": [("amcache.bus_reported_description", "keyword")],
+    "classguid": [("amcache.class_guid", "keyword")],
+    "compid": [("amcache.compid", "keyword")],
+    "containerid": [("amcache.container_id", "keyword")],
+    "driververdate": [("amcache.driver_ver_date", "mdy")],
+    "driververversion": [("amcache.driver_ver_version", "keyword")],
+    "enumerator": [("amcache.enumerator", "keyword")],
+    "hwid": [("amcache.hwid", "keyword")],
+    "installstate": [("amcache.install_state", "long")],
+    "matchingid": [("amcache.matching_id", "keyword")],
+    "model": [("amcache.model", "keyword")],
+    "parentid": [("amcache.parent_id", "keyword")],
+    "problemcode": [("amcache.problem_code", "long")],
+    "stackid": [("amcache.stack_id", "keyword")],
+
+    # DriveBinaries (InventoryDriverBinary)
+    "drivertimestamp": [("amcache.link_date", "date")],  # PE header TimeDateStamp, same as LinkDate
+    "driverlastwritetime": [("file.mtime", "date")],
+    "driveriskernelmode": [("amcache.driver_is_kernel_mode", "boolean")],
+    "driversigned": [("amcache.driver_signed", "boolean")],
+    "driverchecksum": [("amcache.driver_checksum", "long")],
+    "drivercompany": [("file.pe.company", "keyword")],
+    "drivertype": [("amcache.driver_type", "long")],
+    "driverversion": [("file.pe.file_version", "keyword")],
+    "imagesize": [("amcache.image_size", "long")],
+    "product": [("file.pe.product", "keyword")],
+    "wdfversion": [("amcache.wdf_version", "keyword")],
+
+    # DriverPackages
+    "date": [("amcache.driver_date", "date")],
+    "directory": [("amcache.directory", "keyword")],
+    "hwids": [("amcache.hwid", "keyword")],
+    "submissionid": [("amcache.submission_id", "keyword")],
+    "sysfile": [("amcache.sys_file", "keyword")],
+
+    # ShortCuts
+    "lnkname": [("file.path", "path")],
+}
+
+# Section-specific meanings of columns whose name is reused across sections
+SECTION_COLUMNS = {
+    "file": {
+        "name": [("file.name", "name")],
+        "version": [("file.pe.file_version", "keyword")],
+        "description": [("file.pe.description", "keyword")],
+        # Older (Windows 8 / early 10) Amcache "File" key layout
+        "programname": [("amcache.application_name", "keyword")],
+        "fileidlastwritetimestamp": [("amcache.file_key_last_write", "date")],
+        "volumeid": [("amcache.volume_id", "keyword")],
+        "volumeidlastwritetimestamp": [("amcache.volume_id_last_write", "date")],
+        "fileid": [("amcache.file_id", "keyword")],
+        "mftentrynumber": [("amcache.mft_entry_number", "long")],
+        "mftsequencenumber": [("amcache.mft_sequence_number", "long")],
+        "filesize": [("file.size", "long")],
+        "fileversionstring": [("file.pe.file_version", "keyword")],
+        "fileversionnumber": [("amcache.file_version_number", "keyword")],
+        "filedescription": [("file.pe.description", "keyword")],
+        "sizeofimage": [("amcache.image_size", "long")],
+        "peheaderhash": [("amcache.pe_header_hash", "keyword")],
+        "peheaderchecksum": [("amcache.pe_header_checksum", "long")],
+        "companyname": [("file.pe.company", "keyword")],
+        "created": [("file.created", "date")],
+        "lastmodified": [("file.mtime", "date")],
+        "lastmodified2": [("amcache.last_modified2", "date")],
+        "compiletime": [("amcache.compile_time", "date")],
+        "languageid": [("amcache.language", "long")],
+    },
+    "program": {
+        "name": [("package.name", "keyword")],
+        "version": [("package.version", "keyword")],
+    },
+    "drivebinaries": {
+        # KeyName is the driver's path (c:/windows/system32/drivers/x.sys)
+        "keyname": [("amcache.key_name", "keyword"), ("file.path", "path")],
+        "drivername": [("amcache.driver_name", "keyword"), ("file.name", "name")],
+    },
+}
+
+# event.dataset per AmcacheParser section (unknown sections: amcache.<snake_case>)
+DATASETS = {
+    "associatedfileentries": "amcache.associated_file_entries",
+    "unassociatedfileentries": "amcache.unassociated_file_entries",
+    "fileentries": "amcache.file_entries",
+    "programentries": "amcache.program_entries",
+    "devicecontainers": "amcache.device_containers",
+    "devicepnps": "amcache.device_pnps",
+    "drivebinaries": "amcache.drive_binaries",
+    "driverpackages": "amcache.driver_packages",
+    "shortcuts": "amcache.shortcuts",
+}
+
+# @timestamp candidates per section kind, as template fields (first one with a value wins)
+TIME_PREFS = {
+    "file": ["amcache.file_key_last_write", "amcache.key_last_write"],
+    "program": ["package.installed", "amcache.key_last_write"],
+}
+TIME_DEFAULT = ["amcache.key_last_write", "amcache.file_key_last_write"]
+
+# What each @timestamp source column means (stored in kape.timestamp_meaning)
 TIME_MEANING = {
-    "lastmodifiedtimeutc": "File last-modified time ($SI) recorded in ShimCache - NOT an execution time",
     "filekeylastwritetimestamp": "Amcache file key last write - often close to first execution, not proof of it",
+    "fileidlastwritetimestamp": "Amcache file key last write - often close to first execution, not proof of it",
     "keylastwritetimestamp": "Amcache registry key last write time",
     "installdate": "Program install date recorded in Amcache",
-    "ingest_time": "No usable time in this row - time the row was loaded",
-}
-
-# Fallback for unrecognised CSVs: column names (lower-case, no underscores) in order
-TIME_PRIORITY = [
-    "lastinteracted", "lastaccessed", "sourcemodified",
-    "lastwritetimestamp", "lastwritetime", "lastwrite", "lastexecuted", "lastexecution",
-    "lastrun", "lastruntime", "executedon", "timestamp", "lastmodified", "modified",
-    "lastopened", "opened", "lastconnected", "lastupdated", "created", "createdon",
-    "firstconnected",
-]
-
-# Column names that suggest a time value (used only by the timestamp check)
-TIME_NAME_RE = re.compile(
-    r"time|date|stamp|last|first|created|modified|connected|opened|executed|installed|accessed|updated",
-    re.I)
-# A date written in some other format, e.g. 10/08/2026 or 08.10.2026
-OTHER_DATE_RE = re.compile(r"\b(?:\d{1,2}[-/.]\d{1,2}[-/.]\d{4}|\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\b")
-# Columns holding the host's local time rather than UTC, e.g. "Last Connected LOCAL"
-LOCAL_RE = re.compile(r"local", re.I)
-TZ_ARG_RE = re.compile(r"^([+-])(\d{1,2}):?(\d{2})?$")
-
-# Fields the script adds itself; CSV columns with these names get a suffix
-RESERVED = {"@timestamp", "forensic_tag", "host", "file", "kape", "case"}
-
-# Columns that hold the executable's path, in order of preference
-PATH_COLUMNS = ["path", "fullpath", "lowercaselongpath"]
-
-# Elasticsearch mapping type -> our type family
-ES_FAMILY = {
-    "text": "string", "keyword": "string", "match_only_text": "string", "wildcard": "string",
-    "long": "long", "integer": "long", "short": "long", "byte": "long",
-    "date": "date", "date_nanos": "date", "boolean": "boolean",
 }
 
 
-# --------------------------------------------------------------------------- helpers
+# --------------------------------------------------------------------------- sections
 
-def parse_ts(value, default_tz="Z"):
-    """EZ Tools timestamp -> ISO 8601 with millisecond precision, or None.
-    default_tz is applied when the value has no offset (UTC unless it's a LOCAL column)."""
-    m = ISO_RE.match(value.strip())
-    if not m:
-        return None
-    date, time, frac, tz = m.groups()
-    frac = (frac or "")[:3].ljust(3, "0")
-    if not tz:
-        tz = default_tz  # EZ Tools output is UTC unless the column says LOCAL
-    elif tz != "Z" and ":" not in tz:
-        tz = tz[:3] + ":" + tz[3:]
-    return f"{date}T{time}.{frac}{tz}"
-
-
-def sanitize_hostname(hostname):
-    """Lower-case host name safe for an Elasticsearch index name."""
-    value = re.sub(r"[^a-z0-9._-]+", "-", hostname.strip().lower()).strip("._-")
-    if not value:
-        raise ValueError("--hostname must contain at least one letter or digit")
-    return value
-
-
-def clean_fields(header):
-    """CSV header -> Elasticsearch-safe, unique field names (no dots, no leading _)."""
-    used, out = set(RESERVED), []
-    for name in header:
-        f = re.sub(r"[^\w]+", "_", name.strip()).strip("_") or "field"
-        if f[0].isdigit():
-            f = "f_" + f
-        base, i = f, 2
-        while f in used:
-            f, i = f"{base}_{i}", i + 1
-        used.add(f)
-        out.append(f)
-    return out
-
-
-def detect_tag(path, fields):
-    """AppCompatCache / Amcache_<Section> from the file name or columns; None = not ours."""
-    h = {f.lower() for f in fields}
+def detect_section(path, header):
+    """AmcacheParser section name (e.g. 'ProgramEntries') from the file name or columns, or None."""
+    h = {c.strip().lower() for c in header}
     stem = re.sub(r"^\d{8,}_", "", path.stem)
     if re.search(r"appcompatcache|shimcache", stem, re.I) or {"cacheentryposition", "lastmodifiedtimeutc"} <= h:
-        return "AppCompatCache"
+        return None  # ShimCache, handled by shimcache2sofelk.py
     m = re.search(r"amcache[_ -]+(.+)$", stem, re.I)
     if m:
         section = re.sub(r"[^A-Za-z0-9]+", "_", m.group(1)).strip("_")[:50]
-        return f"Amcache_{section}" if section else "Amcache"
+        return section or "Unknown"
     if "filekeylastwritetimestamp" in h or ("sha1" in h and "programid" in h):
-        return "Amcache_FileEntries"
+        return "FileEntries"
     return None
 
 
-def other_tag(path):
-    stem = re.sub(r"^\d{8,}_", "", path.stem)
-    return re.sub(r"[^A-Za-z0-9]+", "_", stem).strip("_")[:60] or "Unknown"
+def section_kind(section):
+    s = section.lower().replace("_", "")
+    if s.endswith("fileentries"):
+        return "file"
+    if s == "programentries":
+        return "program"
+    return s
 
 
-def is_local(field):
-    return bool(LOCAL_RE.search(field))
+def dataset_for(section):
+    s = section.lower().replace("_", "")
+    return DATASETS.get(s, f"amcache.{engine.snake(section)}")
 
-
-def field_tz(field, local_tz):
-    return local_tz if is_local(field) else "Z"
-
-
-def read_rows(path):
-    with open(path, newline="", encoding="utf-8-sig", errors="replace") as fh:
-        reader = csv.reader(fh)
-        header = next(reader, None)
-        yield header
-        for row in reader:
-            if any(cell.strip() for cell in row):
-                yield row
-
-
-# --------------------------------------------------------------------------- type inference
-
-def scan(path, fields, state):
-    """Update per-field type candidates for one file. state is shared per forensic_tag."""
-    rows = read_rows(path)
-    next(rows)  # header
-    for f in fields:
-        state.setdefault(f, {"boolean": True, "long": True, "date": True, "seen": False,
-                             "filled": 0, "date_hits": 0, "bad": None})
-    count = 0
-    for row in rows:
-        count += 1
-        for i, f in enumerate(fields):
-            v = row[i].strip() if i < len(row) else ""
-            if not v:
-                continue
-            s = state[f]
-            s["seen"] = True
-            s["filled"] += 1
-            if s["boolean"] and v.lower() not in BOOLS:
-                s["boolean"] = False
-            if s["long"] and not (INT_RE.match(v) and abs(int(v)) <= INT64_MAX):
-                s["long"] = False
-            if ISO_RE.match(v):
-                s["date_hits"] += 1
-            else:
-                s["date"] = False
-                if s["bad"] is None:
-                    s["bad"] = v[:60]
-    return count
-
-
-def finalize(state, local_tz=None):
-    """Per-tag types. None = column never had a value (no vote on its type).
-    LOCAL date columns stay text unless --local-tz says what offset they are in."""
-    types = {}
-    for f, s in state.items():
-        if not s["seen"]:
-            types[f] = None
-        elif s["boolean"]:
-            types[f] = "boolean"
-        elif s["long"]:
-            types[f] = "long"
-        elif s["date"]:
-            types[f] = "date" if (local_tz or not is_local(f)) else "string"
-        else:
-            types[f] = "string"
-    return types
-
-
-def merge_types(plan):
-    """One type per field across all tools; disagreement -> string. Returns (types, conflicts)."""
-    votes = {}
-    for tag, p in plan.items():
-        for f, t in p["types"].items():
-            votes.setdefault(f, {})
-            if t:
-                votes[f].setdefault(t, []).append(p["tag"])
-    types, conflicts = {}, {}
-    for f, v in votes.items():
-        if not v:
-            types[f] = "string"
-        elif len(v) == 1:
-            types[f] = next(iter(v))
-        else:
-            types[f] = "string"
-            conflicts[f] = v
-    return types, conflicts
-
-
-def pick_time_fields(types, tag):
-    """
-    Ordered @timestamp candidates for a tool, tried row by row (first non-empty wins).
-    Tool preferences first; otherwise the best generic match. UTC columns beat LOCAL ones.
-    """
-    dates = [f for f, t in types.items() if t == "date"]
-    utc = [f for f in dates if not is_local(f)]
-    dates = utc or dates
-    by_lower = {f.lower(): f for f in dates}
-    chain = [by_lower[n.lower()] for n in time_prefs(tag) if n.lower() in by_lower]
-    if chain:
-        return chain
-    lower = {re.sub(r"local|utc", "", f.lower().replace("_", "")): f for f in dates}
-    for name in TIME_PRIORITY:
-        if name in lower:
-            return [lower[name]]
-    return dates[:1]
-
-
-def first_ts(row, fields, chain, local_tz):
-    """(timestamp, column) from the first chain column with a value in this row."""
-    for f in chain:
-        i = fields.index(f)
-        if i < len(row) and row[i].strip():
-            ts = parse_ts(row[i], field_tz(f, local_tz))
-            if ts:
-                return ts, f
-    return None, None
-
-
-def count_ts_coverage(p, local_tz):
-    """How many rows get @timestamp from each chain column, and how many from none."""
-    used = {f: 0 for f in p["ts"]}
-    none = 0
-    for f, fields in p["files"]:
-        rows = read_rows(f)
-        next(rows)
-        for row in rows:
-            _, col = first_ts(row, fields, p["ts"], local_tz)
-            if col:
-                used[col] += 1
-            else:
-                none += 1
-    return used, none
-
-
-def resolve_against_existing(types, existing):
-    """
-    Fit the inferred types to an index that already has mappings.
-    Returns (write, renames): write = field -> type to send; renames = field -> new name.
-    """
-    write, renames = {}, {}
-    for f, t in types.items():
-        if f not in existing:
-            write[f] = t
-            continue
-        fam = ES_FAMILY.get(existing[f], "other")
-        if fam == t:
-            write[f] = t
-        elif fam == "string":
-            write[f] = "string"  # anything can be stored as a string
-        else:
-            renames[f] = f"{f}_text"
-            write[f] = "string"
-    return write, renames
-
-
-def build_doc(row, fields, write, renames, ts_field, meta, ingest_time, local_tz=None):
-    doc = {}
-    for i, f in enumerate(fields):
-        raw = row[i] if i < len(row) else ""
-        v = raw.strip()
-        if not v:
-            continue
-        t = write[f]
-        if t == "date":
-            val = parse_ts(v, field_tz(f, local_tz))
-        elif t == "long":
-            val = int(v)
-        elif t == "boolean":
-            val = BOOLS[v.lower()]
-        else:
-            val = raw
-        doc[renames.get(f, f)] = val
 
     ts, ts_col = first_ts(row, fields, ts_field, local_tz)
     doc["@timestamp"] = ts or ingest_time
@@ -701,4 +626,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    engine.run(ARTIFACT, "Load AmcacheParser CSVs into a host-specific SOF-ELK index with a fixed schema.")

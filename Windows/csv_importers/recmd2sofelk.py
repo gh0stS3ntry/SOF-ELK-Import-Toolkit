@@ -1,8 +1,19 @@
 #!/usr/bin/env python3
 """Load RECmd batch and plugin-detail CSVs into registry-<hostname>.
 
-Preserves the original recmd2sofelk.py field/type/timestamp and hive metadata behaviour, except
-that `forensic_tag` is omitted from indexed documents.
+The schema is fixed by the explicit index template in Windows/index_templates/index-registry.json
+(plus the shared component-toolkit-common.json):
+
+  * The batch CSV (*_RECmd_Batch_*_Output.csv) has a fixed column set, mapped to ECS registry.*
+    (registry.key, registry.value, registry.data.type, registry.data.strings) and registry.<snake>.
+  * Plugin-detail CSVs (UserAssist, BamDam, Services, ... one schema per plugin) share
+    registry.key (from BatchKeyPath) and registry.batch_value_name. Their other columns go to
+    registry.plugin.<snake_case> as keyword, except known timestamp columns, which are dates.
+    event.dataset names the plugin, e.g. registry.userassist.
+
+The hive owner is added as user.name when the hive is a user's NTUSER.DAT / UsrClass.dat.
+The loading itself (template install, index creation, bulk) is in sof_elk_template_importer.py.
+Full field reference: docs/schemas/registry.md.
 """
 import argparse
 import csv
@@ -17,320 +28,68 @@ from urllib import error
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "common"))
 from sof_elk_es_client import EsClient, add_client_arguments, apply_client_arguments, log, resolve_index  # noqa: E402
 
-try:
-    csv.field_size_limit(sys.maxsize)
-except OverflowError:  # Windows: C long is 32-bit
-    csv.field_size_limit(2**31 - 1)
+import sof_elk_template_importer as engine
 
-# EZ Tools write UTC timestamps like "2026-10-08 09:12:44.1234567" (7 fractional digits)
-ISO_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.(\d+))?\s*(Z|[+-]\d{2}:?\d{2})?$"
-)
-INT_RE = re.compile(r"^-?\d{1,19}$")
-BOOLS = {"true": True, "false": False}
-INT64_MAX = 2**63 - 1
+# Lower-case CSV column -> list of (field, conversion). Conversions are listed in
+# sof_elk_template_importer.CONV_TYPE. Used for the batch CSV.
+COLUMNS = {
+    "hivepath": [("registry.hive_path", "keyword")],
+    "hivetype": [("registry.hive_type", "keyword")],
+    "description": [("registry.description", "keyword")],
+    "category": [("registry.category", "keyword")],
+    "keypath": [("registry.key", "keyword")],
+    "valuename": [("registry.value", "keyword")],
+    "valuetype": [("registry.data.type", "keyword")],
+    "valuedata": [("registry.data.strings", "keyword")],
+    "valuedata2": [("registry.value_data2", "keyword")],
+    "valuedata3": [("registry.value_data3", "keyword")],
+    "comment": [("registry.comment", "keyword")],
+    "recursive": [("registry.recursive", "boolean")],
+    "deleted": [("registry.deleted", "boolean")],
+    "lastwritetimestamp": [("registry.last_write", "date")],
+    "plugindetailfile": [("registry.plugin_detail_file", "keyword")],
+}
 
-# Column names (lower-case, no underscores) preferred for @timestamp, in order
-TIME_PRIORITY = [
-    "lastwritetimestamp", "lastwritetime", "lastwrite", "lastexecuted", "lastexecution",
-    "lastrun", "lastruntime", "executedon", "timestamp", "lastmodified", "modified",
-    "lastopened", "opened", "lastconnected", "lastupdated", "created", "createdon",
-    "firstconnected",
+# Plugin timestamp columns (UTC) that are typed as dates; all other plugin columns are keywords.
+# Columns ending in LOCAL (KnownNetworks) are host local time and stay keywords.
+PLUGIN_DATE_COLUMNS = [
+    "Timestamp", "ExecutionTime", "LastExecuted", "ExecutedOn", "OpenedOn", "LastOpened",
+    "ModifiedTime", "LastDetectionTime", "LastStart", "CreatedOn", "LastLoginTime",
+    "LastLogonTime", "LastConnected", "LastModified", "ParametersKeyLastWrite",
+    "NameKeyLastWrite", "ExtensionLastOpened", "LastClosed", "FirstInstalled", "Installed",
+    "InitialTimestamp", "LastStop", "LastLogoffTime", "LastPasswordChange",
+    "LastIncorrectPassword",
 ]
 
-# Column names that suggest a time value (used only by the timestamp check)
-TIME_NAME_RE = re.compile(
-    r"time|date|stamp|last|first|created|modified|connected|opened|executed|installed|accessed|updated",
-    re.I)
-# A date written in some other format, e.g. 10/08/2026 or 08.10.2026
-OTHER_DATE_RE = re.compile(r"\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}")
-# Columns holding the host's local time rather than UTC, e.g. "Last Connected LOCAL"
-LOCAL_RE = re.compile(r"local", re.I)
-TZ_ARG_RE = re.compile(r"^([+-])(\d{1,2}):?(\d{2})?$")
-
-# Fields the script adds itself; CSV columns with these names get a suffix
-RESERVED = {"@timestamp", "forensic_tag", "host", "kape", "case"}
-
-# Elasticsearch mapping type -> our type family
-ES_FAMILY = {
-    "text": "string", "keyword": "string", "match_only_text": "string", "wildcard": "string",
-    "long": "long", "integer": "long", "short": "long", "byte": "long",
-    "date": "date", "date_nanos": "date", "boolean": "boolean",
+SECTION_COLUMNS = {
+    "plugin": {
+        "batchkeypath": [("registry.key", "keyword")],
+        "batchvaluename": [("registry.batch_value_name", "keyword")],
+        "valuename": [("registry.value", "keyword")],
+        "valuedata": [("registry.data.strings", "keyword")],
+        "lastwritetimestamp": [("registry.last_write", "date")],
+        **{c.lower(): [(f"registry.plugin.{engine.snake(c)}", "date")] for c in PLUGIN_DATE_COLUMNS},
+    },
 }
 
-
-# --------------------------------------------------------------------------- helpers
-
-def parse_ts(value, default_tz="Z"):
-    """EZ Tools timestamp -> ISO 8601 with millisecond precision, or None.
-    default_tz is applied when the value has no offset (UTC unless it's a LOCAL column)."""
-    m = ISO_RE.match(value.strip())
-    if not m:
-        return None
-    date, time, frac, tz = m.groups()
-    frac = (frac or "")[:3].ljust(3, "0")
-    if not tz:
-        tz = default_tz  # EZ Tools output is UTC unless the column says LOCAL
-    elif tz != "Z" and ":" not in tz:
-        tz = tz[:3] + ":" + tz[3:]
-    return f"{date}T{time}.{frac}{tz}"
-
-
-def sanitize_hostname(hostname):
-    """Lower-case host name safe for an Elasticsearch index name."""
-    value = re.sub(r"[^a-z0-9._-]+", "-", hostname.strip().lower()).strip("._-")
-    if not value:
-        raise ValueError("--hostname must contain at least one letter or digit")
-    return value
-
-
-def clean_fields(header):
-    """CSV header -> Elasticsearch-safe, unique field names (no dots, no leading _)."""
-    used, out = set(RESERVED), []
-    for name in header:
-        f = re.sub(r"[^\w]+", "_", name.strip()).strip("_") or "field"
-        if f[0].isdigit():
-            f = "f_" + f
-        base, i = f, 2
-        while f in used:
-            f, i = f"{base}_{i}", i + 1
-        used.add(f)
-        out.append(f)
-    return out
-
-
-def tag_and_hive(path):
-    """
-    Derive forensic_tag and the hive part of the name from the file name.
-      20261008091244_RECmd_Batch_Kroll_Batch_Output.csv     -> ("RECmd_Batch", None)
-      20261008091244_UserAssist__C_Users_bob_NTUSER.DAT.csv -> ("UserAssist", "C_Users_bob_NTUSER.DAT")
-    """
-    stem = re.sub(r"^\d{8,}_", "", path.stem)
-    if re.search(r"recmd_batch", stem, re.I):
-        return "RECmd_Batch", None
-    parts = re.split(r"__|_(?=[A-Za-z]_[A-Za-z])", stem, maxsplit=1)
-    tag = re.sub(r"[^A-Za-z0-9]+", "_", parts[0]).strip("_")[:60] or "Unknown"
-    hive = parts[1] if len(parts) > 1 and parts[1] else None
-    return tag, hive
-
-
-def is_local(field):
-    return bool(LOCAL_RE.search(field))
-
-
-def field_tz(field, local_tz):
-    return local_tz if is_local(field) else "Z"
-
-
-def read_rows(path):
-    with open(path, newline="", encoding="utf-8-sig", errors="replace") as fh:
-        reader = csv.reader(fh)
-        header = next(reader, None)
-        yield header
-        for row in reader:
-            if any(cell.strip() for cell in row):
-                yield row
-
-
-# --------------------------------------------------------------------------- type inference
-
-def scan(path, fields, state):
-    """Update per-field type candidates for one file. state is shared per forensic_tag."""
-    rows = read_rows(path)
-    next(rows)  # header
-    for f in fields:
-        state.setdefault(f, {"boolean": True, "long": True, "date": True, "seen": False,
-                             "filled": 0, "date_hits": 0, "bad": None})
-    count = 0
-    for row in rows:
-        count += 1
-        for i, f in enumerate(fields):
-            v = row[i].strip() if i < len(row) else ""
-            if not v:
-                continue
-            s = state[f]
-            s["seen"] = True
-            s["filled"] += 1
-            if s["boolean"] and v.lower() not in BOOLS:
-                s["boolean"] = False
-            if s["long"] and not (INT_RE.match(v) and abs(int(v)) <= INT64_MAX):
-                s["long"] = False
-            if ISO_RE.match(v):
-                s["date_hits"] += 1
-            else:
-                s["date"] = False
-                if s["bad"] is None:
-                    s["bad"] = v[:60]
-    return count
-
-
-def finalize(state, local_tz=None):
-    """Per-tag types. None = column never had a value (no vote on its type).
-    LOCAL date columns stay text unless --local-tz says what offset they are in."""
-    types = {}
-    for f, s in state.items():
-        if not s["seen"]:
-            types[f] = None
-        elif s["boolean"]:
-            types[f] = "boolean"
-        elif s["long"]:
-            types[f] = "long"
-        elif s["date"]:
-            types[f] = "date" if (local_tz or not is_local(f)) else "string"
-        else:
-            types[f] = "string"
-    return types
-
-
-def merge_types(plan):
-    """One type per field across all plugins; disagreement -> string. Returns (types, conflicts)."""
-    votes = {}
-    for tag, p in plan.items():
-        for f, t in p["types"].items():
-            votes.setdefault(f, {})
-            if t:
-                votes[f].setdefault(t, []).append(p["tag"])
-    types, conflicts = {}, {}
-    for f, v in votes.items():
-        if not v:
-            types[f] = "string"
-        elif len(v) == 1:
-            types[f] = next(iter(v))
-        else:
-            types[f] = "string"
-            conflicts[f] = v
-    return types, conflicts
-
-
-def pick_time_field(types):
-    """Best @timestamp column for a plugin. UTC columns win over LOCAL ones."""
-    dates = [f for f, t in types.items() if t == "date"]
-    utc = [f for f in dates if not is_local(f)]
-    dates = utc or dates
-    lower = {re.sub(r"local|utc", "", f.lower().replace("_", "")): f for f in dates}
-    for name in TIME_PRIORITY:
-        if name in lower:
-            return lower[name]
-    return dates[0] if dates else None
-
-
-def resolve_against_existing(types, existing):
-    """
-    Fit the inferred types to an index that already has mappings.
-    Returns (write, renames): write = field -> type to send; renames = field -> new name.
-    """
-    write, renames = {}, {}
-    for f, t in types.items():
-        if f not in existing:
-            write[f] = t
-            continue
-        fam = ES_FAMILY.get(existing[f], "other")
-        if fam == t:
-            write[f] = t
-        elif fam == "string":
-            write[f] = "string"  # anything can be stored as a string
-        else:
-            renames[f] = f"{f}_text"
-            write[f] = "string"
-    return write, renames
-
-
-def build_doc(row, fields, write, renames, ts_field, meta, ingest_time, local_tz=None):
-    doc = {}
-    for i, f in enumerate(fields):
-        raw = row[i] if i < len(row) else ""
-        v = raw.strip()
-        if not v:
-            continue
-        t = write[f]
-        if t == "date":
-            val = parse_ts(v, field_tz(f, local_tz))
-        elif t == "long":
-            val = int(v)
-        elif t == "boolean":
-            val = BOOLS[v.lower()]
-        else:
-            val = raw
-        doc[renames.get(f, f)] = val
-
-    ts = None
-    if ts_field:
-        i = fields.index(ts_field)
-        ts = (parse_ts(row[i], field_tz(ts_field, local_tz))
-              if i < len(row) and row[i].strip() else None)
-    doc["@timestamp"] = ts or ingest_time
-    doc["host"] = {"name": meta["host"]}
-    doc["kape"] = {
-        "source_file": meta["source_file"],
-        "timestamp_source": ts_field if ts else "ingest_time",
-    }
-    if meta.get("hive"):
-        doc["kape"]["source_hive"] = meta["hive"]
-    if meta.get("case"):
-        doc["case"] = meta["case"]
-    return doc
-
-
-def timestamp_check(plan, types, local_tz):
-    """Print how each plugin's @timestamp is set and anything that needs a look. Returns note count."""
-    notes_total = 0
-    print("\nTimestamp check")
-    for p in sorted(plan.values(), key=lambda x: x["tag"].lower()):
-        st, ts, rows = p["state"], p["ts"], p["rows"]
-        notes = []
-        if ts:
-            have = st[ts]["filled"]
-            zone = f"local time, {local_tz}" if is_local(ts) else "UTC"
-            head = f"OK    @timestamp <- {ts} ({zone}), {have}/{rows} rows"
-            if have < rows:
-                notes.append(f"{rows - have} row(s) have no {ts} value -> those use ingest time")
-            if types.get(ts) != "date":
-                notes.append(f"{ts} is text in other plugins, so it is a text field in the index"
-                             f" (this plugin's @timestamp is still correct)")
-        else:
-            head = "WARN  @timestamp <- ingest time (no usable UTC date column)"
-            notes.append("these rows will all sit at the load time in Kibana timelines")
-        for f, s in st.items():
-            if not s["filled"]:
-                continue
-            all_dates = s["date_hits"] == s["filled"]
-            if is_local(f) and all_dates and not local_tz:
-                notes.append(f"{f}: host LOCAL time with no offset -> stored as text, not used for"
-                             f" @timestamp (add --local-tz +HH:MM to convert it)")
-            elif is_local(f) and all_dates:
-                notes.append(f"{f}: LOCAL time, converted using offset {local_tz}")
-            elif not all_dates and s["date_hits"]:
-                notes.append(f"{f}: {s['date_hits']}/{s['filled']} values are timestamps, the rest"
-                             f" aren't (e.g. \"{s['bad']}\") -> stored as text")
-            elif (s["date_hits"] == 0 and TIME_NAME_RE.search(f) and s["bad"]
-                  and OTHER_DATE_RE.search(s["bad"])):
-                notes.append(f"{f}: looks like a date in an unrecognised format"
-                             f" (e.g. \"{s['bad']}\") -> stored as text")
-        print(f"  {p['tag']:<32} {head}")
-        for n in notes:
-            print(f"  {'':<32}   - {n}")
-        notes_total += len(notes)
-    if notes_total:
-        print(f"\n  {notes_total} note(s). None of these stop ingestion: every row still loads,"
-              f" affected values are kept as text.")
-    else:
-        print("\n  No timestamp issues found.")
-    return notes_total
-
-
-# --------------------------------------------------------------------------- Elasticsearch
-
-META_PROPS = {
-    "@timestamp": {"type": "date"},
-    "host": {"properties": {"name": {"type": "keyword"}}},
-    "kape": {"properties": {
-        "source_file": {"type": "keyword"},
-        "source_hive": {"type": "keyword"},
-        "timestamp_source": {"type": "keyword"},
-    }},
-    "case": {"type": "keyword"},
+TIME_PREFS = {
+    "batch": ["registry.last_write"],
+    # first plugin time column with a value; key last write first, then activity times
+    "plugin": ["registry.last_write"] + [f"registry.plugin.{engine.snake(c)}" for c in PLUGIN_DATE_COLUMNS],
 }
 
+TIME_MEANING = {
+    "lastwritetimestamp": "Registry key last write time",
+    "timestamp": "Registry key last write time (plugin)",
+    "executiontime": "BAM/DAM last execution time",
+    "lastexecuted": "UserAssist last execution time",
+    "executedon": "Last execution time recorded by the plugin",
+    "openedon": "MRU entry last opened time",
+    "lastopened": "Office MRU last opened time",
+    "modifiedtime": "File last-modified time ($SI) recorded in AppCompatCache - NOT an execution time",
+    "laststart": "Scheduled task last start time",
+    "createdon": "Creation time recorded by the plugin",
+}
 
 class ES:
     def __init__(self, url, user=None, password=None, insecure=False):
@@ -563,4 +322,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    engine.run(ARTIFACT, "Load RECmd batch and plugin CSVs into a host-specific SOF-ELK index with a"
+                         " fixed schema.")
