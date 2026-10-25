@@ -3,7 +3,8 @@
 import argparse
 import re
 from pathlib import Path
-from sof_elk_json_bulk_common import add_common_arguments, add_tag, base_event, copy_renames, parse_timestamp, run_import, set_nested, utc_now
+from sof_elk_json_bulk_common import (add_common_arguments, add_tag, base_event, copy_renames, get_nested,
+                                     normalize_date_field, parse_timestamp, run_import, set_nested)
 
 INDEX_PREFIX = "filesystem"
 LABEL_TYPE = "kape_filesystem"
@@ -108,22 +109,26 @@ def transform(raw, source_path, hostname, label_type, ingest_time):
 
     # Logstash converts all eight MACB timestamps to date values in _source.
     for field in DATE_FIELDS:
-        value = get_nested(doc, field)
-        normalized = parse_timestamp(value)
-        if normalized:
-            set_nested(doc, field, normalized)
+        normalize_date_field(doc, field)
 
     # The source filter has two mutually exclusive attribute formats.
+    # JSON gives SiFlags as an integer; CSV gives the names joined by | (Hidden|System).
     if "SiFlags" in raw and raw["SiFlags"] is not None:
-        doc["file"]["attributes"] = make_attributes(raw["SiFlags"], "int")
+        si_flags = raw["SiFlags"]
+        if isinstance(si_flags, int) or str(si_flags).strip().isdigit():
+            doc["file"]["attributes"] = make_attributes(si_flags, "int")
+        else:
+            doc["file"]["attributes"] = make_attributes(str(si_flags).replace("|", ",").lower(), "str")
     elif "FileAttributes" in raw and raw["FileAttributes"] is not None:
         if raw["FileAttributes"] == "":
             doc["file"]["attributes"] = ""
         else:
             doc["file"]["attributes"] = make_attributes(str(raw["FileAttributes"]).replace("|", ",").lower(), "str")
 
-    if raw.get("isDirectory") is not None:
-        is_dir = truthy(raw["isDirectory"])
+    # JSON spells the column isDirectory, CSV IsDirectory.
+    is_directory = raw.get("isDirectory", raw.get("IsDirectory"))
+    if is_directory is not None and is_directory != "":
+        is_dir = truthy(is_directory)
         doc["file"]["type"] = "dir" if is_dir else "file"
         if is_dir:
             doc["file"].setdefault("attributes", {})["directory"] = True
@@ -164,22 +169,13 @@ def transform(raw, source_path, hostname, label_type, ingest_time):
     return doc
 
 
-def get_nested(doc, dotted):
-    cur = doc
-    for part in dotted.split("."):
-        if not isinstance(cur, dict) or part not in cur:
-            return None
-        cur = cur[part]
-    return cur
-
-
 def main():
     parser = argparse.ArgumentParser()
     add_common_arguments(parser, "Load MFTECmd JSON records directly into filesystem-<hostname>.")
     args = parser.parse_args()
     run_import(args, LABEL_TYPE, INDEX_PREFIX, PATTERNS, EXCLUDES, MAPPINGS, transform,
                csv_int_fields={"EntryNumber", "SequenceNumber", "ParentEntryNumber", "ParentSequenceNumber", "FileSize", "ReferenceCount", "UpdateSequenceNumber", "LogfileSequenceNumber", "SecurityId", "OffsetToData", "NameType", "SiFlags"},
-               csv_bool_fields={"InUse", "HasAds", "IsAds", "Timestomped", "Copied", "isDirectory"})
+               csv_bool_fields={"InUse", "HasAds", "IsAds", "Timestomped", "Copied", "isDirectory", "IsDirectory"})
 
 if __name__ == "__main__":
     main()

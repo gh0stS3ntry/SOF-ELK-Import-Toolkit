@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Stream PECmd JSON or CSV records into a per-host SOF-ELK-compatible prefetch index."""
 import argparse
-from sof_elk_json_bulk_common import add_common_arguments, base_event, copy_renames, parse_timestamp, run_import, set_nested
+from sof_elk_json_bulk_common import (DATE_STATS, add_common_arguments, base_event, copy_renames, get_nested,
+                                     normalize_date_field, parse_timestamp, remove_nested, run_import, set_nested)
 
 INDEX_PREFIX = "prefetch"
 LABEL_TYPE = "kape_prefetch"
@@ -22,15 +23,6 @@ MAPPINGS = {"@timestamp": {"type": "date"}, "labels.type": {"type": "keyword"}, 
             "kape.prefetch.run_count": {"type": "long"}, "kape.prefetch.last_run": {"type": "date"},
             "kape.prefetch.volume.created": {"type": "date"}, "prefetch.previous_runs": {"type": "date"}}
 MAPPINGS.update({field: {"type": "date"} for field in DATE_FIELDS})
-
-
-def get_nested(doc, dotted):
-    cur = doc
-    for part in dotted.split("."):
-        if not isinstance(cur, dict) or part not in cur:
-            return None
-        cur = cur[part]
-    return cur
 
 
 def to_integer(value):
@@ -73,10 +65,7 @@ def transform(raw, source_path, hostname, label_type, ingest_time):
             remove_nested(doc, field)
 
     for field in DATE_FIELDS:
-        value = get_nested(doc, field)
-        normalized = parse_timestamp(value, formats=("%Y-%m-%d %H:%M:%S",))
-        if normalized:
-            set_nested(doc, field, normalized)
+        normalize_date_field(doc, field)
 
     previous_runs = []
     for n in range(8):
@@ -84,7 +73,11 @@ def transform(raw, source_path, hostname, label_type, ingest_time):
         value = raw.get(key)
         if value is None or value == "":
             continue
-        previous_runs.append(parse_timestamp(value, formats=("%Y-%m-%d %H:%M:%S",)) or value)
+        normalized = parse_timestamp(value)
+        if normalized:
+            previous_runs.append(normalized)
+        else:
+            DATE_STATS.add_invalid("prefetch.previous_runs", value)
     if previous_runs:
         set_nested(doc, "prefetch.previous_runs", previous_runs)
 
@@ -108,9 +101,9 @@ def transform(raw, source_path, hostname, label_type, ingest_time):
     last_run = get_nested(doc, "kape.prefetch.last_run")
     source_mtime = get_nested(doc, "file.stdinfo.mtime")
     if last_run not in (None, ""):
-        doc["@timestamp"] = parse_timestamp(last_run, formats=("%Y-%m-%d %H:%M:%S",)) or ingest_time
+        doc["@timestamp"] = last_run
     elif source_mtime not in (None, ""):
-        doc["@timestamp"] = parse_timestamp(source_mtime, formats=("%Y-%m-%d %H:%M:%S",)) or ingest_time
+        doc["@timestamp"] = source_mtime
     else:
         doc["@timestamp"] = ingest_time
 
@@ -123,17 +116,6 @@ def transform(raw, source_path, hostname, label_type, ingest_time):
     else:
         doc["message"] = "Prefetch record (no executable name parsed)"
     return doc
-
-
-def remove_nested(doc, dotted):
-    parts = dotted.split(".")
-    cur = doc
-    for part in parts[:-1]:
-        if not isinstance(cur, dict) or part not in cur:
-            return
-        cur = cur[part]
-    if isinstance(cur, dict):
-        cur.pop(parts[-1], None)
 
 
 def main():

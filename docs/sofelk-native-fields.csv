@@ -30,8 +30,8 @@ filesystem,file.update_reasons,"UpdateReasons ($J), lowercased, split on |",text
 filesystem,file.update_timestamp,UpdateTimestamp ($J),date (dynamic date detection on ISO string),text+keyword,differs,Not converted in place by either; toolkit disables date_detection
 filesystem,file.offset_to_data,OffsetToData ($J),long,long,match,
 filesystem,file.source_file,SourceFile,text+keyword,text+keyword,match,
-filesystem,file.attributes.<flag>,"SiFlags ($MFT, integer) / FileAttributes ($J, names joined by |)",boolean x19,boolean x19,broken (CSV),"$MFT CSV gives names, not an integer; toolkit sets every flag false"
-filesystem,file.type,isDirectory -> dir / file,text+keyword,text+keyword,broken (CSV),"CSV header is IsDirectory; toolkit reads isDirectory, so every row is 'file'"
+filesystem,file.attributes.<flag>,"SiFlags ($MFT, integer) / FileAttributes ($J, names joined by |)",boolean x19,boolean x19,match,"$MFT CSV gives names (Hidden|System), not an integer; the toolkit accepts both"
+filesystem,file.type,isDirectory -> dir / file,text+keyword,text+keyword,match,Toolkit reads both isDirectory (JSON) and IsDirectory (CSV)
 filesystem,kape.mft.inuse,InUse,boolean,boolean,match,
 filesystem,kape.mft.hasads,HasAds,boolean,boolean,match,
 filesystem,kape.mft.isads,IsAds,boolean,boolean,match,
@@ -46,7 +46,7 @@ evtxlogs,winlog.record_id,RecordNumber,long,long,match,
 evtxlogs,winlog.channel,Channel,text+keyword,text+keyword,match,
 evtxlogs,winlog.provider_name,Provider,text+keyword,text+keyword,match,
 evtxlogs,winlog.computer_name,Computer,text+keyword,text+keyword,match,"FQDN from the event, e.g. rd01.shieldbase.com"
-evtxlogs,winlog.user.identifier,UserId,text+keyword,(written as winlog.user.identifer),differs,Toolkit misspells the field name
+evtxlogs,winlog.user.identifier,UserId,text+keyword,text+keyword,match,Toolkit also copies it to user.id
 evtxlogs,user.id,copy of winlog.user.identifier,(never set),text+keyword,differs,"Native copy reads a misspelled source field, so it is always empty natively"
 evtxlogs,winlog.user.name,UserName,text+keyword,text+keyword,match,
 evtxlogs,winlog.process.pid,ProcessId,long,long,match,"Process that logged the event, not the subject process"
@@ -90,15 +90,15 @@ lnkfiles,file.target.path.arguments,Arguments,(lost),(lost),lost (both),"Overwri
 lnkfiles,file.target.drivetype,DriveType,text+keyword,text+keyword,match,Removed when '(None)'
 lnkfiles,file.target.volume.label,VolumeLabel,text+keyword,text+keyword,match,
 lnkfiles,volume.serial_number,VolumeSerialNumber,text+keyword,text+keyword,match,Pivot to prefetch volume.serial_number
-lnkfiles,file.target.inode,TargetMFTEntryNumber,long,(dropped),broken (CSV),Value is hex (0x44EF2); toolkit int() fails and drops it
-lnkfiles,file.target.sequence_number,TargetMFTSequenceNumber,long,(dropped),broken (CSV),Same hex problem
+lnkfiles,file.target.inode,TargetMFTEntryNumber,long,long,match,CSV value is hex (0x44EF2); toolkit parses hex and decimal
+lnkfiles,file.target.sequence_number,TargetMFTSequenceNumber,long,long,match,Same hex handling
 lnkfiles,file.tracker.machine_id,MachineID,text+keyword,text+keyword,match,NetBIOS name of the creating machine
 lnkfiles,file.tracker.mac,MachineMACAddress,text+keyword,text+keyword,match,
 lnkfiles,file.tracker.mac_vendor,MACVendor,text+keyword,text+keyword,match,
 lnkfiles,file.tracker.creation,TrackerCreatedOn,"date if ISO (dynamic detection), else text",text+keyword,differs,"Native date{} targets a misspelled field, so neither converts it"
 lnkfiles,file.header_flags.<flag>,HeaderFlags,boolean x27,boolean x27,match,
 lnkfiles,file.attributes.<flag>,FileAttributes,boolean x19,boolean x19,match,
-lnkfiles,file.extra_blocks,ExtraBlocks_Present (JSON) / ExtraBlocksPresent (CSV),text+keyword (array),(absent),broken (CSV),Toolkit only knows the JSON column name
+lnkfiles,file.extra_blocks,ExtraBlocks_Present (JSON) / ExtraBlocksPresent (CSV),text+keyword (array),text+keyword (array),match,Toolkit maps both column names
 prefetch,@timestamp,"LastRun, else SourceModified",date,date,match,
 prefetch,file.path,SourceFilename,text+keyword,text+keyword,match,.pf path
 prefetch,file.directory / file.name,split from file.path,text+keyword,text+keyword,match,

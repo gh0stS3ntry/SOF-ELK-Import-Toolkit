@@ -4,7 +4,7 @@ import argparse
 import ipaddress
 import json
 import re
-from sof_elk_json_bulk_common import add_common_arguments, add_tag, base_event, copy_renames, parse_timestamp, run_import, set_nested
+from sof_elk_json_bulk_common import add_common_arguments, add_tag, base_event, copy_renames, get_nested, normalize_date_field, run_import, set_nested
 
 INDEX_PREFIX = "evtxlogs"
 LABEL_TYPE = "kape_evtxlogs"
@@ -12,7 +12,7 @@ PATTERNS = ("*_EvtxECmd_Output.json", "*_EvtxECmd_Output.json.gz", "*_EvtxECmd_O
 EXCLUDES = ()
 RENAMES = {
     "Level": "kape.log_level", "MapDescription": "kape.map_description", "ExecutableInfo": "kape.executable_info",
-    "Computer": "winlog.computer_name", "RemoteHost": "winlog.remote_host", "UserId": "winlog.user.identifer",
+    "Computer": "winlog.computer_name", "RemoteHost": "winlog.remote_host", "UserId": "winlog.user.identifier",
     "UserName": "winlog.user.name", "Channel": "winlog.channel", "Provider": "winlog.provider_name",
     "EventId": "winlog.event_id", "ProcessId": "winlog.process.pid", "ThreadId": "winlog.process.thread.id",
     "SourceFile": "file.source_file", "TimeCreated": "winlog.time_created", "RecordNumber": "winlog.record_id",
@@ -32,15 +32,6 @@ MAPPINGS = {
     "winlog.time_created": {"type": "date"}, "remote.port": {"type": "keyword"},
     "winlog.payload.user_data.EventData": {"type": "text"},
 }
-
-
-def get_nested(doc, dotted):
-    cur = doc
-    for part in dotted.split("."):
-        if not isinstance(cur, dict) or part not in cur:
-            return None
-        cur = cur[part]
-    return cur
 
 
 def nonempty(value):
@@ -146,18 +137,13 @@ def transform(raw, source_path, hostname, label_type, ingest_time):
         else:
             add_tag(doc, f"_grokparsefail_6504-{n:02d}")
 
-    # This exact misspelling is in the repository's Logstash rename; postprocessing copies it to user.id.
-    user_identifier = get_nested(doc, "winlog.user.identifer")
+    # Native 6504 renames UserId to winlog.user.identifier. 8005's copy to user.id reads a misspelled
+    # field (identifer) and never fires natively; the toolkit still copies it so user.id is populated.
+    user_identifier = get_nested(doc, "winlog.user.identifier")
     if user_identifier is not None:
         set_nested(doc, "user.id", user_identifier)
 
-    time_value = get_nested(doc, "winlog.time_created")
-    normalized = parse_timestamp(time_value)
-    if normalized:
-        set_nested(doc, "winlog.time_created", normalized)
-        doc["@timestamp"] = normalized
-    else:
-        doc["@timestamp"] = ingest_time
+    doc["@timestamp"] = normalize_date_field(doc, "winlog.time_created") or ingest_time
 
     remote_host = get_nested(doc, "winlog.remote_host")
     if remote_host:

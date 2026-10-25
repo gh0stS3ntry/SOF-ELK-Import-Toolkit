@@ -3,7 +3,7 @@
 import argparse
 import json
 import re
-from sof_elk_json_bulk_common import add_common_arguments, base_event, copy_renames, parse_timestamp, run_import, set_nested
+from sof_elk_json_bulk_common import add_common_arguments, base_event, copy_renames, normalize_date_field, run_import
 
 INDEX_PREFIX = "lnkfiles"
 LABEL_TYPE = "kape_lnkfiles"
@@ -21,6 +21,7 @@ RENAMES = {
     "RelativePath": "file.target.relative_path", "WorkingDirectory": "file.target.working_directory",
     "TargetMFTEntryNumber": "file.target.inode_string", "TargetMFTSequenceNumber": "file.target.sequence_number_string",
     "HeaderFlags": "file.header_flags", "FileAttributes": "file.attributes", "ExtraBlocks_Present": "file.extra_blocks",
+    "ExtraBlocksPresent": "file.extra_blocks",  # CSV spelling of ExtraBlocks_Present
 }
 HEADER_FLAGS = [
     "hastargetidlist", "haslinkinfo", "hasname", "hasrelativepath", "hasworkingdir", "hasarguments",
@@ -99,21 +100,17 @@ def transform(raw, source_path, hostname, label_type, ingest_time):
         target.pop("drivetype", None)
 
     for field in DATE_FIELDS:
-        value = get_nested(doc, field)
-        normalized = parse_timestamp(value)
-        if normalized:
-            set_nested(doc, field, normalized)
+        normalize_date_field(doc, field)
 
-    if target.get("inode_string") not in (None, ""):
+    # JSON gives the target MFT entry/sequence as integers, CSV as hex (0x167E4); native Ruby Integer() takes both.
+    for source, dest in (("inode_string", "inode"), ("sequence_number_string", "sequence_number")):
+        value = target.pop(source, None)
+        if value in (None, ""):
+            continue
         try:
-            target["inode"] = int(target.pop("inode_string"))
-        except (TypeError, ValueError):
-            pass
-    if target.get("sequence_number_string") not in (None, ""):
-        try:
-            target["sequence_number"] = int(target.pop("sequence_number_string"))
-        except (TypeError, ValueError):
-            pass
+            target[dest] = value if isinstance(value, int) else int(str(value).strip(), 0)
+        except ValueError:
+            target[source] = value
 
     # Postprocessor's path split uses Windows separators; only fill missing values.
     if f.get("path") and (not f.get("directory") or not f.get("name")):
@@ -125,17 +122,8 @@ def transform(raw, source_path, hostname, label_type, ingest_time):
             f["directory"] = directory
         if not f.get("name") and name:
             f["name"] = name
-    doc["@timestamp"] = parse_timestamp(f.get("mtime")) or ingest_time
+    doc["@timestamp"] = f.get("mtime") or ingest_time
     return doc
-
-
-def get_nested(doc, dotted):
-    cur = doc
-    for part in dotted.split("."):
-        if not isinstance(cur, dict) or part not in cur:
-            return None
-        cur = cur[part]
-    return cur
 
 
 def main():

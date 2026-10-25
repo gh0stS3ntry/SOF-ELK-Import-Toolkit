@@ -304,6 +304,8 @@ Accepted JSON data files are `.json` and `.json.gz`. JSON input may be a top-lev
 
 The four importers support `--hostname`, `--case`, `--es`, `--user`, `--password`, `--insecure`, `--batch-size`, `--workers`, `--dry-run`, `--sample-docs`, and the retry/logging options described under [Retries and logging](#retries-and-logging). They do not support `--local-tz` or `--index`, for either JSON or CSV input.
 
+Timestamps are parsed with the standard library on Python 3.9 and later, including the 7-digit fractional seconds that EZ Tools write (`2023-01-23 06:51:25.5665168`). All dates are stored as UTC ISO 8601 with millisecond precision. A date field that is empty or cannot be parsed is left out of the document rather than sent as raw text. After each file the importer prints a `WARNING` line (also written to `--log-file`) with the number of omitted empty and unparseable values per field, one example of a bad value, and the number of records whose `@timestamp` fell back to ingest time. On the RD01 `$MFT` CSV, for example, it reports 868,146 empty `file.filename.*` values, which is expected for records without a usable `$FILE_NAME` time. A large unparseable count usually means the CSV was re-saved in Excel (see `docs/sofelk-native-field-reference.md`, section 3.1).
+
 Every document gets `host.name` (the normalized hostname, mapped as `keyword`) and, when `--case` is given, `case` (`keyword`), the same fields the CSV importers write. ES|QL queries can therefore filter `filesystem-*`, `evtxlogs-*`, `lnkfiles-*`, and `prefetch-*` by `host.name` and `case` as well as by `_index`. When an importer appends to an index created by an earlier version, it first adds the `host.name`/`case` keyword mappings; documents loaded before that do not have these fields until they are re-imported (deterministic IDs make the re-import overwrite them).
 
 ### 14. `mftecmd2sofelk.py`
@@ -319,7 +321,7 @@ python3 Windows/json_importers/mftecmd2sofelk.py /cases/IR-2026-042 --hostname W
 
 ### 15. `evtxecmd2sofelk.py`
 
-Loads EvtxECmd JSON or CSV into `evtxlogs-<hostname>`. JSON directory searches use `*_EvtxECmd_Output.json` and gzip equivalents; CSV discovery also accepts EvtxECmd output CSVs. The importer maps Windows event fields to `winlog.*` and KAPE fields, parses `Payload` JSON where present, expands supported event-data values, maps UserData/Binary, copies the repository-specific `winlog.user.identifer` value to `user.id` where present, parses remote IP/port where possible, splits keywords, and constructs the summary `message`.
+Loads EvtxECmd JSON or CSV into `evtxlogs-<hostname>`. JSON directory searches use `*_EvtxECmd_Output.json` and gzip equivalents; CSV discovery also accepts EvtxECmd output CSVs. The importer maps Windows event fields to `winlog.*` and KAPE fields, parses `Payload` JSON where present, expands supported event-data values, maps UserData/Binary, writes `UserId` to `winlog.user.identifier` (the native SOF-ELK name) and also copies it to `user.id`, parses remote IP/port where possible, splits keywords, and constructs the summary `message`.
 
 Heterogeneous `UserData.EventData` values are normalized to a consistent text representation before indexing so object/string variations do not create Elasticsearch mapping conflicts.
 
