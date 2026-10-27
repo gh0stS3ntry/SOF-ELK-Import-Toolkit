@@ -1,0 +1,109 @@
+{
+  "index_patterns": [
+    "genericcsv-*"
+  ],
+  "priority": 200,
+  "template": {
+    "settings": {
+      "index": {
+        "number_of_shards": "1",
+        "number_of_replicas": 0,
+        "auto_expand_replicas": "0-1",
+        "codec": "best_compression",
+        "mapping": {
+          "total_fields": {
+            "limit": 5000
+          },
+          "ignore_malformed": true
+        }
+      }
+    },
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "genericcsv",
+        "toolkit_schema_version": 1
+      },
+      "dynamic": "true",
+      "date_detection": false,
+      "numeric_detection": false,
+      "dynamic_templates": [
+        {
+          "csv_columns_as_keyword": {
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        }
+      ],
+      "properties": {
+        "@timestamp": {
+          "type": "date"
+        },
+        "case": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "host": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "event": {
+          "properties": {
+            "dataset": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "kind": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "ingested": {
+              "type": "date"
+            },
+            "sequence": {
+              "type": "long"
+            }
+          }
+        },
+        "log": {
+          "properties": {
+            "file": {
+              "properties": {
+                "path": {
+                  "type": "keyword",
+                  "ignore_above": 4096
+                }
+              }
+            }
+          }
+        },
+        "genericcsv": {
+          "properties": {
+            "file_name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "relative_path": {
+              "type": "keyword",
+              "ignore_above": 4096
+            },
+            "timestamp_source": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "extra_cells": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        }
+      }
+    }
+  }
+}

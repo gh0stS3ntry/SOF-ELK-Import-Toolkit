@@ -1,6 +1,6 @@
 # SOF-ELK Import Toolkit
 
-This package contains a recursive wrapper and seventeen standalone Python importers for Windows forensic artifacts, four importers for AWS logs (CloudTrail, VPC Flow Logs, ALB/ELB access logs and AWS WAF; see [`AWS/README.md`](AWS/README.md)), and an ES|QL hunting pack with checklists ([`hunting/`](hunting/README.md)), for loading forensic CSV and JSON exports directly into Elasticsearch indexes used by SOF-ELK without relying on Logstash or Filebeat. The importers do not run KAPE, NirSoft, or Eric Zimmerman tools; they ingest exports that those tools have already produced.
+This package contains a recursive wrapper and seventeen standalone Python importers for Windows forensic artifacts, four importers for AWS logs (CloudTrail, VPC Flow Logs, ALB/ELB access logs and AWS WAF; see [`AWS/README.md`](AWS/README.md)), a generic CSV importer for any other CSV export ([`Generic-CSV/README.md`](Generic-CSV/README.md)), and an ES|QL hunting pack with checklists ([`hunting/`](hunting/README.md)), for loading forensic CSV and JSON exports directly into Elasticsearch indexes used by SOF-ELK without relying on Logstash or Filebeat. The importers do not run KAPE, NirSoft, or Eric Zimmerman tools; they ingest exports that those tools have already produced.
 
 ## Contents
 
@@ -52,6 +52,12 @@ sof_elk_all_importers/
 │   ├── index_templates/
 │   ├── tests/
 │   └── README.md
+├── Generic-CSV
+│   ├── genericcsv2sofelk.py
+│   ├── index_templates/
+│   │   └── index-genericcsv.json
+│   ├── tests/
+│   └── README.md
 ├── docs/schemas/
 └── hunting/
     ├── queries/          (Windows queries by tactic; AWS queries under queries/aws/)
@@ -59,7 +65,7 @@ sof_elk_all_importers/
     └── tools/
 ```
 
-Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. Every importer loads the shared Elasticsearch client from `Windows/common/sof_elk_es_client.py`, so keep `common/` beside `csv_importers/` and `json_importers/`. Also keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers in `csv_importers/` (the RecentFileCacheParser, SQLECmd, and SumECmd importers require it). The AWS importers load the same client from `Windows/common/`, so keep `AWS/` and `Windows/` side by side.
+Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. Every importer loads the shared Elasticsearch client from `Windows/common/sof_elk_es_client.py`, so keep `common/` beside `csv_importers/` and `json_importers/`. Also keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers in `csv_importers/` (the RecentFileCacheParser, SQLECmd, and SumECmd importers require it). The AWS importers and the generic CSV importer load the same client from `Windows/common/`, so keep `AWS/`, `Generic-CSV/` and `Windows/` side by side.
 
 ## Quick start: use the wrapper
 
@@ -410,7 +416,7 @@ The importers accept an Elasticsearch URL and optional HTTP Basic credentials. U
 
 ## Kibana Data View creator
 
-`SOF-ELK_CreateDataViews.py` creates the seventeen Kibana Data Views that are not included out-of-box in the stock SOF-ELK distribution but are required for the additional direct-import indexes used by this package:
+`SOF-ELK_CreateDataViews.py` creates the eighteen Kibana Data Views that are not included out-of-box in the stock SOF-ELK distribution but are required for the additional direct-import indexes used by this package:
 
 | Script / data source | Kibana Data View | Indexes created by importer |
 |---|---|---|
@@ -431,14 +437,15 @@ The importers accept an Elasticsearch URL and optional HTTP Basic credentials. U
 | `AWS/vpcflow2sofelk.py` | `aws-vpcflow-*` | `aws-vpcflow-<source>` |
 | `AWS/alb2sofelk.py` | `aws-alb-*` | `aws-alb-<source>` |
 | `AWS/waf2sofelk.py` | `aws-waf-*` | `aws-waf-<source>` |
+| `Generic-CSV/genericcsv2sofelk.py` | `genericcsv-*` | `genericcsv-<hostname>` |
 
 The script deliberately does not create the `filesystem-*`, `evtxlogs-*`, `lnkfiles-*`, or `prefetch-*` Data Views because those are already available in SOF-ELK out-of-box. SOF-ELK's own `aws-*` Data View (for its Logstash CloudTrail output) is left alone too; the AWS importers' indexes get the narrower patterns above.
 
-The script uses Kibana's Data Views API and is standard-library only. By default it is idempotent: an existing Data View is detected and left unchanged. Use `--overwrite` to delete and recreate the seventeen managed views. The Data Views are configured to use `@timestamp` as the time field and `allowNoIndex=true`, so they can be created before the first corresponding Elasticsearch index exists.
+The script uses Kibana's Data Views API and is standard-library only. By default it is idempotent: an existing Data View is detected and left unchanged. Use `--overwrite` to delete and recreate the eighteen managed views. The Data Views are configured to use `@timestamp` as the time field and `allowNoIndex=true`, so they can be created before the first corresponding Elasticsearch index exists.
 
 ### Usage
 
-Preview the seventeen Data Views without modifying Kibana:
+Preview the eighteen Data Views without modifying Kibana:
 
 ```bash
 python3 SOF-ELK_CreateDataViews.py --dry-run
@@ -473,7 +480,7 @@ python3 SOF-ELK_CreateDataViews.py \
     --insecure
 ```
 
-Force recreation of the seventeen managed Data Views:
+Force recreation of the eighteen managed Data Views:
 
 ```bash
 python3 SOF-ELK_CreateDataViews.py --overwrite
@@ -485,7 +492,7 @@ python3 SOF-ELK_CreateDataViews.py --overwrite
 - `--user USER`: HTTP Basic authentication username.
 - `--password PASSWORD`: HTTP Basic authentication password.
 - `--insecure`: disable TLS certificate verification.
-- `--overwrite`: delete and recreate the seventeen managed Data Views if they already exist.
+- `--overwrite`: delete and recreate the eighteen managed Data Views if they already exist.
 - `--dry-run`: display the Data Views that would be managed without making API changes.
 
 Run the Data View creator after Kibana is available and before using the corresponding indexes in Discover. Because `allowNoIndex` is enabled, it is also safe to create the Data Views before the direct-import scripts have created their first host-specific indexes.
