@@ -23,6 +23,7 @@ Creates:
   aws-vpcflow-*       AWS/vpcflow2sofelk.py (VPC Flow Logs)
   aws-alb-*           AWS/alb2sofelk.py (ALB / Classic ELB access logs)
   aws-waf-*           AWS/waf2sofelk.py (AWS WAF)
+  genericcsv-*        Generic-CSV/genericcsv2sofelk.py (any CSV, fields from its header)
 
 The existing SOF-ELK Data Views for filesystem-*, evtxlogs-*, lnkfiles-* and
 prefetch-* are deliberately not recreated because they already exist in the
@@ -58,6 +59,7 @@ DATA_VIEWS = [
     ("aws-vpcflow", "aws-vpcflow-*"),
     ("aws-alb", "aws-alb-*"),
     ("aws-waf", "aws-waf-*"),
+    ("genericcsv", "genericcsv-*"),
 ]
 
 DATE_FORMAT = "YYYY-MM-DD HH:mm:ss.SSS\\Z"
@@ -131,7 +133,7 @@ def main():
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Delete and recreate the seventeen Data Views if they already exist",
+        help="Delete and recreate the eighteen Data Views if they already exist",
     )
     parser.add_argument(
         "--dry-run",
