@@ -1,0 +1,2 @@
+Start time;End time;Source address;Source port;Destination address;Destination port;Protocol;Packets;Bytes;Action;Log status;Interface ID
+10/20/2026 2:10:00 AM;10/20/2026 2:11:00 AM;198.51.100.9;40000;10.0.1.15;22;6;3;180;REJECT;OK;eni-0a1b2c3d

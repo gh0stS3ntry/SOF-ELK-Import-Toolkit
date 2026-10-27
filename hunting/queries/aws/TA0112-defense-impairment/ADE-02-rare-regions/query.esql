@@ -1,0 +1,33 @@
+// ADE-02 | Activity in regions the account rarely uses
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1535
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail management events from all regions (a multi-region trail)
+FROM aws-cloudtrail-* METADATA _index
+| WHERE cloud.region IS NOT NULL
+| WHERE COALESCE(aws.cloudtrail.user_identity.type, "") != "AWSService"
+    AND NOT COALESCE(source.address, "") LIKE "*.amazonaws.com"
+| INLINE STATS account_events = COUNT(*) BY _index, cloud.account.id
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| STATS
+    events = COUNT(*),
+    writes = COUNT(*) WHERE aws.cloudtrail.read_only == false,
+    account_events = MAX(account_events),
+    callers = VALUES(caller),
+    write_apis = VALUES(aws.cloudtrail.event_name) WHERE aws.cloudtrail.read_only == false,
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, cloud.account.id, cloud.region
+| EVAL region_pct = ROUND(100.0 * events / account_events, 3)
+| EVAL callers = MV_SLICE(callers, 0, 9), write_apis = MV_SLICE(write_apis, 0, 29)
+| KEEP
+    _index,
+    cloud.account.id,
+    cloud.region,
+    region_pct,
+    events,
+    writes,
+    first_seen,
+    last_seen,
+    callers,
+    write_apis
+| SORT region_pct ASC
+| LIMIT 500

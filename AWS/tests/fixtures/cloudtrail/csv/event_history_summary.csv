@@ -1,0 +1,3 @@
+Event ID,Event time,User name,Event name,Resource type,Resource name,AWS access key,AWS region,Error code,Source IP address,Read-only,Event source
+sum-1,10/20/2026 2:20:00 AM,attacker,ListBuckets,,,ASIAEXAMPLE000002,us-east-1,,198.51.100.7,true,s3.amazonaws.com
+sum-2,10/20/2026 2:21:00 PM,attacker,DeleteTrail,AWS::CloudTrail::Trail,org-trail,ASIAEXAMPLE000002,us-east-1,AccessDenied,198.51.100.7,false,cloudtrail.amazonaws.com

@@ -14,6 +14,11 @@ A first cut for each kind of host: what to establish about the host, and which q
 | [Database server](database-server.md) | SQL Server and other database hosts |
 | [Domain controller](domain-controller.md) | AD DS, plus DNS/ADCS/ADFS on tier-0 servers |
 | [File server](file-server.md) | file shares, DFS, backup targets, NAS front ends |
+| [AWS account (CloudTrail)](aws-account-control-plane.md) | every AWS account in scope, from its CloudTrail logs |
+| [AWS web application (ALB and WAF)](aws-web-application.md) | internet-facing applications behind an ALB/ELB and AWS WAF |
+| [AWS network (VPC Flow Logs)](aws-vpc-network.md) | VPCs, subnets and interfaces with flow logs |
+
+**AWS.** The three AWS checklists work per account and per application rather than per host, and do not need the Windows baseline. Run the account checklist for every account in scope, then the web and network checklists where those logs exist. The IR checklist is written for hosts, so their `IR ref` column points to the closest item (for example 2.4.1/2.4.2 for brute force, 2.4.7 for outbound transfers, 2.4.21 for logging stopped) and is blank where nothing fits.
 
 **Format.** Each checklist is Markdown with numbered sections (`## 1. ...`) holding one table each, with the columns `#`, `Check`, `Queries`, `IR ref` and `What to look for`. [`build_checklist_xlsx.py`](../tools/build_checklist_xlsx.py) reads that layout, so keep it when editing, then rebuild the workbook:
 

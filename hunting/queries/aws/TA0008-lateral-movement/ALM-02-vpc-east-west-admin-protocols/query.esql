@@ -1,0 +1,30 @@
+// ALM-02 | East-west administrative connections inside the VPC (SSH, RDP, SMB, WinRM, databases)
+// Tactic: TA0008 Lateral Movement | ATT&CK: T1021, T1210
+// Indexes: aws-vpcflow-* | Needs: VPC Flow Logs (accepted traffic)
+FROM aws-vpcflow-* METADATA _index
+| WHERE aws.vpcflow.action == "ACCEPT"
+| WHERE CIDR_MATCH(source.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "fc00::/7", "fe80::/10", "::1/128")
+    AND CIDR_MATCH(destination.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "fc00::/7", "fe80::/10", "::1/128")
+| WHERE destination.port IN (22, 135, 445, 3389, 5985, 5986, 1433, 3306, 5432, 6379, 27017)  // EDIT: ports
+| STATS
+    flows = COUNT(*),
+    bytes = SUM(source.bytes),
+    ports = VALUES(destination.port),
+    first_flow = MIN(@timestamp),
+    last_flow = MAX(@timestamp)
+  BY _index, source.ip, destination.ip
+| INLINE STATS peers_of_source = COUNT(*) BY _index, source.ip
+| INLINE STATS sources_of_peer = COUNT(*) BY _index, destination.ip
+| KEEP
+    _index,
+    source.ip,
+    destination.ip,
+    ports,
+    flows,
+    bytes,
+    peers_of_source,
+    sources_of_peer,
+    first_flow,
+    last_flow
+| SORT sources_of_peer ASC, peers_of_source DESC
+| LIMIT 5000

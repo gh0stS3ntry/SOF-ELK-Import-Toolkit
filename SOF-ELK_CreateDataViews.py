@@ -19,10 +19,16 @@ Creates:
   amcache-*           AmcacheParser
   shimcache-*         AppCompatCacheParser / ShimCache
   registry-*          RECmd
+  aws-cloudtrail-*    AWS/cloudtrail2sofelk.py (CloudTrail)
+  aws-vpcflow-*       AWS/vpcflow2sofelk.py (VPC Flow Logs)
+  aws-alb-*           AWS/alb2sofelk.py (ALB / Classic ELB access logs)
+  aws-waf-*           AWS/waf2sofelk.py (AWS WAF)
 
 The existing SOF-ELK Data Views for filesystem-*, evtxlogs-*, lnkfiles-* and
 prefetch-* are deliberately not recreated because they already exist in the
-stock SOF-ELK distribution.
+stock SOF-ELK distribution. SOF-ELK's own aws-* Data View (for its Logstash
+CloudTrail output, aws-YYYY.MM) is also left alone; the toolkit's AWS indexes get
+their own, narrower patterns so the two mappings do not mix.
 
 Standard library only.
 """
@@ -48,6 +54,10 @@ DATA_VIEWS = [
     ("amcache", "amcache-*"),
     ("shimcache", "shimcache-*"),
     ("registry", "registry-*"),
+    ("aws-cloudtrail", "aws-cloudtrail-*"),
+    ("aws-vpcflow", "aws-vpcflow-*"),
+    ("aws-alb", "aws-alb-*"),
+    ("aws-waf", "aws-waf-*"),
 ]
 
 DATE_FORMAT = "YYYY-MM-DD HH:mm:ss.SSS\\Z"
@@ -121,7 +131,7 @@ def main():
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Delete and recreate the thirteen Data Views if they already exist",
+        help="Delete and recreate the seventeen Data Views if they already exist",
     )
     parser.add_argument(
         "--dry-run",

@@ -1,0 +1,35 @@
+// ADI-02 | Permission probing: AccessDenied and UnauthorizedOperation errors per principal
+// Tactic: TA0007 Discovery | ATT&CK: T1580, T1069.003
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail events with an error code
+FROM aws-cloudtrail-* METADATA _index
+| WHERE aws.cloudtrail.error_code IS NOT NULL
+| EVAL err = aws.cloudtrail.error_code
+| WHERE err LIKE "*AccessDenied*" OR err LIKE "*Unauthorized*" OR err IN ("AuthorizationError", "Forbidden", "InvalidClientTokenId", "SignatureDoesNotMatch", "ExpiredToken")
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| STATS
+    denied = COUNT(*),
+    distinct_apis = COUNT_DISTINCT(aws.cloudtrail.event_name),
+    services = COUNT_DISTINCT(aws.cloudtrail.event_source),
+    error_codes = VALUES(err),
+    apis = VALUES(aws.cloudtrail.event_name),
+    sources = VALUES(source.address),
+    user_agents = VALUES(user_agent.original),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, cloud.account.id, caller
+| EVAL apis = MV_SLICE(apis, 0, 49), user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    cloud.account.id,
+    caller,
+    denied,
+    distinct_apis,
+    services,
+    error_codes,
+    first_seen,
+    last_seen,
+    sources,
+    user_agents,
+    apis
+| SORT distinct_apis DESC, denied DESC
+| LIMIT 1000

@@ -2,7 +2,9 @@
 
 A first-cut set of ES|QL queries for Windows incident response on SOF-ELK, for data loaded with this toolkit. The queries are grouped by MITRE ATT&CK tactic, each in its own folder with a `query.esql` and a short `README.md` (what it finds, what it needs, how to read the output). The role checklists in [`checklists/`](checklists/) say which queries to run for which kind of host.
 
-The pack is built from the queries used in an earlier engagement (RD01) and the IR checklist used to track it, rewritten for the toolkit's field names. It also covers sources RD01 did not have, such as Security 4688 and Sysmon process creation, network and WMI events. Every query passes the static checker below. None has been run against a live cluster as part of this change, so expect to adjust a few field names to what your data actually has.
+The AWS queries under [`queries/aws/`](queries/aws/) do the same for CloudTrail, VPC Flow Logs, ALB/ELB access logs and AWS WAF logs loaded with the importers in [`AWS/`](../AWS/); see [AWS logs](#aws-logs) below.
+
+The Windows pack is built from the queries used in an earlier engagement (RD01) and the IR checklist used to track it, rewritten for the toolkit's field names. It also covers sources RD01 did not have, such as Security 4688 and Sysmon process creation, network and WMI events. Every query passes the static checker below. None has been run against a live cluster as part of this change, so expect to adjust a few field names to what your data actually has.
 
 ## Running a query
 
@@ -37,6 +39,16 @@ The queries need Elasticsearch 9.x, because several use `INLINE STATS` and `STAT
 - `sum-*` (SumECmd) has no template, so its field names follow the raw CSV columns and are not verified; see [LM-06](queries/TA0008-lateral-movement/LM-06-sum-ual-client-access/).
 - Registry plugin output is in `registry.plugin.<snake_case_column>`, batch output in `registry.data.strings` (see `docs/schemas/registry.md`). A query can only see keys your RECmd batch file dumps.
 
+## AWS logs
+
+- Indexes are `aws-cloudtrail-<source>`, `aws-vpcflow-<source>`, `aws-alb-<source>` and `aws-waf-<source>`, where `<source>` is the `--source` label given to the importer (usually the account ID or an evidence label). `_index` in each row says which evidence source it came from.
+- Each query names its index family explicitly (`FROM aws-cloudtrail-*`), never `aws-*`: SOF-ELK's own pipeline writes CloudTrail to `aws-YYYY.MM` indexes with a different mapping, and a bare `aws-*` would mix the two.
+- Field names follow SOF-ELK's AWS parsing (`aws.cloudtrail.event_name`, `source.ip`, `user.name`, `aws.vpcflow.action`, `aws.elb.*`) plus the toolkit's additions; the field reference is in [`docs/schemas/aws-*.md`](../docs/schemas/). WAF has no SOF-ELK parser, so `aws.waf.*` is the toolkit's own schema.
+- CloudTrail request parameters are searchable two ways: a curated set as keywords (`aws.cloudtrail.request_parameters.bucket_name`, `.policy_arn`, ...) and the whole object as JSON text in `aws.cloudtrail.flattened.request_parameters`, which the queries match with `LIKE`/`RLIKE` when a key is not curated.
+- VPC Flow records count one direction: `source.bytes` is what the source sent, and `destination.bytes` is always 0, as in SOF-ELK. Queries that need both directions pair the two records.
+- Query IDs start with `A`: `ATRI` triage, `AIA` initial access, `AEX` execution, `APE` persistence, `APR` privilege escalation, `ACA` credential access, `ADI` discovery, `ALM` lateral movement, `ACO` collection, `AEXF` exfiltration, `AC2` command and control, `AIM` impact, `ADE` defense impairment.
+- Times loaded from a CSV that Excel re-saved lose their seconds (and their time zone, read as UTC). Beaconing and burst queries (AC2-01, ADI-01, AIA-02) are the ones that suffer; reload from the original export when it matters.
+
 ## Checking the pack
 
 ```
@@ -44,6 +56,13 @@ python3 hunting/tools/check_queries.py        # add -v to list each query
 ```
 
 The checker needs only the Python standard library. It reads the toolkit's index templates and `docs/sofelk-native-fields.csv` and reports unknown field names, raw parser column names, broken conventions, RLIKE and LIKE patterns that Lucene reads differently than intended, missing READMEs, catalog entries and checklist references. Run it after editing any query.
+
+Optionally, the queries can also be checked with Elastic's own ES|QL grammar, which catches syntax errors (bad escapes, reserved words used as names) that the static checker does not:
+
+```
+npm install --prefix /tmp/esql @elastic/esql
+node hunting/tools/parse_queries.mjs /tmp/esql      # every query.esql under hunting/queries
+```
 
 ## Checklists
 
@@ -55,6 +74,9 @@ The checker needs only the Python standard library. It reads the toolkit's index
 | [Database server](checklists/database-server.md) | SQL Server and other database hosts |
 | [Domain controller](checklists/domain-controller.md) | AD DS, DNS, and other tier-0 servers |
 | [File server](checklists/file-server.md) | file shares, DFS, backup targets |
+| [AWS account (CloudTrail)](checklists/aws-account-control-plane.md) | every AWS account in scope |
+| [AWS web application (ALB and WAF)](checklists/aws-web-application.md) | applications behind an ALB/ELB and AWS WAF |
+| [AWS network (VPC Flow Logs)](checklists/aws-vpc-network.md) | VPCs, subnets and interfaces with flow logs |
 
 `checklists/IR_CHECKLIST_ROLES.xlsx` has the same content with one sheet per role and the tracking columns of the IR checklist (Tasked to, Status, Findings, Handover). Rebuild it after editing a checklist with `python3 hunting/tools/build_checklist_xlsx.py` (needs `openpyxl`).
 
@@ -227,3 +249,103 @@ The checker needs only the Python standard library. It reads the toolkit's index
 | [DE-08](queries/TA0112-defense-impairment/DE-08-recycle-bin-deletions/) | Files sent to the Recycle Bin | `recyclebin-*` | end-user workstation; any host with interactive logons |
 | [DE-09](queries/TA0112-defense-impairment/DE-09-masquerading-system-binaries/) | Masquerading: Windows binary names in the wrong folder, and look-alike names | `amcache-*`, `shimcache-*`, `prefetch-*` | all |
 | [DE-10](queries/TA0112-defense-impairment/DE-10-audit-policy-and-time-changes/) | Audit policy reduced, system time changed | `evtxlogs-*` | all; domain controllers for policy changes pushed by GPO |
+
+### AWS
+
+The AWS queries, by tactic. Run ATRI-01 first: it shows which AWS log types, accounts and regions were loaded.
+
+#### AWS: Triage (run first)
+
+| ID | Query | Indexes | Applies to |
+|---|---|---|---|
+| [ATRI-01](queries/aws/00-triage/ATRI-01-aws-data-coverage/) | AWS data coverage per index: log types, accounts, regions, time range | `aws-cloudtrail-*`, `aws-vpcflow-*`, `aws-alb-*`, `aws-waf-*` | every AWS evidence source |
+| [ATRI-02](queries/aws/00-triage/ATRI-02-cloudtrail-principal-inventory/) | CloudTrail principals: who called what, from where, and how often it failed | `aws-cloudtrail-*` | every AWS account |
+
+#### AWS: TA0001 Initial Access
+
+| ID | Query | Indexes | Applies to |
+|---|---|---|---|
+| [AIA-01](queries/aws/TA0001-initial-access/AIA-01-console-logins/) | Console sign-ins: root use, missing MFA and failures, per user and source | `aws-cloudtrail-*` | every AWS account |
+| [AIA-02](queries/aws/TA0001-initial-access/AIA-02-console-brute-force/) | Console brute force and password spraying, per source and hour | `aws-cloudtrail-*` | every AWS account with IAM users |
+| [AIA-03](queries/aws/TA0001-initial-access/AIA-03-access-key-sources/) | Long-term access keys: source addresses, user agents and tooling per key | `aws-cloudtrail-*` | every AWS account with IAM user access keys |
+| [AIA-04](queries/aws/TA0001-initial-access/AIA-04-alb-exploitation-attempts/) | Web exploitation attempts in load balancer logs, scored per client | `aws-alb-*` | internet-facing applications behind an ALB or ELB |
+| [AIA-05](queries/aws/TA0001-initial-access/AIA-05-waf-blocked-and-allowed-sources/) | WAF: blocked clients, and what the same clients got through | `aws-waf-*` | internet-facing applications behind AWS WAF |
+| [AIA-06](queries/aws/TA0001-initial-access/AIA-06-waf-count-mode-matches/) | WAF rules that matched but did not block (Count mode and labels on allowed requests) | `aws-waf-*` | internet-facing applications behind AWS WAF |
+
+#### AWS: TA0002 Execution
+
+| ID | Query | Indexes | Applies to |
+|---|---|---|---|
+| [AEX-01](queries/aws/TA0002-execution/AEX-01-remote-execution-on-workloads/) | Code run on workloads through AWS APIs: SSM, EC2 user data, Instance Connect, Lambda, ECS, CloudFormation | `aws-cloudtrail-*` | every AWS account with EC2, Lambda or ECS workloads |
+
+#### AWS: TA0003 Persistence
+
+| ID | Query | Indexes | Applies to |
+|---|---|---|---|
+| [APE-01](queries/aws/TA0003-persistence/APE-01-iam-user-and-key-persistence/) | IAM users, access keys, passwords and MFA changes, scored | `aws-cloudtrail-*` | every AWS account |
+| [APE-02](queries/aws/TA0003-persistence/APE-02-role-trust-and-federation-backdoors/) | Role trust policies and identity providers that let an outside principal in | `aws-cloudtrail-*` | every AWS account |
+| [APE-03](queries/aws/TA0003-persistence/APE-03-alb-web-shell-requests/) | Possible web shells: script files on the load balancer reached by very few clients | `aws-alb-*` | internet-facing applications behind an ALB or ELB |
+
+#### AWS: TA0004 Privilege Escalation
+
+| ID | Query | Indexes | Applies to |
+|---|---|---|---|
+| [APR-01](queries/aws/TA0004-privilege-escalation/APR-01-iam-policy-escalation/) | IAM privilege escalation: admin policies, policy versions and permission boundaries | `aws-cloudtrail-*` | every AWS account |
+
+#### AWS: TA0006 Credential Access
+
+| ID | Query | Indexes | Applies to |
+|---|---|---|---|
+| [ACA-01](queries/aws/TA0006-credential-access/ACA-01-secrets-and-parameter-retrieval/) | Secrets Manager, Parameter Store and EC2 password retrieval, per principal | `aws-cloudtrail-*` | every AWS account |
+| [ACA-02](queries/aws/TA0006-credential-access/ACA-02-instance-credentials-from-many-sources/) | EC2 instance role credentials used from several source addresses | `aws-cloudtrail-*` | every AWS account with EC2 instances |
+
+#### AWS: TA0007 Discovery
+
+| ID | Query | Indexes | Applies to |
+|---|---|---|---|
+| [ADI-01](queries/aws/TA0007-discovery/ADI-01-enumeration-bursts/) | Enumeration bursts: many List, Describe and Get calls across services in a few minutes | `aws-cloudtrail-*` | every AWS account |
+| [ADI-02](queries/aws/TA0007-discovery/ADI-02-access-denied-probing/) | Permission probing: AccessDenied and UnauthorizedOperation errors per principal | `aws-cloudtrail-*` | every AWS account |
+| [ADI-03](queries/aws/TA0007-discovery/ADI-03-vpc-internal-scanning/) | Internal scanning inside the VPC: one source reaching many hosts or ports | `aws-vpcflow-*` | every VPC with flow logs |
+| [ADI-04](queries/aws/TA0007-discovery/ADI-04-vpc-inbound-scans-and-exposure/) | Inbound traffic from the internet: scanners, and what they reached | `aws-vpcflow-*` | every VPC with internet-facing instances or load balancers |
+
+#### AWS: TA0008 Lateral Movement
+
+| ID | Query | Indexes | Applies to |
+|---|---|---|---|
+| [ALM-01](queries/aws/TA0008-lateral-movement/ALM-01-role-assumption-and-cross-account/) | Role assumption: who assumed which role, cross-account access and failures | `aws-cloudtrail-*` | every AWS account, and organizations with several accounts |
+| [ALM-02](queries/aws/TA0008-lateral-movement/ALM-02-vpc-east-west-admin-protocols/) | East-west administrative connections inside the VPC (SSH, RDP, SMB, WinRM, databases) | `aws-vpcflow-*` | every VPC with flow logs |
+
+#### AWS: TA0009 Collection
+
+| ID | Query | Indexes | Applies to |
+|---|---|---|---|
+| [ACO-01](queries/aws/TA0009-collection/ACO-01-s3-data-access-volume/) | S3 object reads and listings per principal, bucket and hour | `aws-cloudtrail-*` | every AWS account holding data in S3 |
+
+#### AWS: TA0010 Exfiltration
+
+| ID | Query | Indexes | Applies to |
+|---|---|---|---|
+| [AEXF-01](queries/aws/TA0010-exfiltration/AEXF-01-resource-sharing-and-public-exposure/) | Snapshots, images, buckets and keys shared with other accounts or made public | `aws-cloudtrail-*` | every AWS account |
+| [AEXF-02](queries/aws/TA0010-exfiltration/AEXF-02-vpc-large-outbound-transfers/) | Large outbound transfers from the VPC to public addresses | `aws-vpcflow-*` | every VPC with flow logs |
+| [AEXF-03](queries/aws/TA0010-exfiltration/AEXF-03-alb-large-responses/) | Clients that pulled the most data through the load balancer | `aws-alb-*` | internet-facing applications behind an ALB or ELB |
+
+#### AWS: TA0011 Command and Control
+
+| ID | Query | Indexes | Applies to |
+|---|---|---|---|
+| [AC2-01](queries/aws/TA0011-command-and-control/AC2-01-vpc-beaconing/) | Beacon-like outbound connections: one instance, one rare destination, every hour | `aws-vpcflow-*` | every VPC with flow logs |
+| [AC2-02](queries/aws/TA0011-command-and-control/AC2-02-vpc-uncommon-outbound-ports/) | Outbound connections on uncommon and known-bad ports (Tor, mining pools, reverse shells) | `aws-vpcflow-*` | every VPC with flow logs |
+
+#### AWS: TA0040 Impact
+
+| ID | Query | Indexes | Applies to |
+|---|---|---|---|
+| [AIM-01](queries/aws/TA0040-impact/AIM-01-destructive-and-resource-hijacking-actions/) | Destructive actions, ransom-style encryption and resource hijacking, per principal and hour | `aws-cloudtrail-*` | every AWS account |
+
+#### AWS: TA0112 Defense Impairment
+
+| ID | Query | Indexes | Applies to |
+|---|---|---|---|
+| [ADE-01](queries/aws/TA0112-defense-impairment/ADE-01-logging-and-security-tool-tampering/) | Logging and security services stopped, deleted or weakened | `aws-cloudtrail-*` | every AWS account |
+| [ADE-02](queries/aws/TA0112-defense-impairment/ADE-02-rare-regions/) | Activity in regions the account rarely uses | `aws-cloudtrail-*` | every AWS account |
+| [ADE-03](queries/aws/TA0112-defense-impairment/ADE-03-network-exposure-changes/) | Security groups, network ACLs and routes opened to the internet | `aws-cloudtrail-*` | every AWS account with VPCs |

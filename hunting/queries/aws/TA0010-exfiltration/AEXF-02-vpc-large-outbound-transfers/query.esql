@@ -1,0 +1,33 @@
+// AEXF-02 | Large outbound transfers from the VPC to public addresses
+// Tactic: TA0010 Exfiltration | ATT&CK: T1048, T1041
+// Indexes: aws-vpcflow-* | Needs: VPC Flow Logs (accepted traffic)
+FROM aws-vpcflow-* METADATA _index
+| WHERE aws.vpcflow.action == "ACCEPT"
+| WHERE CIDR_MATCH(source.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "fc00::/7", "fe80::/10", "::1/128")
+    AND NOT CIDR_MATCH(destination.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "fc00::/7", "fe80::/10", "::1/128")
+| STATS
+    bytes_out = SUM(source.bytes),
+    flows = COUNT(*),
+    ports = VALUES(destination.port),
+    aws_services = VALUES(aws.vpcflow.destination_service),
+    interfaces = VALUES(aws.vpcflow.interface_id),
+    first_flow = MIN(@timestamp),
+    last_flow = MAX(@timestamp)
+  BY _index, source.ip, destination.ip
+| WHERE bytes_out >= 104857600  // EDIT: 100 MB
+| EVAL mb_out = ROUND(bytes_out / 1048576.0, 1)
+| INLINE STATS internal_peers = COUNT(*) BY _index, destination.ip
+| KEEP
+    _index,
+    source.ip,
+    destination.ip,
+    mb_out,
+    flows,
+    ports,
+    internal_peers,
+    aws_services,
+    first_flow,
+    last_flow,
+    interfaces
+| SORT mb_out DESC
+| LIMIT 1000

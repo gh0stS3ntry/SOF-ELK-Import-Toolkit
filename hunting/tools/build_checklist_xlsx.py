@@ -40,6 +40,9 @@ ORDER = [
     "database-server.md",
     "domain-controller.md",
     "file-server.md",
+    "aws-account-control-plane.md",
+    "aws-web-application.md",
+    "aws-vpc-network.md",
 ]
 SHEET_NAMES = {
     "00-baseline-all-windows-hosts.md": "Baseline",
@@ -48,6 +51,9 @@ SHEET_NAMES = {
     "database-server.md": "Database server",
     "domain-controller.md": "Domain controller",
     "file-server.md": "File server",
+    "aws-account-control-plane.md": "AWS account",
+    "aws-web-application.md": "AWS web app",
+    "aws-vpc-network.md": "AWS network",
 }
 HEADERS = ["#", "Check", "Tasked to", "Status", "Findings", "Handover From",
            "Handover to", "Handover Date", "Details", "Queries", "IR ref"]

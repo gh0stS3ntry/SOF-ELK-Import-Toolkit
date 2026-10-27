@@ -1,0 +1,44 @@
+// AIA-01 | Console sign-ins: root use, missing MFA and failures, per user and source
+// Tactic: TA0001 Initial Access | ATT&CK: T1078.004, T1110
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail ConsoleLogin events (signin.amazonaws.com; logged in us-east-1 for most sign-ins)
+FROM aws-cloudtrail-* METADATA _index
+| WHERE aws.cloudtrail.event_name == "ConsoleLogin"
+| EVAL account_user = COALESCE(user.name, aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.type)
+| EVAL is_root = COALESCE(aws.cloudtrail.user_identity.type, "") == "Root"
+| EVAL ok = COALESCE(aws.cloudtrail.console_login, "") == "Success"
+| EVAL no_mfa = ok AND COALESCE(aws.cloudtrail.additional_eventdata.mfa_used, "") == "No"
+| EVAL public_source = source.ip IS NOT NULL AND NOT CIDR_MATCH(source.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "fc00::/7", "fe80::/10", "::1/128")
+| STATS
+    successes = COUNT(*) WHERE ok,
+    failures = COUNT(*) WHERE NOT ok,
+    success_without_mfa = COUNT(*) WHERE no_mfa,
+    root_logins = COUNT(*) WHERE is_root,
+    error_messages = VALUES(aws.cloudtrail.error_message),
+    user_agents = VALUES(user_agent.original),
+    login_to = VALUES(aws.cloudtrail.additional_eventdata.login_to),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, cloud.account.id, account_user, source.address, public_source
+| EVAL score = CASE(root_logins > 0, 3, 0)
+    + CASE(success_without_mfa > 0, 2, 0)
+    + CASE(failures >= 5, 2, failures > 0, 1, 0)
+    + CASE(successes > 0 AND failures > 0, 2, 0)
+| EVAL user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    score,
+    cloud.account.id,
+    account_user,
+    source.address,
+    public_source,
+    successes,
+    failures,
+    success_without_mfa,
+    root_logins,
+    error_messages,
+    first_seen,
+    last_seen,
+    login_to,
+    user_agents
+| SORT score DESC, failures DESC, first_seen ASC
+| LIMIT 2000

@@ -34,6 +34,7 @@ REPO = PACK.parent
 QUERIES = PACK / "queries"
 CHECKLISTS = PACK / "checklists"
 TEMPLATES = REPO / "Windows" / "index_templates"
+AWS_TEMPLATES = REPO / "AWS" / "index_templates"
 NATIVE_CSV = REPO / "docs" / "sofelk-native-fields.csv"
 
 NATIVE_FAMILIES = ("filesystem", "evtxlogs", "lnkfiles", "prefetch")
@@ -104,6 +105,20 @@ def load_fields() -> Fields:
     for name in CLR_FIELDS:
         fields.add("clrusagelogs", name)
 
+    # AWS indexes: aws-<log type>-<source>, composed of their own common component
+    aws_exact, aws_prefix = set(), set()
+    aws_common = json.loads((AWS_TEMPLATES / "component-toolkit-aws-common.json").read_text(encoding="utf-8"))
+    walk_mapping(aws_common["template"]["mappings"]["properties"], "", aws_exact, aws_prefix)
+    for path in sorted(AWS_TEMPLATES.glob("index-*.json")):
+        family = path.stem[len("index-"):]
+        spec = json.loads(path.read_text(encoding="utf-8"))
+        exact, prefix = set(aws_exact), set(aws_prefix)
+        walk_mapping(spec["template"]["mappings"].get("properties"), "", exact, prefix)
+        for name in exact:
+            fields.add(family, name)
+        for p in prefix:
+            fields.add_prefix(family, p)
+
     with NATIVE_CSV.open(encoding="utf-8", newline="") as fh:
         for row in csv.DictReader(fh):
             index, raw = row["index"].strip(), row["field"].strip()
@@ -162,10 +177,20 @@ def strip_comments(text):
     return "\n".join(out)
 
 
+AWS_FAMILIES = sorted(p.stem[len("index-"):] for p in AWS_TEMPLATES.glob("index-*.json"))
+
+
 def families_of(targets):
     fams = []
     for t in targets.split(","):
         t = t.strip()
+        if t in ("aws-*", "aws*"):
+            fams.extend(AWS_FAMILIES)
+            continue
+        aws = next((f for f in AWS_FAMILIES if t.startswith(f + "-")), None)
+        if aws:
+            fams.append(aws)
+            continue
         m = re.match(r"^([a-z]+)-", t)
         if m:
             fams.append(m.group(1))

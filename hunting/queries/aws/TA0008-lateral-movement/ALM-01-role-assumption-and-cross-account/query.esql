@@ -1,0 +1,38 @@
+// ALM-01 | Role assumption: who assumed which role, cross-account access and failures
+// Tactic: TA0008 Lateral Movement | ATT&CK: T1550.001, T1078.004
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail STS events (AssumeRole*, GetFederationToken)
+FROM aws-cloudtrail-* METADATA _index
+| WHERE aws.cloudtrail.event_name IN ("AssumeRole", "AssumeRoleWithSAML", "AssumeRoleWithWebIdentity",
+    "GetFederationToken", "AssumeRoot", "SwitchRole")
+| WHERE COALESCE(aws.cloudtrail.user_identity.type, "") != "AWSService"
+    AND NOT COALESCE(source.address, "") LIKE "*.amazonaws.com"
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| EVAL role = COALESCE(aws.cloudtrail.request_parameters.role_arn, aws.cloudtrail.response_elements.assumed_role_arn, "")
+| GROK role "arn:aws:%{WORD}::%{INT:role_account}:"
+| EVAL caller_account = COALESCE(aws.cloudtrail.user_identity.account_id, cloud.account.id)
+| EVAL cross_account = role_account IS NOT NULL AND caller_account IS NOT NULL AND role_account != caller_account
+| STATS
+    events = COUNT(*),
+    failed = COUNT(*) WHERE event.outcome == "failure",
+    session_names = VALUES(aws.cloudtrail.request_parameters.role_session_name),
+    sources = VALUES(source.address),
+    user_agents = VALUES(user_agent.original),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, caller, aws.cloudtrail.event_name, role, cross_account
+| EVAL session_names = MV_SLICE(session_names, 0, 9), sources = MV_SLICE(sources, 0, 9), user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    caller,
+    aws.cloudtrail.event_name,
+    role,
+    cross_account,
+    events,
+    failed,
+    first_seen,
+    last_seen,
+    session_names,
+    sources,
+    user_agents
+| SORT cross_account DESC, failed DESC, events ASC
+| LIMIT 2000

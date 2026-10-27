@@ -1,0 +1,1 @@
+{"events": [{"logStreamName": "eni-0c3-all", "timestamp": 1792458000000, "message": "2 123456789012 eni-0c3 10.0.3.5 185.220.101.4 51000 9001 6 4000 2000000 1792458000 1792458600 ACCEPT OK", "ingestionTime": 1792458700000, "eventId": "1"}]}

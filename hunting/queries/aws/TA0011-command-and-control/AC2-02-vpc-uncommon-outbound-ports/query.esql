@@ -1,0 +1,36 @@
+// AC2-02 | Outbound connections on uncommon and known-bad ports (Tor, mining pools, reverse shells)
+// Tactic: TA0011 Command and Control | ATT&CK: T1571, T1090.003, T1496
+// Indexes: aws-vpcflow-* | Needs: VPC Flow Logs (accepted traffic)
+FROM aws-vpcflow-* METADATA _index
+| WHERE aws.vpcflow.action == "ACCEPT"
+| WHERE CIDR_MATCH(source.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "fc00::/7", "fe80::/10", "::1/128")
+    AND NOT CIDR_MATCH(destination.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "fc00::/7", "fe80::/10", "::1/128")
+| WHERE destination.port < 32768
+| WHERE destination.port NOT IN (80, 443, 53, 123, 587, 993, 465)  // EDIT: the client's normal egress ports
+| EVAL known_bad = destination.port IN (4444, 1337, 31337, 6666, 6667, 6697, 9001, 9030, 9050, 9150, 3333, 5555, 7777, 8333, 14433, 14444, 45560, 45700)
+| STATS
+    flows = COUNT(*),
+    sources = COUNT_DISTINCT(source.ip),
+    source_list = VALUES(source.ip),
+    destinations = COUNT_DISTINCT(destination.ip),
+    destination_list = VALUES(destination.ip),
+    bytes_out = SUM(source.bytes),
+    first_flow = MIN(@timestamp),
+    last_flow = MAX(@timestamp)
+  BY _index, destination.port, network.transport, known_bad
+| EVAL source_list = MV_SLICE(source_list, 0, 19), destination_list = MV_SLICE(destination_list, 0, 19)
+| KEEP
+    _index,
+    destination.port,
+    network.transport,
+    known_bad,
+    flows,
+    sources,
+    destinations,
+    bytes_out,
+    first_flow,
+    last_flow,
+    source_list,
+    destination_list
+| SORT known_bad DESC, sources ASC, flows DESC
+| LIMIT 1000

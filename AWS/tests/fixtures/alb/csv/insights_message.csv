@@ -1,0 +1,2 @@
+@timestamp,@message
+2026-10-20 02:18:00.000,"https 2026-10-20T02:18:00.000000Z app/shop-alb/50dc6c495c0c9188 198.51.100.7:51002 10.0.1.15:8080 0.001 0.002 0.000 200 200 300 9000000 ""GET https://shop.example.com:443/export/all.csv HTTP/1.1"" ""curl/8.4.0"" ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2 arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/shop-tg/73e2d6bc24d8a067 ""Root=1-abe"" ""shop.example.com"" ""-"" 1 2026-10-20T02:18:00.000000Z ""forward"" ""-"" ""-"" ""10.0.1.15:8080"" ""200"" ""-"" ""-"" TID_3"

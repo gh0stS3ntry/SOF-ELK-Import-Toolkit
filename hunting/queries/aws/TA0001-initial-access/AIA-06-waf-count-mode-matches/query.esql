@@ -1,0 +1,30 @@
+// AIA-06 | WAF rules that matched but did not block (Count mode and labels on allowed requests)
+// Tactic: TA0001 Initial Access | ATT&CK: T1190
+// Indexes: aws-waf-* | Needs: AWS WAF web ACL logs with allowed requests
+FROM aws-waf-* METADATA _index
+| WHERE aws.waf.action == "ALLOW" AND aws.waf.non_terminating_rule_ids IS NOT NULL
+| MV_EXPAND aws.waf.non_terminating_rule_ids
+| EVAL rule = aws.waf.non_terminating_rule_ids
+| STATS
+    requests = COUNT(*),
+    clients = COUNT_DISTINCT(source.ip),
+    sample_clients = VALUES(source.ip),
+    paths = VALUES(url.path),
+    labels = VALUES(aws.waf.labels),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, aws.waf.web_acl_name, rule
+| EVAL sample_clients = MV_SLICE(sample_clients, 0, 19), paths = MV_SLICE(paths, 0, 19), labels = MV_SLICE(labels, 0, 19)
+| KEEP
+    _index,
+    aws.waf.web_acl_name,
+    rule,
+    requests,
+    clients,
+    first_seen,
+    last_seen,
+    sample_clients,
+    paths,
+    labels
+| SORT requests DESC
+| LIMIT 1000

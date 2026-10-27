@@ -1,0 +1,2 @@
+@timestamp	@ptr	accountId	interfaceId	srcAddr	dstAddr	srcPort	dstPort	protocol	packets	bytes	start	end	action	logStatus
+2026-10-20 02:05:00.000	CmAKJgoi	123456789012	eni-0a1b2c3d	10.0.1.15	203.0.113.80	49822	8443	6	900	52428800	1792461900	1792461960	ACCEPT	OK

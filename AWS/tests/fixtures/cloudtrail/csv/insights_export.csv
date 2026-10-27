@@ -1,0 +1,2 @@
+@timestamp,@message
+2026-10-20 02:40:00.000,"{""eventVersion"": ""1.10"", ""eventTime"": ""2026-10-20T02:40:00Z"", ""eventSource"": ""ec2.amazonaws.com"", ""eventName"": ""DescribeInstances"", ""awsRegion"": ""us-east-1"", ""sourceIPAddress"": ""198.51.100.7"", ""userIdentity"": {""type"": ""IAMUser"", ""userName"": ""dev-ci"", ""arn"": ""arn:aws:iam::123456789012:user/dev-ci""}, ""eventID"": ""insights-1"", ""recipientAccountId"": ""123456789012"", ""readOnly"": true}"

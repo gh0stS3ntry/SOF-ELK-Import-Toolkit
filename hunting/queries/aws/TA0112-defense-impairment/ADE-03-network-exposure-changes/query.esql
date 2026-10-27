@@ -1,0 +1,38 @@
+// ADE-03 | Security groups, network ACLs and routes opened to the internet
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1562.007
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail EC2 and RDS management events
+FROM aws-cloudtrail-* METADATA _index
+| WHERE aws.cloudtrail.event_name IN ("AuthorizeSecurityGroupIngress", "AuthorizeSecurityGroupEgress", "ModifySecurityGroupRules",
+    "RevokeSecurityGroupEgress", "CreateSecurityGroup", "CreateNetworkAclEntry", "ReplaceNetworkAclEntry", "DeleteNetworkAclEntry",
+    "CreateRoute", "ReplaceRoute", "AttachInternetGateway", "CreateVpcPeeringConnection", "AcceptVpcPeeringConnection",
+    "ModifyInstanceAttribute", "ModifyDBInstance", "ModifyDBCluster", "AssociateAddress")
+| EVAL n = aws.cloudtrail.event_name
+| EVAL rp = TO_LOWER(COALESCE(aws.cloudtrail.flattened.request_parameters, ""))
+| WHERE n != "ModifyInstanceAttribute" OR rp LIKE "*groupset*"
+| WHERE n NOT IN ("ModifyDBInstance", "ModifyDBCluster") OR rp LIKE """*"publiclyaccessible":true*"""
+| EVAL f_world = rp LIKE "*0.0.0.0/0*" OR rp LIKE "*::/0*"
+| EVAL f_all_traffic = rp LIKE """*"ipprotocol":"-1"*""" OR rp LIKE """*"protocol":"-1"*"""
+| EVAL f_admin_port = rp RLIKE """.*\"fromport\":(22|23|135|139|445|1433|1521|2375|3306|3389|5432|5900|5985|5986|6379|9200|11211|27017)[,}].*"""
+| EVAL f_public_db = rp LIKE """*"publiclyaccessible":true*"""
+| EVAL score = CASE(f_world, 3, 0) + CASE(f_all_traffic, 2, 0) + CASE(f_admin_port, 2, 0) + CASE(f_public_db, 3, 0)
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| EVAL request = SUBSTRING(rp, 1, 600)
+| KEEP
+    _index,
+    @timestamp,
+    score,
+    n,
+    event.outcome,
+    caller,
+    aws.cloudtrail.request_parameters.group_id,
+    aws.cloudtrail.request_parameters.cidr_ip,
+    f_world,
+    f_all_traffic,
+    f_admin_port,
+    f_public_db,
+    source.address,
+    user_agent.original,
+    cloud.region,
+    request
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000
