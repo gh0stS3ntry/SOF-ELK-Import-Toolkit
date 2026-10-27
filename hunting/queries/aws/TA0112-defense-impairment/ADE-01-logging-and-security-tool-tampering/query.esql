@@ -1,0 +1,44 @@
+// ADE-01 | Logging and security services stopped, deleted or weakened
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1562.008, T1562.001
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail management events
+FROM aws-cloudtrail-* METADATA _index
+| EVAL n = aws.cloudtrail.event_name
+| EVAL area = CASE(
+    n IN ("StopLogging", "DeleteTrail", "UpdateTrail", "PutEventSelectors", "PutInsightSelectors", "DeleteEventDataStore",
+          "StopEventDataStoreIngestion"), "CloudTrail",
+    n IN ("DeleteFlowLogs"), "VPC Flow Logs",
+    n IN ("DeleteDetector", "UpdateDetector", "DisassociateFromMasterAccount", "DisassociateFromAdministratorAccount",
+          "StopMonitoringMembers", "DeleteMembers", "CreateFilter", "UpdateFilter", "CreateIPSet", "UpdateIPSet",
+          "DeletePublishingDestination", "UpdateMalwareScanSettings"), "GuardDuty",
+    n IN ("DisableSecurityHub", "BatchDisableStandards", "DisableImportFindingsForProduct", "DeleteInsight",
+          "BatchUpdateFindings"), "Security Hub",
+    n IN ("StopConfigurationRecorder", "DeleteConfigurationRecorder", "DeleteDeliveryChannel", "DeleteConfigRule",
+          "DeleteConformancePack"), "AWS Config",
+    n IN ("DeleteLogGroup", "DeleteLogStream", "PutRetentionPolicy", "DeleteSubscriptionFilter", "DeleteAlarms",
+          "DisableAlarmActions", "DeleteMetricFilter"), "CloudWatch",
+    n IN ("DeleteWebACL", "UpdateWebACL", "DisassociateWebACL", "DeleteLoggingConfiguration", "PutLoggingConfiguration",
+          "DeleteRuleGroup", "UpdateRuleGroup", "UpdateIPSet") AND aws.cloudtrail.event_source LIKE "waf*", "WAF",
+    n == "ModifyLoadBalancerAttributes" AND COALESCE(aws.cloudtrail.flattened.request_parameters, "") LIKE "*access_logs*", "ELB access logs",
+    n IN ("PutBucketLogging", "DeleteBucketLogging"), "S3 access logging",
+    n IN ("DisableMacie", "DisableOrganizationAdminAccount", "DeleteAnalyzer", "Disable", "DisableEbsEncryptionByDefault",
+          "DeregisterDelegatedAdministrator"), "Other security service",
+    n IN ("LeaveOrganization", "DetachPolicy", "DeletePolicy") AND aws.cloudtrail.event_source == "organizations.amazonaws.com", "Organizations (SCPs)",
+    null)
+| WHERE area IS NOT NULL
+| WHERE COALESCE(aws.cloudtrail.read_only, false) == false
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| EVAL request = SUBSTRING(COALESCE(aws.cloudtrail.flattened.request_parameters, ""), 1, 500)
+| KEEP
+    _index,
+    @timestamp,
+    area,
+    n,
+    event.outcome,
+    aws.cloudtrail.error_code,
+    caller,
+    source.address,
+    user_agent.original,
+    cloud.region,
+    request
+| SORT @timestamp ASC
+| LIMIT 10000

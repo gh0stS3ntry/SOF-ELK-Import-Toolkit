@@ -1,0 +1,42 @@
+// AIA-05 | WAF: blocked clients, and what the same clients got through
+// Tactic: TA0001 Initial Access | ATT&CK: T1190, T1595
+// Indexes: aws-waf-* | Needs: AWS WAF web ACL logs (full logs, not only blocked requests)
+FROM aws-waf-* METADATA _index
+| EVAL allowed = aws.waf.action == "ALLOW"
+| STATS
+    requests = COUNT(*),
+    blocked = COUNT(*) WHERE aws.waf.action == "BLOCK",
+    challenged = COUNT(*) WHERE aws.waf.action IN ("CAPTCHA", "CHALLENGE"),
+    allowed_requests = COUNT(*) WHERE allowed,
+    allowed_with_rule_match = COUNT(*) WHERE allowed AND aws.waf.non_terminating_rule_ids IS NOT NULL,
+    blocking_rules = VALUES(aws.waf.terminating_rule_id) WHERE aws.waf.action == "BLOCK",
+    allowed_paths = VALUES(url.path) WHERE allowed,
+    web_acls = VALUES(aws.waf.web_acl_name),
+    domains = VALUES(url.domain),
+    countries = VALUES(source.geo.country_iso_code),
+    user_agents = VALUES(user_agent.original),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, source.ip
+| WHERE blocked > 0
+| EVAL got_through = allowed_requests > 0
+| EVAL allowed_paths = MV_SLICE(allowed_paths, 0, 29), user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    source.ip,
+    countries,
+    got_through,
+    requests,
+    blocked,
+    challenged,
+    allowed_requests,
+    allowed_with_rule_match,
+    blocking_rules,
+    first_seen,
+    last_seen,
+    web_acls,
+    domains,
+    allowed_paths,
+    user_agents
+| SORT got_through DESC, blocked DESC
+| LIMIT 1000

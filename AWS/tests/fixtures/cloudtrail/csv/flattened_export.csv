@@ -1,0 +1,2 @@
+eventTime;eventName;eventSource;awsRegion;sourceIPAddress;userIdentity.type;userIdentity.arn;userIdentity.userName;userIdentity.sessionContext.attributes.mfaAuthenticated;requestParameters.userName;eventID
+2026-10-20T02:30:00Z;CreateLoginProfile;iam.amazonaws.com;us-east-1;198.51.100.7;IAMUser;arn:aws:iam::123456789012:user/dev-ci;dev-ci;false;backdoor;flat-1

@@ -1,0 +1,48 @@
+// AEXF-01 | Snapshots, images, buckets and keys shared with other accounts or made public
+// Tactic: TA0010 Exfiltration | ATT&CK: T1537, T1567
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail management events
+FROM aws-cloudtrail-* METADATA _index
+| WHERE aws.cloudtrail.event_name IN ("ModifySnapshotAttribute", "ModifyImageAttribute", "ModifyDBSnapshotAttribute",
+    "ModifyDBClusterSnapshotAttribute", "PutBucketPolicy", "PutBucketAcl", "PutObjectAcl", "DeleteBucketPolicy",
+    "PutBucketPublicAccessBlock", "DeleteBucketPublicAccessBlock", "DeletePublicAccessBlock", "PutAccountPublicAccessBlock",
+    "PutBucketReplication", "PutKeyPolicy", "CreateGrant", "PutResourcePolicy", "SetRepositoryPolicy",
+    "CreateResourceShare", "AssociateResourceShare", "CopySnapshot", "CopyImage", "CopyDBSnapshot",
+    "CreateStoreImageTask", "CreateInstanceExportTask", "ExportImage", "StartExportTask", "SharedSnapshotCopyInitiated")
+| WHERE event.outcome == "success"
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| EVAL rp = COALESCE(aws.cloudtrail.flattened.request_parameters, "")
+| GROK rp "userId...%{INT:shared_with}"
+| GROK rp "valuesToAdd....%{INT:db_shared_with}"
+| GROK rp "arn:aws:iam::%{INT:principal_account}:"
+| EVAL other_account = COALESCE(shared_with, db_shared_with, principal_account)
+| EVAL f_external = other_account IS NOT NULL AND other_account != COALESCE(cloud.account.id, "")
+| EVAL f_public = rp LIKE """*"group":"all"*""" OR rp LIKE "*AllUsers*" OR rp LIKE "*AuthenticatedUsers*"
+    OR rp LIKE """*"Principal":"\**""" OR rp LIKE """*"AWS":"\**""" OR rp LIKE """*\\"Principal\\":\\"\*\\"*"""
+    OR rp LIKE """*"valuesToAdd":["all"]*"""
+| EVAL f_block_removed = aws.cloudtrail.event_name LIKE "Delete*PublicAccessBlock"
+    OR (aws.cloudtrail.event_name LIKE "Put*PublicAccessBlock" AND rp LIKE "*:false*")
+| EVAL f_copy_out = aws.cloudtrail.event_name IN ("CopySnapshot", "CopyImage", "CopyDBSnapshot", "CreateStoreImageTask",
+    "CreateInstanceExportTask", "ExportImage", "StartExportTask")
+| EVAL score = CASE(f_public, 3, 0) + CASE(f_external, 3, 0) + CASE(f_block_removed, 2, 0) + CASE(f_copy_out, 1, 0)
+| EVAL target = COALESCE(aws.cloudtrail.request_parameters.snapshot_id, aws.cloudtrail.request_parameters.image_id,
+    aws.cloudtrail.request_parameters.bucket_name, aws.cloudtrail.request_parameters.key_id,
+    aws.cloudtrail.request_parameters.db_snapshot_identifier, aws.cloudtrail.request_parameters.secret_id,
+    aws.cloudtrail.request_parameters.name)
+| EVAL request = SUBSTRING(rp, 1, 600)
+| KEEP
+    _index,
+    @timestamp,
+    score,
+    aws.cloudtrail.event_name,
+    caller,
+    target,
+    other_account,
+    f_external,
+    f_public,
+    f_block_removed,
+    source.address,
+    user_agent.original,
+    cloud.region,
+    request
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

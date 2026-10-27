@@ -1,0 +1,26 @@
+// ATRI-01 | AWS data coverage per index: log types, accounts, regions, time range
+// Tactic: Triage (first cut) | ATT&CK: n/a
+// Indexes: aws-cloudtrail-*, aws-vpcflow-*, aws-alb-*, aws-waf-* | Needs: nothing
+FROM aws-cloudtrail-*, aws-vpcflow-*, aws-alb-*, aws-waf-* METADATA _index
+| STATS
+    records = COUNT(*),
+    first_event = MIN(@timestamp),
+    last_event = MAX(@timestamp),
+    accounts = VALUES(cloud.account.id),
+    regions = VALUES(cloud.region),
+    evidence_sources = VALUES(labels.evidence_source),
+    files = COUNT_DISTINCT(log.file.path)
+  BY _index, event.dataset
+| EVAL span_days = ROUND(DATE_DIFF("hour", first_event, last_event) / 24.0, 1)
+| KEEP
+    _index,
+    event.dataset,
+    records,
+    files,
+    first_event,
+    last_event,
+    span_days,
+    accounts,
+    regions,
+    evidence_sources
+| SORT _index, event.dataset

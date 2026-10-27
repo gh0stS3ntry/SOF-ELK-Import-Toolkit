@@ -1,0 +1,46 @@
+// ADI-01 | Enumeration bursts: many List, Describe and Get calls across services in a few minutes
+// Tactic: TA0007 Discovery | ATT&CK: T1580, T1526, T1087.004, T1069.003
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail management read events
+FROM aws-cloudtrail-* METADATA _index
+| WHERE aws.cloudtrail.read_only == true
+| EVAL n = aws.cloudtrail.event_name
+| WHERE n LIKE "List*" OR n LIKE "Describe*" OR n LIKE "Get*"
+| WHERE COALESCE(aws.cloudtrail.user_identity.type, "") != "AWSService"
+    AND NOT COALESCE(source.address, "") LIKE "*.amazonaws.com"
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| EVAL time_bucket = DATE_TRUNC(10 minutes, @timestamp)
+| STATS
+    calls = COUNT(*),
+    distinct_apis = COUNT_DISTINCT(n),
+    services = COUNT_DISTINCT(aws.cloudtrail.event_source),
+    denied = COUNT(*) WHERE event.outcome == "failure",
+    whoami = COUNT(*) WHERE n == "GetCallerIdentity",
+    service_list = VALUES(aws.cloudtrail.event_source),
+    sources = VALUES(source.address),
+    user_agents = VALUES(user_agent.original),
+    regions = COUNT_DISTINCT(cloud.region),
+    first_call = MIN(@timestamp),
+    last_call = MAX(@timestamp)
+  BY _index, cloud.account.id, caller, time_bucket
+| WHERE distinct_apis >= 20 OR services >= 6  // EDIT: thresholds
+| EVAL denied_pct = ROUND(100.0 * denied / calls, 1)
+| EVAL user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    time_bucket,
+    cloud.account.id,
+    caller,
+    calls,
+    distinct_apis,
+    services,
+    regions,
+    denied,
+    denied_pct,
+    whoami,
+    first_call,
+    last_call,
+    sources,
+    user_agents,
+    service_list
+| SORT distinct_apis DESC
+| LIMIT 1000

@@ -1,0 +1,37 @@
+// ADI-04 | Inbound traffic from the internet: scanners, and what they reached
+// Tactic: TA0007 Discovery | ATT&CK: T1595.001, T1046
+// Indexes: aws-vpcflow-* | Needs: VPC Flow Logs (all traffic)
+FROM aws-vpcflow-* METADATA _index
+| WHERE NOT CIDR_MATCH(source.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "fc00::/7", "fe80::/10", "::1/128")
+    AND CIDR_MATCH(destination.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "fc00::/7", "fe80::/10", "::1/128")
+| WHERE destination.port < 32768
+| EVAL admin_port = destination.port IN (22, 23, 135, 139, 445, 1433, 1521, 2375, 2376, 3306, 3389, 5432, 5900, 5985, 5986, 6379, 9200, 11211, 27017)
+| STATS
+    flows = COUNT(*),
+    accepted = COUNT(*) WHERE aws.vpcflow.action == "ACCEPT",
+    rejected = COUNT(*) WHERE aws.vpcflow.action == "REJECT",
+    dest_ports = COUNT_DISTINCT(destination.port),
+    targets = COUNT_DISTINCT(destination.ip),
+    accepted_admin_ports = VALUES(destination.port) WHERE admin_port AND aws.vpcflow.action == "ACCEPT",
+    accepted_targets = VALUES(destination.ip) WHERE admin_port AND aws.vpcflow.action == "ACCEPT",
+    bytes_in = SUM(source.bytes),
+    first_flow = MIN(@timestamp),
+    last_flow = MAX(@timestamp)
+  BY _index, source.ip
+| WHERE dest_ports >= 10 OR targets >= 10 OR accepted_admin_ports IS NOT NULL
+| EVAL accepted_targets = MV_SLICE(accepted_targets, 0, 19)
+| KEEP
+    _index,
+    source.ip,
+    flows,
+    accepted,
+    rejected,
+    dest_ports,
+    targets,
+    accepted_admin_ports,
+    accepted_targets,
+    bytes_in,
+    first_flow,
+    last_flow
+| SORT accepted_admin_ports DESC, dest_ports DESC
+| LIMIT 2000

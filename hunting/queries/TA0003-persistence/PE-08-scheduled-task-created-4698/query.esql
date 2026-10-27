@@ -24,7 +24,7 @@ FROM evtxlogs-* METADATA _index
     CASE(f_userpath, "user-writable path; ", ""),
     CASE(f_encoded, "encoded/hidden/download cradle; ", ""),
     CASE(f_hidden, "task marked hidden; ", ""),
-    CASE(f_not_ms, "outside \\Microsoft\; ", ""),
+    CASE(f_not_ms, "outside \\Microsoft\\; ", ""),
     CASE(f_system, "runs as SYSTEM; ", "")
   ), "; $", "")
 | KEEP

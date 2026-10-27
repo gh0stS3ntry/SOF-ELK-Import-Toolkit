@@ -1,0 +1,37 @@
+// ACA-02 | EC2 instance role credentials used from several source addresses
+// Tactic: TA0006 Credential Access | ATT&CK: T1552.005, T1078.004
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail events from EC2 instance-profile sessions
+FROM aws-cloudtrail-* METADATA _index
+| WHERE aws.cloudtrail.user_identity.type == "AssumedRole"
+| WHERE aws.cloudtrail.user_identity.arn RLIKE "arn:aws:sts::[0-9]+:assumed-role/.+/i-[0-9a-f]+"
+| WHERE NOT COALESCE(source.address, "") LIKE "*.amazonaws.com"
+| STATS
+    events = COUNT(*),
+    failed = COUNT(*) WHERE event.outcome == "failure",
+    source_count = COUNT_DISTINCT(source.address),
+    sources = VALUES(source.address),
+    user_agent_count = COUNT_DISTINCT(user_agent.original),
+    user_agents = VALUES(user_agent.original),
+    apis = COUNT_DISTINCT(aws.cloudtrail.event_name),
+    regions = VALUES(cloud.region),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, cloud.account.id, aws.cloudtrail.user_identity.arn
+| WHERE source_count >= 2
+| EVAL sources = MV_SLICE(sources, 0, 19), user_agents = MV_SLICE(user_agents, 0, 9)
+| KEEP
+    _index,
+    cloud.account.id,
+    aws.cloudtrail.user_identity.arn,
+    source_count,
+    sources,
+    events,
+    failed,
+    apis,
+    user_agent_count,
+    first_seen,
+    last_seen,
+    regions,
+    user_agents
+| SORT source_count DESC, events DESC
+| LIMIT 1000

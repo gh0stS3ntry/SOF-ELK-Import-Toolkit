@@ -1,0 +1,37 @@
+// ATRI-02 | CloudTrail principals: who called what, from where, and how often it failed
+// Tactic: Triage (first cut) | ATT&CK: n/a
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail management events
+FROM aws-cloudtrail-* METADATA _index
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| STATS
+    events = COUNT(*),
+    write_events = COUNT(*) WHERE aws.cloudtrail.read_only == false,
+    failed = COUNT(*) WHERE event.outcome == "failure",
+    distinct_apis = COUNT_DISTINCT(aws.cloudtrail.event_name),
+    services = COUNT_DISTINCT(aws.cloudtrail.event_source),
+    source_count = COUNT_DISTINCT(source.address),
+    access_keys = COUNT_DISTINCT(aws.cloudtrail.user_identity.access_key_id),
+    identity_types = VALUES(aws.cloudtrail.user_identity.type),
+    regions = VALUES(cloud.region),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, cloud.account.id, caller
+| EVAL failed_pct = ROUND(100.0 * failed / events, 1)
+| KEEP
+    _index,
+    cloud.account.id,
+    caller,
+    identity_types,
+    events,
+    write_events,
+    failed,
+    failed_pct,
+    distinct_apis,
+    services,
+    source_count,
+    access_keys,
+    regions,
+    first_seen,
+    last_seen
+| SORT events DESC
+| LIMIT 2000

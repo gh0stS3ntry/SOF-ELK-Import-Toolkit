@@ -1,0 +1,55 @@
+// AIM-01 | Destructive actions, ransom-style encryption and resource hijacking, per principal and hour
+// Tactic: TA0040 Impact | ATT&CK: T1485, T1490, T1486, T1496
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail management events (S3 DeleteObjects needs data events)
+FROM aws-cloudtrail-* METADATA _index
+| WHERE COALESCE(aws.cloudtrail.read_only, false) == false
+| EVAL n = aws.cloudtrail.event_name
+| EVAL rp = TO_LOWER(COALESCE(aws.cloudtrail.flattened.request_parameters, ""))
+| EVAL itype = TO_LOWER(COALESCE(aws.cloudtrail.request_parameters.instance_type, ""))
+| EVAL kind = CASE(
+    n IN ("DeleteBucket", "DeleteObjects", "DeleteDBInstance", "DeleteDBCluster", "DeleteTable", "DeleteFileSystem",
+          "TerminateInstances", "DeleteVolume", "DeleteFunction20150331", "DeleteStack", "DeleteHostedZone",
+          "DeleteSecret", "DeleteParameters", "DeleteRepository"), "destruction",
+    n IN ("DeleteSnapshot", "DeleteDBSnapshot", "DeleteDBClusterSnapshot", "DeregisterImage", "DeleteBackupVault",
+          "DeleteRecoveryPoint", "DeleteBackupPlan", "DeleteBackupSelection", "PutBucketVersioning", "PutBucketLifecycle",
+          "PutBucketLifecycleConfiguration", "DeleteBucketReplication"), "recovery inhibited",
+    n IN ("PutBucketEncryption", "CopyObject") AND rp LIKE "*aws:kms*", "encryption with KMS",
+    n IN ("ScheduleKeyDeletion", "DisableKey", "PutKeyPolicy"), "key disabled or locked",
+    n IN ("RunInstances", "RequestSpotInstances", "RequestSpotFleet", "CreateFleet") AND
+      (itype RLIKE "(p|g|inf|dl|trn|x)[0-9].*" OR rp RLIKE """.*\"(p|g)[0-9][a-z]*\.[0-9]*xlarge.*"""), "GPU or large compute launched",
+    n IN ("LeaveOrganization", "DeleteLoginProfile", "DeleteAccessKey", "DeleteUser") AND COALESCE(aws.cloudtrail.user_identity.type, "") != "AWSService", "account lockout",
+    null)
+| WHERE kind IS NOT NULL
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| EVAL time_bucket = DATE_TRUNC(1 hour, @timestamp)
+| STATS
+    events = COUNT(*),
+    failed = COUNT(*) WHERE event.outcome == "failure",
+    kinds = VALUES(kind),
+    apis = VALUES(n),
+    instance_types = VALUES(aws.cloudtrail.request_parameters.instance_type),
+    buckets = VALUES(aws.cloudtrail.request_parameters.bucket_name),
+    regions = VALUES(cloud.region),
+    sources = VALUES(source.address),
+    first_event = MIN(@timestamp),
+    last_event = MAX(@timestamp)
+  BY _index, cloud.account.id, caller, time_bucket
+| EVAL score = MV_COUNT(kinds) + CASE(events >= 20, 2, events >= 5, 1, 0) + CASE(MV_COUNT(regions) >= 3, 1, 0)
+| KEEP
+    _index,
+    time_bucket,
+    score,
+    cloud.account.id,
+    caller,
+    kinds,
+    events,
+    failed,
+    apis,
+    instance_types,
+    buckets,
+    regions,
+    first_event,
+    last_event,
+    sources
+| SORT score DESC, events DESC
+| LIMIT 2000

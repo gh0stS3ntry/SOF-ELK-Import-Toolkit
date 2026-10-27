@@ -1,0 +1,285 @@
+{
+  "index_patterns": [
+    "aws-alb-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-aws-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "aws-alb",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "aws": {
+          "properties": {
+            "elb": {
+              "properties": {
+                "type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "request_processing_time": {
+                  "properties": {
+                    "sec": {
+                      "type": "double"
+                    }
+                  }
+                },
+                "backend_processing_time": {
+                  "properties": {
+                    "sec": {
+                      "type": "double"
+                    }
+                  }
+                },
+                "response_processing_time": {
+                  "properties": {
+                    "sec": {
+                      "type": "double"
+                    }
+                  }
+                },
+                "backend": {
+                  "properties": {
+                    "http": {
+                      "properties": {
+                        "response": {
+                          "properties": {
+                            "status_code": {
+                              "type": "integer"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "target_group": {
+                  "properties": {
+                    "arn": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "trace_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "domain_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "chosen_cert_arn": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "matched_rule_priority": {
+                  "type": "integer"
+                },
+                "request_creation_time": {
+                  "type": "date"
+                },
+                "action_executed": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "redirect_url": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "error": {
+                  "properties": {
+                    "reason": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "target_port": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "target_status_code": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "classification": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "classification_reason": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "conn_trace_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "transformed_host": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "transformed_uri": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "request_transform_status": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "malformed": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "unmapped": {
+                  "type": "object",
+                  "dynamic": "true"
+                }
+              }
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "integer"
+            },
+            "bytes": {
+              "type": "long"
+            }
+          }
+        },
+        "destination": {
+          "properties": {
+            "port": {
+              "type": "integer"
+            },
+            "bytes": {
+              "type": "long"
+            }
+          }
+        },
+        "backend": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "integer"
+            }
+          }
+        },
+        "http": {
+          "properties": {
+            "version": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "request": {
+              "properties": {
+                "method": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "response": {
+              "properties": {
+                "status_code": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "url": {
+          "properties": {
+            "original": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "scheme": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "domain": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "path": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "query": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "extension": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "user_agent": {
+          "properties": {
+            "original": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        "tls": {
+          "properties": {
+            "cipher": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "protocol": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "sof-elk": {
+          "properties": {
+            "rawrequest": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Explicit schema for AWS Application (and Classic) Load Balancer access logs loaded by alb2sofelk.py: SOF-ELK 6100-httpd.conf/8004-postprocess-httpd.conf field names (aws.elb.*, http.*, url.*, source/destination.*, backend.*, tls.*)",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}

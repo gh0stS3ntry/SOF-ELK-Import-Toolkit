@@ -1,0 +1,42 @@
+// ACA-01 | Secrets Manager, Parameter Store and EC2 password retrieval, per principal
+// Tactic: TA0006 Credential Access | ATT&CK: T1555.006, T1552.005
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail management read events (the trail must log read events)
+FROM aws-cloudtrail-* METADATA _index
+| WHERE aws.cloudtrail.event_name IN ("GetSecretValue", "BatchGetSecretValue", "ListSecrets", "GetParameter",
+    "GetParameters", "GetParametersByPath", "DescribeParameters", "GetPasswordData", "GetCredentialReport",
+    "GenerateCredentialReport", "GetAuthorizationToken", "ExportCertificate", "GetSessionToken", "GetFederationToken")
+| WHERE COALESCE(aws.cloudtrail.user_identity.type, "") != "AWSService"
+    AND NOT COALESCE(source.address, "") LIKE "*.amazonaws.com"
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| EVAL secret = COALESCE(aws.cloudtrail.request_parameters.secret_id, aws.cloudtrail.request_parameters.name,
+    aws.cloudtrail.request_parameters.instance_id)
+| EVAL decrypted = aws.cloudtrail.request_parameters.with_decryption == "true"
+| STATS
+    calls = COUNT(*),
+    failed = COUNT(*) WHERE event.outcome == "failure",
+    distinct_secrets = COUNT_DISTINCT(secret),
+    decrypted_reads = COUNT(*) WHERE decrypted,
+    apis = VALUES(aws.cloudtrail.event_name),
+    secrets = VALUES(secret),
+    sources = VALUES(source.address),
+    user_agents = VALUES(user_agent.original),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, cloud.account.id, caller
+| EVAL secrets = MV_SLICE(secrets, 0, 49), user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    cloud.account.id,
+    caller,
+    calls,
+    failed,
+    distinct_secrets,
+    decrypted_reads,
+    apis,
+    first_seen,
+    last_seen,
+    sources,
+    user_agents,
+    secrets
+| SORT distinct_secrets DESC, failed DESC
+| LIMIT 1000

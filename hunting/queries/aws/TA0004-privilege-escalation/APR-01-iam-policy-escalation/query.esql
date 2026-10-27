@@ -1,0 +1,42 @@
+// APR-01 | IAM privilege escalation: admin policies, policy versions and permission boundaries
+// Tactic: TA0004 Privilege Escalation | ATT&CK: T1098.003, T1484
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail IAM management events
+FROM aws-cloudtrail-* METADATA _index
+| WHERE aws.cloudtrail.event_source == "iam.amazonaws.com"
+| WHERE aws.cloudtrail.event_name IN ("AttachUserPolicy", "AttachRolePolicy", "AttachGroupPolicy", "PutUserPolicy",
+    "PutRolePolicy", "PutGroupPolicy", "CreatePolicyVersion", "SetDefaultPolicyVersion", "CreatePolicy",
+    "AddUserToGroup", "DeleteRolePermissionsBoundary", "DeleteUserPermissionsBoundary", "PutRolePermissionsBoundary",
+    "PutUserPermissionsBoundary")
+| WHERE event.outcome == "success"
+| EVAL n = aws.cloudtrail.event_name
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| EVAL caller_name = COALESCE(user.name, aws.cloudtrail.user_identity.session_issuer.user_name, "")
+| EVAL target = COALESCE(aws.cloudtrail.request_parameters.user_name, aws.cloudtrail.request_parameters.role_name,
+    aws.cloudtrail.request_parameters.group_name, aws.cloudtrail.request_parameters.policy_arn,
+    aws.cloudtrail.request_parameters.policy_name)
+| EVAL rp = COALESCE(aws.cloudtrail.flattened.request_parameters, "")
+| EVAL f_admin = COALESCE(aws.cloudtrail.request_parameters.policy_arn, "") RLIKE ".*(AdministratorAccess|IAMFullAccess|PowerUserAccess).*"
+| EVAL f_wildcard = n RLIKE "(Put.*Policy|CreatePolicy.*)"
+    AND (rp LIKE """*\\"Action\\":\\"\*\\"*""" OR rp LIKE """*\\"Action\\": \\"\*\\"*""" OR rp LIKE """*"Action":"\**""")
+| EVAL f_self = target == caller_name
+| EVAL f_new_default = n == "SetDefaultPolicyVersion" OR (n == "CreatePolicyVersion" AND rp LIKE """*"setAsDefault":true*""")
+| EVAL f_boundary_removed = n LIKE "Delete*PermissionsBoundary"
+| EVAL score = CASE(f_admin, 3, 0) + CASE(f_self, 3, 0) + CASE(f_new_default, 2, 0)
+    + CASE(f_boundary_removed, 2, 0) + CASE(f_wildcard, 1, 0)
+| EVAL request = SUBSTRING(rp, 1, 600)
+| KEEP
+    _index,
+    @timestamp,
+    score,
+    n,
+    caller,
+    target,
+    f_admin,
+    f_self,
+    f_new_default,
+    f_boundary_removed,
+    source.address,
+    user_agent.original,
+    request
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

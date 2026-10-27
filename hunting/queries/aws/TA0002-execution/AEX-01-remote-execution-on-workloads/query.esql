@@ -1,0 +1,42 @@
+// AEX-01 | Code run on workloads through AWS APIs: SSM, EC2 user data, Instance Connect, Lambda, ECS, CloudFormation
+// Tactic: TA0002 Execution | ATT&CK: T1651, T1059.009, T1648
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail management events
+FROM aws-cloudtrail-* METADATA _index
+| EVAL n = aws.cloudtrail.event_name
+| EVAL rp = COALESCE(aws.cloudtrail.flattened.request_parameters, "")
+| EVAL method = CASE(
+    n IN ("SendCommand", "StartAutomationExecution", "CreateAssociation", "UpdateAssociation"), "SSM command",
+    n IN ("StartSession", "ResumeSession"), "SSM session",
+    n IN ("SendSSHPublicKey", "SendSerialConsoleSSHPublicKey"), "EC2 Instance Connect or serial console key",
+    n == "ModifyInstanceAttribute" AND rp LIKE "*userData*", "EC2 user data changed",
+    n == "RunInstances" AND rp LIKE "*userData*", "EC2 launched with user data",
+    n LIKE "CreateFunction*" OR n LIKE "UpdateFunctionCode*", "Lambda code deployed",
+    n LIKE "UpdateFunctionConfiguration*", "Lambda configuration changed",
+    n LIKE "AddPermission*" OR n LIKE "CreateFunctionUrlConfig*", "Lambda exposed (permission or function URL)",
+    n == "ExecuteCommand", "ECS exec",
+    n IN ("RunTask", "StartTask"), "ECS task started",
+    n IN ("CreateStack", "UpdateStack", "CreateStackSet", "CreateStackInstances"), "CloudFormation stack",
+    n == "StartBuild", "CodeBuild build",
+    null)
+| WHERE method IS NOT NULL
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| EVAL target = COALESCE(MV_CONCAT(aws.cloudtrail.request_parameters.instance_id, ","), aws.cloudtrail.request_parameters.target,
+    aws.cloudtrail.request_parameters.function_name, aws.cloudtrail.request_parameters.stack_name,
+    aws.cloudtrail.request_parameters.cluster, aws.cloudtrail.request_parameters.project_name)
+| EVAL request = SUBSTRING(rp, 1, 600)
+| KEEP
+    _index,
+    @timestamp,
+    method,
+    aws.cloudtrail.event_name,
+    event.outcome,
+    caller,
+    target,
+    aws.cloudtrail.request_parameters.document_name,
+    source.address,
+    user_agent.original,
+    cloud.region,
+    aws.cloudtrail.error_code,
+    request
+| SORT @timestamp ASC
+| LIMIT 10000

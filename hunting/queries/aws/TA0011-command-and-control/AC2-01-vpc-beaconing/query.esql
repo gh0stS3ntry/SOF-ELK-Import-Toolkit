@@ -1,0 +1,41 @@
+// AC2-01 | Beacon-like outbound connections: one instance, one rare destination, every hour
+// Tactic: TA0011 Command and Control | ATT&CK: T1071, T1573
+// Indexes: aws-vpcflow-* | Needs: VPC Flow Logs (accepted traffic) over at least a day
+FROM aws-vpcflow-* METADATA _index
+| WHERE aws.vpcflow.action == "ACCEPT"
+| WHERE CIDR_MATCH(source.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "fc00::/7", "fe80::/10", "::1/128")
+    AND NOT CIDR_MATCH(destination.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "fc00::/7", "fe80::/10", "::1/128")
+| WHERE destination.port < 32768
+| EVAL hour = DATE_TRUNC(1 hour, @timestamp)
+| STATS
+    flows = COUNT(*),
+    active_hours = COUNT_DISTINCT(hour),
+    bytes_median = MEDIAN(source.bytes),
+    bytes_mad = MEDIAN_ABSOLUTE_DEVIATION(source.bytes),
+    bytes_total = SUM(source.bytes),
+    first_flow = MIN(@timestamp),
+    last_flow = MAX(@timestamp)
+  BY _index, source.ip, destination.ip, destination.port
+| INLINE STATS internal_peers = COUNT_DISTINCT(source.ip) BY _index, destination.ip
+| EVAL span_hours = DATE_DIFF("hour", first_flow, last_flow) + 1
+| EVAL coverage_pct = ROUND(100.0 * active_hours / span_hours, 1)
+| WHERE active_hours >= 12 AND internal_peers <= 2  // EDIT: thresholds
+| EVAL steady_size = bytes_mad <= bytes_median * 0.2
+| KEEP
+    _index,
+    source.ip,
+    destination.ip,
+    destination.port,
+    active_hours,
+    span_hours,
+    coverage_pct,
+    flows,
+    bytes_median,
+    bytes_mad,
+    steady_size,
+    bytes_total,
+    internal_peers,
+    first_flow,
+    last_flow
+| SORT coverage_pct DESC, active_hours DESC
+| LIMIT 1000

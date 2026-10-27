@@ -1,0 +1,33 @@
+// APE-02 | Role trust policies and identity providers that let an outside principal in
+// Tactic: TA0003 Persistence | ATT&CK: T1098.003, T1484.002
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail IAM and IAM Identity Center management events
+FROM aws-cloudtrail-* METADATA _index
+| WHERE aws.cloudtrail.event_name IN ("CreateRole", "UpdateAssumeRolePolicy", "CreateOpenIDConnectProvider",
+    "AddClientIDToOpenIDConnectProvider", "UpdateOpenIDConnectProviderThumbprint", "CreateSAMLProvider",
+    "UpdateSAMLProvider", "CreateAccountAssignment", "AttachManagedPolicyToPermissionSet", "PutInlinePolicyToPermissionSet",
+    "CreateInstanceProfile", "AddRoleToInstanceProfile")
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| EVAL rp = COALESCE(aws.cloudtrail.flattened.request_parameters, "")
+| GROK rp "arn:aws:iam::%{INT:trusted_account}:"
+| EVAL f_external = trusted_account IS NOT NULL AND trusted_account != COALESCE(cloud.account.id, "")
+| EVAL f_any_principal = rp LIKE """*\\"\*\\"*""" OR rp LIKE """*"Principal":"\**""" OR rp LIKE """*"AWS":"\**"""
+| EVAL f_idp = aws.cloudtrail.event_name RLIKE "(Create|Update|AddClientIDTo)(OpenIDConnect|SAML)Provider.*"
+| EVAL score = CASE(f_external, 3, 0) + CASE(f_any_principal, 3, 0) + CASE(f_idp, 2, 0)
+    + CASE(aws.cloudtrail.event_name == "UpdateAssumeRolePolicy", 1, 0)
+| EVAL request = SUBSTRING(rp, 1, 800)
+| KEEP
+    _index,
+    @timestamp,
+    score,
+    aws.cloudtrail.event_name,
+    event.outcome,
+    caller,
+    aws.cloudtrail.request_parameters.role_name,
+    trusted_account,
+    f_external,
+    f_any_principal,
+    source.address,
+    user_agent.original,
+    request
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

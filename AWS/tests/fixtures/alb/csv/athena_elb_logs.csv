@@ -1,0 +1,2 @@
+request_timestamp,elb_name,request_ip,request_port,backend_ip,backend_port,request_processing_time,backend_processing_time,client_response_time,elb_response_code,backend_response_code,received_bytes,sent_bytes,request_verb,url,protocol,user_agent,ssl_cipher,ssl_protocol
+10/20/2026 2:17:00 AM,classic-lb,203.0.113.99,40000,10.0.1.16,80,0.0001,0.002,0.0001,200,200,0,5120,GET,http://legacy.example.com:80/admin/,HTTP/1.1,Mozilla/5.0 (X11; Linux x86_64),-,-

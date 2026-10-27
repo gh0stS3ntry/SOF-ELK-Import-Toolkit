@@ -1,0 +1,2 @@
+@timestamp,timestamp,webaclId,action,terminatingRuleId,httpRequest.clientIp,httpRequest.country,httpRequest.uri,httpRequest.httpMethod,httpRequest.requestId,httpRequest.headers.0.name,httpRequest.headers.0.value,httpRequest.headers.1.name,httpRequest.headers.1.value,nonTerminatingMatchingRules.0.ruleId,nonTerminatingMatchingRules.0.action
+2026-10-20 03:01:00.000,1792465260000,arn:aws:wafv2:us-east-1:123456789012:regional/webacl/prod-acl/a1b2c3d4,ALLOW,Default_Action,203.0.113.77,US,/wp-login.php,POST,1-flat-1,Host,shop.example.com,User-Agent,Mozilla/5.0,count-bad-bots,COUNT

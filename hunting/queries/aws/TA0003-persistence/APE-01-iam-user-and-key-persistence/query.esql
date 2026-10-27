@@ -1,0 +1,43 @@
+// APE-01 | IAM users, access keys, passwords and MFA changes, scored
+// Tactic: TA0003 Persistence | ATT&CK: T1098.001, T1136.003, T1556.006
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail IAM management events (logged in us-east-1)
+FROM aws-cloudtrail-* METADATA _index
+| WHERE aws.cloudtrail.event_source == "iam.amazonaws.com"
+| WHERE aws.cloudtrail.event_name IN ("CreateUser", "CreateAccessKey", "UpdateAccessKey", "CreateLoginProfile",
+    "UpdateLoginProfile", "AddUserToGroup", "AttachUserPolicy", "PutUserPolicy", "CreateVirtualMFADevice",
+    "EnableMFADevice", "DeactivateMFADevice", "DeleteVirtualMFADevice", "ResyncMFADevice", "UploadSSHPublicKey",
+    "CreateServiceSpecificCredential", "UploadSigningCertificate", "UpdateUser")
+| EVAL n = aws.cloudtrail.event_name
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| EVAL caller_name = COALESCE(user.name, aws.cloudtrail.user_identity.session_issuer.user_name, "")
+| EVAL target_user = aws.cloudtrail.request_parameters.user_name
+| EVAL f_for_other = target_user IS NOT NULL AND target_user != caller_name
+    AND n IN ("CreateAccessKey", "CreateLoginProfile", "UpdateLoginProfile", "CreateServiceSpecificCredential", "UploadSSHPublicKey")
+| EVAL f_admin = COALESCE(aws.cloudtrail.request_parameters.policy_arn, "") RLIKE ".*(AdministratorAccess|IAMFullAccess|PowerUserAccess).*"
+    OR COALESCE(aws.cloudtrail.request_parameters.group_name, "") RLIKE ".*([Aa]dmin).*"
+| EVAL f_inline = n == "PutUserPolicy"
+| EVAL f_mfa_removed = n IN ("DeactivateMFADevice", "DeleteVirtualMFADevice")
+| EVAL f_root = COALESCE(aws.cloudtrail.user_identity.type, "") == "Root"
+| EVAL f_public = source.ip IS NOT NULL AND NOT CIDR_MATCH(source.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "fc00::/7", "fe80::/10", "::1/128")
+| EVAL score = CASE(f_for_other, 3, 0) + CASE(f_admin, 3, 0) + CASE(f_mfa_removed, 2, 0)
+    + CASE(f_root, 2, 0) + CASE(f_inline, 1, 0) + CASE(n == "CreateUser", 1, 0)
+| EVAL new_key = aws.cloudtrail.response_elements.access_key_id
+| EVAL request = SUBSTRING(COALESCE(aws.cloudtrail.flattened.request_parameters, ""), 1, 400)
+| KEEP
+    _index,
+    @timestamp,
+    score,
+    n,
+    event.outcome,
+    caller,
+    target_user,
+    aws.cloudtrail.request_parameters.policy_arn,
+    aws.cloudtrail.request_parameters.group_name,
+    new_key,
+    source.address,
+    f_public,
+    user_agent.original,
+    aws.cloudtrail.error_code,
+    request
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

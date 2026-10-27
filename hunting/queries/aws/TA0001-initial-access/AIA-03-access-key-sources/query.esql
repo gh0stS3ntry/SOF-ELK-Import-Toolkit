@@ -1,0 +1,49 @@
+// AIA-03 | Long-term access keys: source addresses, user agents and tooling per key
+// Tactic: TA0001 Initial Access | ATT&CK: T1078.004, T1552.001
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail events signed with IAM user keys (AKIA...)
+FROM aws-cloudtrail-* METADATA _index
+| WHERE aws.cloudtrail.user_identity.access_key_id LIKE "AKIA*"
+| EVAL ua = TO_LOWER(COALESCE(user_agent.original, ""))
+| EVAL tooling = ua RLIKE ".*(kali|parrot|pentoo|pacu|scoutsuite|prowler|cloudsploit|cloudfox|trufflehog|python-requests|curl/|postman|insomnia|s3browser|cyberduck|rclone|go-http-client).*"
+| EVAL is_whoami = aws.cloudtrail.event_name == "GetCallerIdentity"
+| STATS
+    events = COUNT(*),
+    writes = COUNT(*) WHERE aws.cloudtrail.read_only == false,
+    failed = COUNT(*) WHERE event.outcome == "failure",
+    whoami_calls = COUNT(*) WHERE is_whoami,
+    tooling_events = COUNT(*) WHERE tooling,
+    source_count = COUNT_DISTINCT(source.address),
+    sources = VALUES(source.address),
+    user_agent_count = COUNT_DISTINCT(user_agent.original),
+    user_agents = VALUES(user_agent.original),
+    principals = VALUES(aws.cloudtrail.user_identity.arn),
+    regions = VALUES(cloud.region),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, cloud.account.id, aws.cloudtrail.user_identity.access_key_id
+| EVAL score = CASE(source_count >= 5, 2, source_count >= 2, 1, 0)
+    + CASE(user_agent_count >= 4, 1, 0)
+    + CASE(tooling_events > 0, 2, 0)
+    + CASE(whoami_calls > 0, 1, 0)
+    + CASE(failed > 10, 1, 0)
+| EVAL sources = MV_SLICE(sources, 0, 19), user_agents = MV_SLICE(user_agents, 0, 9)
+| KEEP
+    _index,
+    score,
+    cloud.account.id,
+    aws.cloudtrail.user_identity.access_key_id,
+    principals,
+    events,
+    writes,
+    failed,
+    whoami_calls,
+    tooling_events,
+    source_count,
+    user_agent_count,
+    first_seen,
+    last_seen,
+    regions,
+    sources,
+    user_agents
+| SORT score DESC, source_count DESC
+| LIMIT 1000

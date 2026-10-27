@@ -1,0 +1,39 @@
+// ACO-01 | S3 object reads and listings per principal, bucket and hour
+// Tactic: TA0009 Collection | ATT&CK: T1530, T1619
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail S3 data events (must be enabled on the trail for the buckets)
+FROM aws-cloudtrail-* METADATA _index
+| WHERE aws.cloudtrail.event_source == "s3.amazonaws.com"
+| WHERE aws.cloudtrail.event_name IN ("GetObject", "CopyObject", "UploadPartCopy", "SelectObjectContent",
+    "RestoreObject", "ListObjects", "ListObjectsV2", "ListObjectVersions")
+| EVAL caller = COALESCE(aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.invoked_by, aws.cloudtrail.user_identity.type, "(unknown)")
+| EVAL is_read = aws.cloudtrail.event_name NOT IN ("ListObjects", "ListObjectsV2", "ListObjectVersions")
+| EVAL time_bucket = DATE_TRUNC(1 hour, @timestamp)
+| STATS
+    object_reads = COUNT(*) WHERE is_read,
+    listings = COUNT(*) WHERE NOT is_read,
+    distinct_objects = COUNT_DISTINCT(aws.cloudtrail.request_parameters.key),
+    bytes_out = SUM(destination.bytes),
+    failed = COUNT(*) WHERE event.outcome == "failure",
+    sources = VALUES(source.address),
+    user_agents = VALUES(user_agent.original),
+    first_access = MIN(@timestamp),
+    last_access = MAX(@timestamp)
+  BY _index, caller, aws.cloudtrail.request_parameters.bucket_name, time_bucket
+| EVAL mb_out = ROUND(COALESCE(bytes_out, 0) / 1048576.0, 1)
+| EVAL user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    time_bucket,
+    caller,
+    aws.cloudtrail.request_parameters.bucket_name,
+    object_reads,
+    distinct_objects,
+    mb_out,
+    listings,
+    failed,
+    first_access,
+    last_access,
+    sources,
+    user_agents
+| SORT mb_out DESC, distinct_objects DESC
+| LIMIT 2000

@@ -1,0 +1,327 @@
+{
+  "index_patterns": [
+    "aws-waf-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-aws-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "aws-waf",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "aws": {
+          "properties": {
+            "waf": {
+              "properties": {
+                "format_version": {
+                  "type": "integer"
+                },
+                "web_acl_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "web_acl_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "action": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "terminating_rule_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "terminating_rule_type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "terminating_rule_match": {
+                  "properties": {
+                    "condition_type": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "location": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "matched_data": {
+                      "type": "keyword",
+                      "ignore_above": 8191
+                    }
+                  }
+                },
+                "http_source_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "http_source_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "matched_rule_ids": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "rule_group_ids": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "rate_based_rule_names": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "non_terminating_rule_ids": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "labels": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "response_code_sent": {
+                  "type": "integer"
+                },
+                "request_body_size": {
+                  "type": "long"
+                },
+                "request_body_size_inspected": {
+                  "type": "long"
+                },
+                "oversize_fields": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "captcha_response_code": {
+                  "type": "integer"
+                },
+                "challenge_response_code": {
+                  "type": "integer"
+                },
+                "request": {
+                  "properties": {
+                    "headers": {
+                      "type": "keyword",
+                      "ignore_above": 8191,
+                      "fields": {
+                        "text": {
+                          "type": "match_only_text"
+                        }
+                      }
+                    },
+                    "header_names": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "flattened": {
+                  "properties": {
+                    "terminating_rule_match_details": {
+                      "type": "keyword",
+                      "ignore_above": 8191,
+                      "fields": {
+                        "text": {
+                          "type": "match_only_text"
+                        }
+                      }
+                    },
+                    "rule_group_list": {
+                      "type": "keyword",
+                      "ignore_above": 8191,
+                      "fields": {
+                        "text": {
+                          "type": "match_only_text"
+                        }
+                      }
+                    },
+                    "rate_based_rule_list": {
+                      "type": "keyword",
+                      "ignore_above": 8191,
+                      "fields": {
+                        "text": {
+                          "type": "match_only_text"
+                        }
+                      }
+                    },
+                    "non_terminating_matching_rules": {
+                      "type": "keyword",
+                      "ignore_above": 8191,
+                      "fields": {
+                        "text": {
+                          "type": "match_only_text"
+                        }
+                      }
+                    },
+                    "captcha_response": {
+                      "type": "keyword",
+                      "ignore_above": 8191,
+                      "fields": {
+                        "text": {
+                          "type": "match_only_text"
+                        }
+                      }
+                    },
+                    "challenge_response": {
+                      "type": "keyword",
+                      "ignore_above": 8191,
+                      "fields": {
+                        "text": {
+                          "type": "match_only_text"
+                        }
+                      }
+                    },
+                    "request_headers_inserted": {
+                      "type": "keyword",
+                      "ignore_above": 8191,
+                      "fields": {
+                        "text": {
+                          "type": "match_only_text"
+                        }
+                      }
+                    }
+                  }
+                },
+                "malformed": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "unmapped": {
+                  "type": "object",
+                  "dynamic": "true"
+                }
+              }
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "geo": {
+              "properties": {
+                "country_iso_code": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        },
+        "xff": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            }
+          }
+        },
+        "http": {
+          "properties": {
+            "version": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "request": {
+              "properties": {
+                "method": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "referrer": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                }
+              }
+            }
+          }
+        },
+        "url": {
+          "properties": {
+            "original": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "scheme": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "domain": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "path": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "query": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "fragment": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "extension": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "user_agent": {
+          "properties": {
+            "original": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        "tls": {
+          "properties": {
+            "client": {
+              "properties": {
+                "ja3": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "ja4": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Explicit schema for AWS WAF (v2) web ACL logs loaded by waf2sofelk.py. SOF-ELK has no WAF parser, so fields follow ECS (source.*, url.*, http.*, user_agent.*) with aws.waf.* for the rest",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}

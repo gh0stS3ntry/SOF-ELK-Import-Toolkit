@@ -1,0 +1,39 @@
+// APE-03 | Possible web shells: script files on the load balancer reached by very few clients
+// Tactic: TA0003 Persistence | ATT&CK: T1505.003
+// Indexes: aws-alb-* | Needs: ALB or Classic ELB access logs
+FROM aws-alb-* METADATA _index
+| WHERE url.extension IN ("php", "phtml", "jsp", "jspx", "asp", "aspx", "ashx", "asmx", "cfm", "cgi", "pl", "py", "sh")
+| EVAL ok = COALESCE(http.response.status_code, 0) >= 200 AND COALESCE(http.response.status_code, 0) < 300
+| STATS
+    requests = COUNT(*),
+    posts = COUNT(*) WHERE http.request.method == "POST",
+    ok_responses = COUNT(*) WHERE ok,
+    clients = COUNT_DISTINCT(source.ip),
+    client_ips = VALUES(source.ip),
+    queries = VALUES(url.query),
+    user_agents = VALUES(user_agent.original),
+    bytes_in = SUM(source.bytes),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, url.domain, url.path
+| WHERE clients <= 3 AND ok_responses > 0  // EDIT: raise for shells shared by a botnet
+| EVAL score = CASE(posts > 0, 2, 0) + CASE(clients == 1, 1, 0) + CASE(requests >= 10, 1, 0)
+    + CASE(TO_LOWER(url.path) RLIKE ".*/(upload|uploads|files|images|img|tmp|temp|cache|static|assets|wp-content)/.*", 2, 0)
+| EVAL queries = MV_SLICE(queries, 0, 9), user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    score,
+    url.domain,
+    url.path,
+    requests,
+    posts,
+    ok_responses,
+    clients,
+    client_ips,
+    bytes_in,
+    first_seen,
+    last_seen,
+    queries,
+    user_agents
+| SORT score DESC, requests DESC
+| LIMIT 1000

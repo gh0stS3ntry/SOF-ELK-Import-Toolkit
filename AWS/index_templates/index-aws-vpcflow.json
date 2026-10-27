@@ -1,0 +1,243 @@
+{
+  "index_patterns": [
+    "aws-vpcflow-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-aws-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "aws-vpcflow",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "aws": {
+          "properties": {
+            "vpcflow": {
+              "properties": {
+                "version": {
+                  "type": "integer"
+                },
+                "account_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "interface_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "action": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "log_status": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "vpc_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "subnet_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "instance_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "traffic_path": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "reason": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "destination_service": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "source": {
+                  "properties": {
+                    "service": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "sublocation": {
+                  "properties": {
+                    "id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "type": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "ecs": {
+                  "properties": {
+                    "cluster_arn": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "cluster_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "container_instance_arn": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "container_instance_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "container_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "second_container_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "service_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "task_definition_arn": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "task_arn": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "task_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "malformed": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "unmapped": {
+                  "type": "object",
+                  "dynamic": "true"
+                }
+              }
+            }
+          }
+        },
+        "netflow": {
+          "properties": {
+            "flow_start": {
+              "type": "date"
+            },
+            "flow_end": {
+              "type": "date"
+            },
+            "flow_duration": {
+              "type": "double"
+            },
+            "tcp_control_bits": {
+              "type": "integer"
+            },
+            "delta_flow_count": {
+              "type": "long"
+            }
+          }
+        },
+        "network": {
+          "properties": {
+            "iana_number": {
+              "type": "integer"
+            },
+            "transport": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "direction": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "tcp_flags": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "tcp_flags_hex": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "community_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "integer"
+            },
+            "bytes": {
+              "type": "long"
+            },
+            "packets": {
+              "type": "long"
+            }
+          }
+        },
+        "destination": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "integer"
+            },
+            "bytes": {
+              "type": "long"
+            },
+            "packets": {
+              "type": "long"
+            }
+          }
+        },
+        "original_source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            }
+          }
+        },
+        "original_destination": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Explicit schema for AWS VPC Flow Log records loaded by vpcflow2sofelk.py: SOF-ELK 2050-netflow.conf field names (aws.vpcflow.*, netflow.*, source/destination.*, network.*)",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}

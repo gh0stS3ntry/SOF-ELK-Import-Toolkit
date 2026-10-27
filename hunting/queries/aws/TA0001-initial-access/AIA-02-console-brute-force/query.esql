@@ -1,0 +1,37 @@
+// AIA-02 | Console brute force and password spraying, per source and hour
+// Tactic: TA0001 Initial Access | ATT&CK: T1110.001, T1110.003
+// Indexes: aws-cloudtrail-* | Needs: CloudTrail ConsoleLogin events
+FROM aws-cloudtrail-* METADATA _index
+| WHERE aws.cloudtrail.event_name == "ConsoleLogin"
+| EVAL account_user = COALESCE(user.name, aws.cloudtrail.user_identity.arn, aws.cloudtrail.user_identity.type)
+| EVAL ok = COALESCE(aws.cloudtrail.console_login, "") == "Success"
+| EVAL time_bucket = DATE_TRUNC(1 hour, @timestamp)
+| STATS
+    failures = COUNT(*) WHERE NOT ok,
+    successes = COUNT(*) WHERE ok,
+    users_tried = COUNT_DISTINCT(account_user),
+    users = VALUES(account_user),
+    users_signed_in = VALUES(account_user) WHERE ok,
+    user_agents = VALUES(user_agent.original),
+    first_attempt = MIN(@timestamp),
+    last_attempt = MAX(@timestamp)
+  BY _index, cloud.account.id, source.address, time_bucket
+| WHERE failures >= 5  // EDIT: lower for slow guessing
+| EVAL pattern = CASE(users_tried >= 3, "spray (many users)", "guessing (one user)")
+| EVAL users = MV_SLICE(users, 0, 49), user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    time_bucket,
+    cloud.account.id,
+    source.address,
+    pattern,
+    failures,
+    successes,
+    users_tried,
+    users_signed_in,
+    first_attempt,
+    last_attempt,
+    users,
+    user_agents
+| SORT successes DESC, failures DESC
+| LIMIT 2000

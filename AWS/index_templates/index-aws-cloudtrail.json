@@ -1,0 +1,530 @@
+{
+  "index_patterns": [
+    "aws-cloudtrail-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-aws-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "aws-cloudtrail",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "aws": {
+          "properties": {
+            "cloudtrail": {
+              "properties": {
+                "event_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "event_source": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "event_type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "event_version": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "event_category": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "request_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "shared_event_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "read_only": {
+                  "type": "boolean"
+                },
+                "management_event": {
+                  "type": "boolean"
+                },
+                "recipient_account_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "vpc_endpoint_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "error_code": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "error_message": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "console_login": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "user_identity": {
+                  "properties": {
+                    "type": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "arn": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "access_key_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "account_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "principal_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "invoked_by": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "user_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "session_context": {
+                      "type": "keyword",
+                      "ignore_above": 8191,
+                      "fields": {
+                        "text": {
+                          "type": "match_only_text"
+                        }
+                      }
+                    },
+                    "mfa_authenticated": {
+                      "type": "boolean"
+                    },
+                    "session_created": {
+                      "type": "date"
+                    },
+                    "source_identity": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "session_issuer": {
+                      "properties": {
+                        "type": {
+                          "type": "keyword",
+                          "ignore_above": 1024
+                        },
+                        "arn": {
+                          "type": "keyword",
+                          "ignore_above": 1024
+                        },
+                        "user_name": {
+                          "type": "keyword",
+                          "ignore_above": 1024
+                        },
+                        "account_id": {
+                          "type": "keyword",
+                          "ignore_above": 1024
+                        },
+                        "principal_id": {
+                          "type": "keyword",
+                          "ignore_above": 1024
+                        }
+                      }
+                    }
+                  }
+                },
+                "request_parameters": {
+                  "properties": {
+                    "access_key_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "attribute": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "attribute_type": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "bucket_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "cidr_ip": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "cluster": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "db_instance_identifier": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "db_snapshot_identifier": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "detector_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "document_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "duration_seconds": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "external_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "from_port": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "function_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "group_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "group_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "image_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "instance_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "instance_profile_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "instance_type": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "ip_protocol": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "key": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "key_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "key_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "log_group_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "operation_type": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "policy_arn": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "policy_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "principal_arn": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "project_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "region_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "role_arn": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "role_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "role_session_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "secret_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "security_group_ids": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "serial_number": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "snapshot_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "source_identity": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "stack_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "status": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "subnet_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "target": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "target_user_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "task_definition": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "to_port": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "trail_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "user_name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "vpc_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "with_decryption": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "response_elements": {
+                  "properties": {
+                    "access_key_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "assumed_role_arn": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "instance_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "user_arn": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "additional_eventdata": {
+                  "properties": {
+                    "mfa_used": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "login_to": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "credential_type": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "resources": {
+                  "properties": {
+                    "arn": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "type": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "account_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "tls_details": {
+                  "properties": {
+                    "tls_version": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "cipher_suite": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "client_provided_host_header": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "flattened": {
+                  "properties": {
+                    "request_parameters": {
+                      "type": "keyword",
+                      "ignore_above": 8191,
+                      "fields": {
+                        "text": {
+                          "type": "match_only_text"
+                        }
+                      }
+                    },
+                    "response_elements": {
+                      "type": "keyword",
+                      "ignore_above": 8191,
+                      "fields": {
+                        "text": {
+                          "type": "match_only_text"
+                        }
+                      }
+                    },
+                    "additional_eventdata": {
+                      "type": "keyword",
+                      "ignore_above": 8191,
+                      "fields": {
+                        "text": {
+                          "type": "match_only_text"
+                        }
+                      }
+                    },
+                    "service_event_details": {
+                      "type": "keyword",
+                      "ignore_above": 8191,
+                      "fields": {
+                        "text": {
+                          "type": "match_only_text"
+                        }
+                      }
+                    }
+                  }
+                },
+                "malformed": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "unmapped": {
+                  "type": "object",
+                  "dynamic": "true"
+                }
+              }
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "address": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "ip": {
+              "type": "ip"
+            },
+            "bytes": {
+              "type": "long"
+            }
+          }
+        },
+        "destination": {
+          "properties": {
+            "bytes": {
+              "type": "long"
+            }
+          }
+        },
+        "user": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "user_agent": {
+          "properties": {
+            "original": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        "host": {
+          "properties": {
+            "hostname": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Explicit schema for AWS CloudTrail records loaded by cloudtrail2sofelk.py: SOF-ELK 6901-aws.conf field names (aws.cloudtrail.*, source.*, user.name, user_agent.original, cloud.region) plus curated request/response parameters",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}

@@ -1,0 +1,3 @@
+account-id action az-id bytes dstaddr dstport end flow-direction instance-id interface-id log-status packets pkt-dst-aws-service pkt-dstaddr pkt-src-aws-service pkt-srcaddr protocol region srcaddr srcport start sublocation-id sublocation-type subnet-id tcp-flags traffic-path type version vpc-id
+123456789012 ACCEPT use1-az1 5000 10.0.1.15 22 1792458060 ingress i-0abc eni-0a1 OK 20 - 10.0.1.15 - 203.0.113.80 6 us-east-1 203.0.113.80 40000 1792458000 - - subnet-01 19 - IPv4 5 vpc-01
+123456789012 ACCEPT use1-az1 1200 52.94.0.10 443 1792458060 egress i-0abc eni-0a1 OK 8 S3 52.94.0.10 - 10.0.1.15 6 us-east-1 10.0.1.15 41000 1792458000 - - subnet-01 3 8 IPv4 5 vpc-01
