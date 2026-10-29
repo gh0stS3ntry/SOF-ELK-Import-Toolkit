@@ -314,11 +314,14 @@ function Copy-IndexTemplates([string]$SourceRoot, [string]$Destination) {
     #             (as SOF-ELK's load_all_dashboards.sh names them)
     #   Toolkit:  component-<x>.json -> sofelk-<x>,  index-<x>.json -> sofelk-toolkit-<x>
     #             (as the importers name them when they install them)
+    # Exclude lists files the importers deliberately never install as index
+    # templates: AWS index-httpdlog.json would override SOF-ELK's httpdlog-*
+    # template, so alb2sofelk.py only uses it to create its own index.
     $sources = @(
         @{ Dir = 'sof-elk-templates\component_templates'; ComponentPrefix = ''; IndexPrefix = '' },
         @{ Dir = 'sof-elk-templates\index_templates'; ComponentPrefix = ''; IndexPrefix = '' },
         @{ Dir = 'Windows\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
-        @{ Dir = 'AWS\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
+        @{ Dir = 'AWS\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-httpdlog.json') },
         @{ Dir = 'Generic-CSV\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' }
     )
     if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }
@@ -333,7 +336,10 @@ function Copy-IndexTemplates([string]$SourceRoot, [string]$Destination) {
         if (-not (Test-Path -LiteralPath $dir)) {
             throw "Template directory $dir not found. Run this script from the root of the SOF-ELK Import Toolkit checkout, or use -SkipTemplates."
         }
+        $exclude = @()
+        if ($src.ContainsKey('Exclude')) { $exclude = $src.Exclude }
         foreach ($file in Get-ChildItem -LiteralPath $dir -Filter '*.json' -File | Sort-Object Name) {
+            if ($exclude -contains $file.Name) { continue }
             if ($file.BaseName -like 'component-*') {
                 $kind = 'component'
                 $name = $src.ComponentPrefix + $file.BaseName.Substring('component-'.Length)
@@ -669,6 +675,6 @@ foreach ($addr in Get-HostIPv4Addresses) {
 }
 Write-Host ''
 Write-Host 'From a VM, use the address of the adapter on that VM''s network, for example:'
-Write-Host "  python3 SOF-ELK_CreateDataViews.py --kibana http://<workstation-ip>:$KibanaPort"
+Write-Host "  python3 SOF-ELK_CreateDataViews.py --kibana http://<workstation-ip>:$KibanaPort   (SOF-ELK + toolkit Data Views)"
 Write-Host "  python3 SOF-ELK_ImportWrapper.py <case-dir> <hostname> --es http://<workstation-ip>:$ElasticsearchPort"
 Write-Host "Later starts: run $startBatPath"
