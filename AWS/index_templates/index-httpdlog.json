@@ -1,6 +1,6 @@
 {
   "index_patterns": [
-    "aws-alb-*"
+    "httpdlog-*"
   ],
   "priority": 200,
   "composed_of": [
@@ -9,7 +9,7 @@
   "template": {
     "mappings": {
       "_meta": {
-        "toolkit_schema": "aws-alb",
+        "toolkit_schema": "httpdlog",
         "toolkit_schema_version": 1
       },
       "properties": {
@@ -197,7 +197,7 @@
             "response": {
               "properties": {
                 "status_code": {
-                  "type": "integer"
+                  "type": "short"
                 }
               }
             }
@@ -278,7 +278,7 @@
     }
   },
   "_meta": {
-    "description": "Explicit schema for AWS Application (and Classic) Load Balancer access logs loaded by alb2sofelk.py: SOF-ELK 6100-httpd.conf/8004-postprocess-httpd.conf field names (aws.elb.*, http.*, url.*, source/destination.*, backend.*, tls.*)",
+    "description": "Explicit schema for web access logs in httpdlog-<source> indexes, written by alb2sofelk.py (AWS Application and Classic Load Balancer access logs): SOF-ELK 6100-httpd.conf/8004-postprocess-httpd.conf field names (http.*, url.*, source/destination.*, user_agent.*, tls.*, backend.*, aws.elb.*). Not installed as an index template, because SOF-ELK's own httpdlog-* template must keep governing its httpdlog-YYYY.MM indexes; the importer creates each httpdlog-<source> index with this body instead.",
     "provider": "SOF-ELK-Import-Toolkit",
     "version": 1
   }

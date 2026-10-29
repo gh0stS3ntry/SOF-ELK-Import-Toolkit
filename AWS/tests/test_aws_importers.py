@@ -182,7 +182,7 @@ class AlbTest(TemplateCheck):
         self.assertEqual(doc["backend"]["ip"], "10.0.1.16")
 
     def test_template(self):
-        self.assert_mapped("aws-alb", self.results)
+        self.assert_mapped("httpdlog", self.results)
 
 
 class WafTest(TemplateCheck):
@@ -308,7 +308,7 @@ class AlbCsvTest(TemplateCheck):
         self.assertEqual(raw["destination"]["bytes"], 9000000)
 
     def test_template(self):
-        self.assert_mapped("aws-alb", self.results)
+        self.assert_mapped("httpdlog", self.results)
 
 
 class WafCsvTest(TemplateCheck):

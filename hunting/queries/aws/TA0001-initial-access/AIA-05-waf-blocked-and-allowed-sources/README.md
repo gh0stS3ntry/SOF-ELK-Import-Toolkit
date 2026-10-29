@@ -14,4 +14,4 @@
 
 **If it errors or looks empty.** If only blocked requests were logged (a WAF logging filter), `allowed_requests` is always 0.
 
-**Next.** [AIA-04](../AIA-04-alb-exploitation-attempts/) to see the same clients in the load balancer log, with the application's status codes.
+**Next.** [AIA-04](../AIA-04-web-exploitation-attempts/) to see the same clients in the load balancer log, with the application's status codes.

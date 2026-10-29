@@ -41,9 +41,10 @@ The queries need Elasticsearch 9.x, because several use `INLINE STATS` and `STAT
 
 ## AWS logs
 
-- Indexes are `aws-cloudtrail-<source>`, `aws-vpcflow-<source>`, `aws-alb-<source>` and `aws-waf-<source>`, where `<source>` is the `--source` label given to the importer (usually the account ID or an evidence label). `_index` in each row says which evidence source it came from.
+- Indexes are `aws-cloudtrail-<source>`, `aws-vpcflow-<source>`, `httpdlog-<source>` (ALB/ELB access logs) and `aws-waf-<source>`, where `<source>` is the `--source` label given to the importer (usually the account ID or an evidence label). `_index` in each row says which evidence source it came from.
 - Each query names its index family explicitly (`FROM aws-cloudtrail-*`), never `aws-*`: SOF-ELK's own pipeline writes CloudTrail to `aws-YYYY.MM` indexes with a different mapping, and a bare `aws-*` would mix the two.
 - Field names follow SOF-ELK's AWS parsing (`aws.cloudtrail.event_name`, `source.ip`, `user.name`, `aws.vpcflow.action`, `aws.elb.*`) plus the toolkit's additions; the field reference is in [`docs/schemas/aws-*.md`](../docs/schemas/). WAF has no SOF-ELK parser, so `aws.waf.*` is the toolkit's own schema.
+- ALB/ELB access logs go to SOF-ELK's web log family, `httpdlog-<source>`, with SOF-ELK's web field names (`source.ip`, `url.path`, `http.response.status_code`, `destination.bytes` for the response size). AIA-04, APE-03 and AEXF-03 read `FROM httpdlog-*` and use only those shared fields, so they hunt across ALB and other web server logs (IIS, NGINX, Apache) in one pass; `event.dataset` tells the sources apart. If SOF-ELK's own Logstash-built `httpdlog-YYYY.MM` indexes are also present, their strings are `text` rather than `keyword`; when ES|QL reports a type conflict, list the indexes explicitly.
 - CloudTrail request parameters are searchable two ways: a curated set as keywords (`aws.cloudtrail.request_parameters.bucket_name`, `.policy_arn`, ...) and the whole object as JSON text in `aws.cloudtrail.flattened.request_parameters`, which the queries match with `LIKE`/`RLIKE` when a key is not curated.
 - VPC Flow records count one direction: `source.bytes` is what the source sent, and `destination.bytes` is always 0, as in SOF-ELK. Queries that need both directions pair the two records.
 - Query IDs start with `A`: `ATRI` triage, `AIA` initial access, `AEX` execution, `APE` persistence, `APR` privilege escalation, `ACA` credential access, `ADI` discovery, `ALM` lateral movement, `ACO` collection, `AEXF` exfiltration, `AC2` command and control, `AIM` impact, `ADE` defense impairment.
@@ -258,7 +259,7 @@ The AWS queries, by tactic. Run ATRI-01 first: it shows which AWS log types, acc
 
 | ID | Query | Indexes | Applies to |
 |---|---|---|---|
-| [ATRI-01](queries/aws/00-triage/ATRI-01-aws-data-coverage/) | AWS data coverage per index: log types, accounts, regions, time range | `aws-cloudtrail-*`, `aws-vpcflow-*`, `aws-alb-*`, `aws-waf-*` | every AWS evidence source |
+| [ATRI-01](queries/aws/00-triage/ATRI-01-aws-data-coverage/) | AWS data coverage per index: log types, accounts, regions, time range | `aws-cloudtrail-*`, `aws-vpcflow-*`, `httpdlog-*`, `aws-waf-*` | every AWS evidence source |
 | [ATRI-02](queries/aws/00-triage/ATRI-02-cloudtrail-principal-inventory/) | CloudTrail principals: who called what, from where, and how often it failed | `aws-cloudtrail-*` | every AWS account |
 
 #### AWS: TA0001 Initial Access
@@ -268,7 +269,7 @@ The AWS queries, by tactic. Run ATRI-01 first: it shows which AWS log types, acc
 | [AIA-01](queries/aws/TA0001-initial-access/AIA-01-console-logins/) | Console sign-ins: root use, missing MFA and failures, per user and source | `aws-cloudtrail-*` | every AWS account |
 | [AIA-02](queries/aws/TA0001-initial-access/AIA-02-console-brute-force/) | Console brute force and password spraying, per source and hour | `aws-cloudtrail-*` | every AWS account with IAM users |
 | [AIA-03](queries/aws/TA0001-initial-access/AIA-03-access-key-sources/) | Long-term access keys: source addresses, user agents and tooling per key | `aws-cloudtrail-*` | every AWS account with IAM user access keys |
-| [AIA-04](queries/aws/TA0001-initial-access/AIA-04-alb-exploitation-attempts/) | Web exploitation attempts in load balancer logs, scored per client | `aws-alb-*` | internet-facing applications behind an ALB or ELB |
+| [AIA-04](queries/aws/TA0001-initial-access/AIA-04-web-exploitation-attempts/) | Web exploitation attempts in web access logs (ALB/ELB and other web servers), scored per client | `httpdlog-*` | internet-facing applications: behind an ALB or ELB, or on IIS/NGINX/Apache |
 | [AIA-05](queries/aws/TA0001-initial-access/AIA-05-waf-blocked-and-allowed-sources/) | WAF: blocked clients, and what the same clients got through | `aws-waf-*` | internet-facing applications behind AWS WAF |
 | [AIA-06](queries/aws/TA0001-initial-access/AIA-06-waf-count-mode-matches/) | WAF rules that matched but did not block (Count mode and labels on allowed requests) | `aws-waf-*` | internet-facing applications behind AWS WAF |
 
@@ -284,7 +285,7 @@ The AWS queries, by tactic. Run ATRI-01 first: it shows which AWS log types, acc
 |---|---|---|---|
 | [APE-01](queries/aws/TA0003-persistence/APE-01-iam-user-and-key-persistence/) | IAM users, access keys, passwords and MFA changes, scored | `aws-cloudtrail-*` | every AWS account |
 | [APE-02](queries/aws/TA0003-persistence/APE-02-role-trust-and-federation-backdoors/) | Role trust policies and identity providers that let an outside principal in | `aws-cloudtrail-*` | every AWS account |
-| [APE-03](queries/aws/TA0003-persistence/APE-03-alb-web-shell-requests/) | Possible web shells: script files on the load balancer reached by very few clients | `aws-alb-*` | internet-facing applications behind an ALB or ELB |
+| [APE-03](queries/aws/TA0003-persistence/APE-03-web-shell-requests/) | Possible web shells: script pages reached by very few clients (ALB/ELB and other web servers) | `httpdlog-*` | internet-facing applications: behind an ALB or ELB, or on IIS/NGINX/Apache |
 
 #### AWS: TA0004 Privilege Escalation
 
@@ -327,7 +328,7 @@ The AWS queries, by tactic. Run ATRI-01 first: it shows which AWS log types, acc
 |---|---|---|---|
 | [AEXF-01](queries/aws/TA0010-exfiltration/AEXF-01-resource-sharing-and-public-exposure/) | Snapshots, images, buckets and keys shared with other accounts or made public | `aws-cloudtrail-*` | every AWS account |
 | [AEXF-02](queries/aws/TA0010-exfiltration/AEXF-02-vpc-large-outbound-transfers/) | Large outbound transfers from the VPC to public addresses | `aws-vpcflow-*` | every VPC with flow logs |
-| [AEXF-03](queries/aws/TA0010-exfiltration/AEXF-03-alb-large-responses/) | Clients that pulled the most data through the load balancer | `aws-alb-*` | internet-facing applications behind an ALB or ELB |
+| [AEXF-03](queries/aws/TA0010-exfiltration/AEXF-03-web-large-responses/) | Clients that pulled the most data from the web front end (ALB/ELB and other web servers) | `httpdlog-*` | internet-facing applications: behind an ALB or ELB, or on IIS/NGINX/Apache |
 
 #### AWS: TA0011 Command and Control
 

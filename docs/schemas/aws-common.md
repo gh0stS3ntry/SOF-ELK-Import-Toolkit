@@ -7,14 +7,16 @@ The four AWS importers in [`AWS/`](../../AWS/) share one engine (`AWS/sof_elk_aw
 | Component `sofelk-toolkit-aws-common` | `AWS/index_templates/component-toolkit-aws-common.json` | every AWS index |
 | Index template `sofelk-toolkit-aws-cloudtrail` (priority 200) | `AWS/index_templates/index-aws-cloudtrail.json` | `aws-cloudtrail-*` ([fields](aws-cloudtrail.md)) |
 | Index template `sofelk-toolkit-aws-vpcflow` (priority 200) | `AWS/index_templates/index-aws-vpcflow.json` | `aws-vpcflow-*` ([fields](aws-vpcflow.md)) |
-| Index template `sofelk-toolkit-aws-alb` (priority 200) | `AWS/index_templates/index-aws-alb.json` | `aws-alb-*` ([fields](aws-alb.md)) |
+| No index template: the importer creates each index with this mapping | `AWS/index_templates/index-httpdlog.json` | `httpdlog-<source>`, ALB/ELB access logs ([fields](aws-alb.md)) |
 | Index template `sofelk-toolkit-aws-waf` (priority 200) | `AWS/index_templates/index-aws-waf.json` | `aws-waf-*` ([fields](aws-waf.md)) |
 
 ## Index names
 
 One index per evidence source, `<prefix>-<source>`, where `<source>` is the `--source` label given on the command line (usually the AWS account ID, or a name such as `prod`), normalised the same way host names are: lower case, runs of other characters replaced by `-`. Examples: `aws-cloudtrail-123456789012`, `aws-vpcflow-prod`. `--index` may change the prefix but must still end in `-<source>`.
 
-All four prefixes start with `aws-`, so SOF-ELK's stock `aws-*` Data View shows them together, and each has its own Data View (`aws-cloudtrail-*`, ...) from `SOF-ELK_CreateDataViews.py`. SOF-ELK's own `aws` index template (pattern `aws-*`, priority 0) is overridden by the toolkit templates (priority 200) for these names. SOF-ELK's Logstash pipeline writes CloudTrail to `aws-YYYY.MM`, VPC Flow to `netflow-YYYY.MM` and ELB logs to `httpdlog-YYYY.MM`; the toolkit indexes use the same field names, so queries carry over, but they are separate indexes.
+ALB/ELB access logs are the exception: they go to SOF-ELK's web access log family, `httpdlog-<source>` (for example `httpdlog-123456789012`), so they sit next to IIS, NGINX and Apache access logs and one `FROM httpdlog-*` query hunts across all of them; `event.dataset` (`aws.alb`, `aws.elb_classic`) tells them apart. No toolkit index template is installed for `httpdlog-*`, because one at priority 200 would also take over SOF-ELK's own `httpdlog-YYYY.MM` indexes and change their mapping. Instead the importer creates each `httpdlog-<source>` index itself with the mapping in `AWS/index_templates/index-httpdlog.json`, using SOF-ELK's types for the shared web fields (`http.response.status_code` is `short`, as in SOF-ELK's `httpdlog` template). A `--source` that looks like a month (`2026.10`) is refused, so the name cannot clash with SOF-ELK's monthly indexes.
+
+The CloudTrail, VPC Flow and WAF prefixes start with `aws-`, so SOF-ELK's stock `aws-*` Data View shows them together, and each has its own Data View (`aws-cloudtrail-*`, ...) from `SOF-ELK_CreateDataViews.py`. SOF-ELK's own `aws` index template (pattern `aws-*`, priority 0) is overridden by the toolkit templates (priority 200) for these names. SOF-ELK's Logstash pipeline writes CloudTrail to `aws-YYYY.MM`, VPC Flow to `netflow-YYYY.MM` and ELB logs to `httpdlog-YYYY.MM`; the toolkit indexes use the same field names, so queries carry over. The ALB indexes share SOF-ELK's `httpdlog-*` pattern and Data View; the others are separate index families.
 
 ## Fields every AWS document has
 
