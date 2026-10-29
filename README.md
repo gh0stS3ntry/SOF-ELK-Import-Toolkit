@@ -9,6 +9,7 @@ sof_elk_all_importers/
 ├── SOF-ELK_ImportWrapper.py
 ├── SOF-ELK_CreateDataViews.py
 ├── SOF-ELK_ConfigureRemoteIngest.sh
+├── Install-ForensicELK.ps1
 ├── README.md
 ├── Windows
 │   ├── common/
@@ -58,6 +59,7 @@ sof_elk_all_importers/
 │   │   └── index-genericcsv.json
 │   ├── tests/
 │   └── README.md
+├── sof-elk-templates/     (SOF-ELK's native index templates, loaded by Install-ForensicELK.ps1)
 ├── docs/schemas/
 └── hunting/
     ├── queries/          (Windows queries by tactic; AWS queries under queries/aws/)
@@ -495,6 +497,37 @@ python3 SOF-ELK_CreateDataViews.py --overwrite
 - `--dry-run`: display the Data Views that would be managed without making API changes.
 
 Run the Data View creator after Kibana is available and before using the corresponding indexes in Discover. Because `allowNoIndex` is enabled, it is also safe to create the Data Views before the direct-import scripts have created their first host-specific indexes.
+
+## Windows Elasticsearch and Kibana setup
+
+`Install-ForensicELK.ps1` builds a standalone Elasticsearch 9.4.3 and Kibana 9.4.3 instance on a Windows analyst workstation, as an alternative to a SOF-ELK VM. Run it from the directory that should hold the install (keep the path short, such as `C:\Tools`, because the Kibana archive has deeply nested files), ideally from an elevated PowerShell so it can add firewall rules:
+
+```powershell
+cd C:\Tools
+powershell.exe -ExecutionPolicy Bypass -File C:\path\to\Install-ForensicELK.ps1
+```
+
+It creates `forensic-elk\`, downloads both Windows zips from artifacts.elastic.co into it and checks them against Elastic's published SHA-512 checksums, extracts them, writes `elasticsearch.yml` and `kibana.yml` (originals kept as `*.orig`), adds Windows Defender Firewall rules, stages the index templates, writes `forensic-elk\start.bat`, then starts both services and checks that Elasticsearch answers without credentials. Run it from the root of the toolkit checkout (where it lives), because it copies the templates from there. Re-running it is safe: verified downloads and complete extractions are reused, and the Kibana encryption keys are kept.
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `network.host` / `server.host` | `0.0.0.0` | The host (`localhost`) and VMs on the workstation's virtual networks reach TCP/9200 and TCP/5601. |
+| `discovery.type` | `single-node` | Standalone node; no production bootstrap checks for the non-loopback bind. |
+| `xpack.security.enabled` (and enrollment, HTTP/transport TLS) | `false` | No username or password for the Kibana UI or the REST APIs. Written before the first start, so Elasticsearch never auto-generates TLS certificates or the `elastic` password. |
+| `elasticsearch.hosts` | `http://127.0.0.1:9200` | Connects Kibana to Elasticsearch. With security disabled there is no enrolment token to use; this is the whole integration. |
+| Index templates | SOF-ELK's native component and index templates from [`sof-elk-templates/`](sof-elk-templates/README.md) (`evtxlogs`, `filesystem`, `lnkfiles`, `aws`, `zeek` and the rest, under SOF-ELK's own names), plus the toolkit's templates from `Windows/`, `AWS/` and `Generic-CSV/index_templates/` (`sofelk-toolkit-*`) | New indexes get the same settings and mappings as on a SOF-ELK VM with the toolkit, even before the first import. Copied to `forensic-elk\templates\` and loaded by `forensic-elk\load-templates.ps1`. |
+| Firewall rules (group "Forensic ELK") | Inbound TCP 9200/5601 from `LocalSubnet`, tied to the bundled `java.exe`/`node.exe` | Lets VMs on host-only/NAT/Hyper-V networks connect. Change the scope with `-FirewallRemoteAddress 192.168.56.0/24`, or skip with `-SkipFirewall`. Without Administrator rights the script skips this and warns. |
+
+Other options: `-InstallRoot DIR` (where `forensic-elk` is created; default is the current directory), `-HeapSize 4g` (fixed JVM heap instead of automatic sizing), `-SkipTemplates` (do not stage or load any templates), `-NoStart` (configure only), and `-StartupTimeoutSeconds N` (how long `start.bat` waits for each service; default 300).
+
+For later starts, run `forensic-elk\start.bat`. It starts Elasticsearch in its own window, waits for `/_cluster/health`, re-loads the index templates (a PUT per template, so this is idempotent and picks up template changes), then starts Kibana in another window and waits for `/api/status`; a service that is already running is not started twice. Stop a service with Ctrl+C in its window. From a VM, point the toolkit at the workstation's address on that VM's network (the setup script prints each adapter's address):
+
+```bash
+python3 SOF-ELK_CreateDataViews.py --kibana http://192.168.56.1:5601
+python3 SOF-ELK_ImportWrapper.py /cases/IR-2026-042 WS01 --es http://192.168.56.1:9200
+```
+
+Anyone who can reach these ports can read, change and delete every index without credentials, so keep the firewall scope narrow and do not run this on an untrusted network. Templates only apply to indexes created after they load; `prefetch-*` has no SOF-ELK template (as on a SOF-ELK VM), and the PECmd importer creates it with its own explicit mapping. SOF-ELK's Kibana dashboards and Data Views are not installed; use `SOF-ELK_CreateDataViews.py` for the toolkit's Data Views.
 
 ## Remote ingest configuration
 
