@@ -1,0 +1,541 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Downloads and configures a single-node Elasticsearch 9.4.3 + Kibana 9.4.3
+    instance on Windows for local forensic bulk ingestion and analysis.
+
+.DESCRIPTION
+    The script:
+      1. Creates a "forensic-elk" directory in the current working directory
+         (or under -InstallRoot) and downloads the Elasticsearch and Kibana
+         Windows zip files into it, verifying each against the SHA-512
+         checksum Elastic publishes beside the download.
+      2. Extracts both archives and connects Kibana to Elasticsearch by
+         writing elasticsearch.hosts in kibana.yml. Security is disabled, so
+         no enrolment token is needed (enrolment tokens only exist when
+         Elasticsearch security is on).
+      3. Binds Elasticsearch (TCP/9200) and Kibana (TCP/5601) to 0.0.0.0 so
+         the host and VMs on the workstation's virtual networks can reach
+         them, uses single-node discovery, and (when run as Administrator)
+         adds Windows Defender Firewall rules for both ports.
+      4. Disables Elasticsearch security (xpack.security.enabled: false), so
+         neither the Kibana UI nor the REST APIs ask for a username or
+         password.
+      5. Writes forensic-elk\start.bat, which starts Elasticsearch, waits for
+         it to answer, then starts Kibana and waits for it.
+
+    The settings are written before Elasticsearch first starts, which stops
+    Elasticsearch from auto-configuring TLS and the elastic password.
+
+    Anyone who can reach TCP/9200 or TCP/5601 can read, change and delete
+    every index without credentials. Keep the firewall scope narrow (see
+    -FirewallRemoteAddress) and do not run this on an untrusted network.
+
+.PARAMETER InstallRoot
+    Directory in which "forensic-elk" is created. Defaults to the current
+    working directory. Keep the path short (for example C:\Tools): the Kibana
+    archive contains deeply nested files that can exceed the 260-character
+    Windows path limit.
+
+.PARAMETER FirewallRemoteAddress
+    Remote addresses allowed through the Windows Defender Firewall rules.
+    Accepts anything New-NetFirewallRule -RemoteAddress accepts, such as
+    "LocalSubnet" (default), "192.168.56.0/24" or "Any". VMware, VirtualBox
+    host-only and Hyper-V Default Switch networks give the host an address on
+    the VM subnet, so "LocalSubnet" covers VMs on those networks. Note that it
+    also covers the subnet of the host's physical network adapter.
+
+.PARAMETER SkipFirewall
+    Do not create or change Windows Defender Firewall rules.
+
+.PARAMETER HeapSize
+    Elasticsearch JVM heap size, such as "4g" or "2048m". By default
+    Elasticsearch sizes the heap automatically from the machine's memory,
+    which on a workstation running VMs may be more than you want to give it.
+
+.PARAMETER NoStart
+    Configure everything but do not start Elasticsearch and Kibana.
+
+.PARAMETER StartupTimeoutSeconds
+    How long start.bat waits for each service to answer. Default 300.
+
+.EXAMPLE
+    powershell.exe -ExecutionPolicy Bypass -File .\Install-ForensicELK.ps1
+
+.EXAMPLE
+    .\Install-ForensicELK.ps1 -InstallRoot C:\Tools -HeapSize 4g -FirewallRemoteAddress 192.168.56.0/24
+#>
+[CmdletBinding()]
+param(
+    [string]$InstallRoot = (Get-Location).Path,
+    [string[]]$FirewallRemoteAddress = @('LocalSubnet'),
+    [switch]$SkipFirewall,
+    [ValidatePattern('^[1-9][0-9]*[mMgG]$')]
+    [string]$HeapSize,
+    [switch]$NoStart,
+    [ValidateRange(30, 3600)]
+    [int]$StartupTimeoutSeconds = 300
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+# Invoke-WebRequest is many times slower on Windows PowerShell 5.1 when it
+# draws a progress bar for large downloads.
+$ProgressPreference = 'SilentlyContinue'
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+$ElasticVersion = '9.4.3'
+$ElasticsearchUrl = "https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-$ElasticVersion-windows-x86_64.zip"
+$KibanaUrl = "https://artifacts.elastic.co/downloads/kibana/kibana-$ElasticVersion-windows-x86_64.zip"
+$ElasticsearchPort = 9200
+$KibanaPort = 5601
+$FirewallGroup = 'Forensic ELK'
+$ManagedMarker = '# Managed by Install-ForensicELK.ps1'
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+function Write-Info([string]$Message) { Write-Host "[INFO] $Message" }
+function Write-Warn([string]$Message) { Write-Warning $Message }
+
+function Test-IsAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Write-TextFile([string]$Path, [string]$Content, [switch]$Ascii) {
+    # Elasticsearch and Kibana read YAML as UTF-8; a BOM (which
+    # Set-Content -Encoding UTF8 adds on Windows PowerShell 5.1) is avoided.
+    # Batch files are written as ASCII with CRLF line endings for cmd.exe.
+    $normalised = ($Content -replace "`r?`n", "`r`n")
+    if ($Ascii) {
+        $encoding = New-Object System.Text.ASCIIEncoding
+    } else {
+        $encoding = New-Object System.Text.UTF8Encoding($false)
+    }
+    [System.IO.File]::WriteAllText($Path, $normalised, $encoding)
+}
+
+function Backup-OriginalFile([string]$Path) {
+    # Keep the file as shipped in the archive once; later runs leave it alone.
+    $backup = "$Path.orig"
+    if ((Test-Path -LiteralPath $Path) -and -not (Test-Path -LiteralPath $backup)) {
+        Copy-Item -LiteralPath $Path -Destination $backup
+        Write-Info "Backed up $Path to $backup"
+    }
+}
+
+function Get-ExpectedSha512([string]$ChecksumPath) {
+    # Elastic's .sha512 files look like "<hex digest>  <file name>".
+    $text = (Get-Content -LiteralPath $ChecksumPath -Raw).Trim()
+    $digest = ($text -split '\s+')[0]
+    if ($digest -notmatch '^[0-9a-fA-F]{128}$') {
+        throw "Unexpected checksum file format in $ChecksumPath"
+    }
+    return $digest.ToUpperInvariant()
+}
+
+function Test-FileSha512([string]$Path, [string]$Expected) {
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA512).Hash.ToUpperInvariant()
+    return ($actual -eq $Expected)
+}
+
+function Save-VerifiedArtifact([string]$Url, [string]$Directory) {
+    $fileName = Split-Path -Path $Url -Leaf
+    $zipPath = Join-Path $Directory $fileName
+    $checksumPath = "$zipPath.sha512"
+
+    Write-Info "Fetching checksum $Url.sha512"
+    Invoke-WebRequest -Uri "$Url.sha512" -OutFile $checksumPath -UseBasicParsing
+    $expected = Get-ExpectedSha512 $checksumPath
+
+    if ((Test-Path -LiteralPath $zipPath) -and (Test-FileSha512 $zipPath $expected)) {
+        Write-Info "$fileName already downloaded and verified; skipping download"
+        return $zipPath
+    }
+
+    $partial = "$zipPath.part"
+    Write-Info "Downloading $Url"
+    try {
+        Invoke-WebRequest -Uri $Url -OutFile $partial -UseBasicParsing
+    } catch {
+        Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+        throw "Download of $Url failed: $($_.Exception.Message)"
+    }
+    if (-not (Test-FileSha512 $partial $expected)) {
+        Remove-Item -LiteralPath $partial -Force
+        throw "SHA-512 checksum mismatch for $fileName; the download was deleted"
+    }
+    Move-Item -LiteralPath $partial -Destination $zipPath -Force
+    Write-Info "Downloaded and verified $fileName"
+    return $zipPath
+}
+
+function Get-ZipTopLevelDirectory([string]$ZipPath) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $roots = @($zip.Entries |
+            ForEach-Object { ($_.FullName -replace '\\', '/').Split('/')[0] } |
+            Where-Object { $_ } |
+            Sort-Object -Unique)
+    } finally {
+        $zip.Dispose()
+    }
+    if ($roots.Count -ne 1) {
+        throw "Expected one top-level directory in $ZipPath, found: $($roots -join ', ')"
+    }
+    return $roots[0]
+}
+
+function Expand-ElasticArchive([string]$ZipPath, [string]$Directory, [string]$MarkerRelativePath) {
+    # Returns the extracted product directory. An existing, complete
+    # extraction is reused so the script can be re-run safely.
+    $topLevel = Get-ZipTopLevelDirectory $ZipPath
+    $target = Join-Path $Directory $topLevel
+    $marker = Join-Path $target $MarkerRelativePath
+
+    if (Test-Path -LiteralPath $marker) {
+        Write-Info "$topLevel already extracted; skipping extraction"
+        return $target
+    }
+    if (Test-Path -LiteralPath $target) {
+        throw "$target exists but looks incomplete ($MarkerRelativePath missing). Delete it and re-run the script."
+    }
+
+    Write-Info "Extracting $(Split-Path $ZipPath -Leaf) (this can take several minutes for Kibana)"
+    # tar.exe (bsdtar, shipped with Windows 10 1803+ and Windows 11) is much
+    # faster than Expand-Archive on archives with tens of thousands of files.
+    $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
+    $extracted = $false
+    if (Test-Path -LiteralPath $tar) {
+        & $tar -xf $ZipPath -C $Directory
+        if ($LASTEXITCODE -eq 0) {
+            $extracted = $true
+        } else {
+            Write-Warn "tar.exe exited with code $LASTEXITCODE; retrying with .NET ZipFile"
+            Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    if (-not $extracted) {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $Directory)
+    }
+    if (-not (Test-Path -LiteralPath $marker)) {
+        throw "Extraction of $ZipPath did not produce $marker. If the error mentions path length, re-run with a shorter -InstallRoot such as C:\Tools."
+    }
+    return $target
+}
+
+function New-RandomKey([int]$Length = 48) {
+    # Alphanumeric key for Kibana's encryption settings (32+ characters).
+    $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.ToCharArray()
+    $bytes = New-Object byte[] $Length
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    return -join ($bytes | ForEach-Object { $alphabet[$_ % $alphabet.Length] })
+}
+
+function Get-ExistingYamlValue([string]$Path, [string]$Key) {
+    # Reads a simple "key: value" line written by an earlier run, so the
+    # Kibana encryption keys stay stable (changing them makes existing
+    # encrypted saved objects unreadable).
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $pattern = '^\s*' + [regex]::Escape($Key) + '\s*:\s*"?([^"\s#]+)"?'
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        $m = [regex]::Match($line, $pattern)
+        if ($m.Success) { return $m.Groups[1].Value }
+    }
+    return $null
+}
+
+function Find-FirstFile([string]$Directory, [string]$Filter) {
+    if (-not (Test-Path -LiteralPath $Directory)) { return $null }
+    $file = Get-ChildItem -LiteralPath $Directory -Filter $Filter -Recurse -File -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($file) { return $file.FullName }
+    return $null
+}
+
+function Set-FirewallRules([string]$ElasticsearchHome, [string]$KibanaHome) {
+    # Rules are tied to the bundled java.exe / node.exe where found, which
+    # also stops Windows from showing its "allow this app" prompt (a "Block"
+    # click there would create a block rule that overrides these rules).
+    Get-NetFirewallRule -Group $FirewallGroup -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+
+    $services = @(
+        @{ Name = 'Elasticsearch'; Port = $ElasticsearchPort; Program = (Find-FirstFile (Join-Path $ElasticsearchHome 'jdk\bin') 'java.exe') },
+        @{ Name = 'Kibana'; Port = $KibanaPort; Program = (Find-FirstFile (Join-Path $KibanaHome 'node') 'node.exe') }
+    )
+    foreach ($svc in $services) {
+        $ruleArgs = @{
+            DisplayName   = "Forensic ELK - $($svc.Name) (TCP $($svc.Port))"
+            Group         = $FirewallGroup
+            Direction     = 'Inbound'
+            Action        = 'Allow'
+            Protocol      = 'TCP'
+            LocalPort     = $svc.Port
+            RemoteAddress = $FirewallRemoteAddress
+            Profile       = 'Any'
+        }
+        if ($svc.Program) {
+            $ruleArgs['Program'] = $svc.Program
+        } else {
+            Write-Warn "Bundled executable for $($svc.Name) not found; creating a port-only rule"
+        }
+        New-NetFirewallRule @ruleArgs | Out-Null
+        Write-Info "Firewall: allowed inbound TCP $($svc.Port) for $($svc.Name) from $($FirewallRemoteAddress -join ', ')"
+    }
+}
+
+function Get-HostIPv4Addresses {
+    try {
+        return @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+            Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
+            Sort-Object InterfaceAlias)
+    } catch {
+        return @()
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 1. Create forensic-elk and download the archives
+# ---------------------------------------------------------------------------
+if (-not [Environment]::Is64BitOperatingSystem) {
+    throw 'Elasticsearch and Kibana for Windows require 64-bit Windows.'
+}
+# Windows PowerShell 5.1 may default to TLS 1.0/1.1, which artifacts.elastic.co refuses.
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+$InstallRoot = (Resolve-Path -LiteralPath $InstallRoot).Path
+$ElkRoot = Join-Path $InstallRoot 'forensic-elk'
+if (Test-Path -LiteralPath $ElkRoot) {
+    Write-Info "Using existing directory $ElkRoot"
+} else {
+    New-Item -ItemType Directory -Path $ElkRoot | Out-Null
+    Write-Info "Created $ElkRoot"
+}
+
+$esZip = Save-VerifiedArtifact $ElasticsearchUrl $ElkRoot
+$kibanaZip = Save-VerifiedArtifact $KibanaUrl $ElkRoot
+
+# ---------------------------------------------------------------------------
+# 2. Extract
+# ---------------------------------------------------------------------------
+$EsHome = Expand-ElasticArchive $esZip $ElkRoot 'bin\elasticsearch.bat'
+$KibanaHome = Expand-ElasticArchive $kibanaZip $ElkRoot 'bin\kibana.bat'
+
+# ---------------------------------------------------------------------------
+# 3 + 4. Elasticsearch: listen on all interfaces, single node, no security
+# ---------------------------------------------------------------------------
+$esConfig = Join-Path $EsHome 'config\elasticsearch.yml'
+
+# If Elasticsearch was started before this script configured it, it has
+# already auto-configured TLS and stored keystore secrets for it; disabling
+# security on top of that is not reliable, so ask for a clean extraction.
+$esCerts = Join-Path $EsHome 'config\certs'
+$esConfigText = ''
+if (Test-Path -LiteralPath $esConfig) { $esConfigText = Get-Content -LiteralPath $esConfig -Raw }
+if ($null -eq $esConfigText) { $esConfigText = '' }
+$alreadyManaged = $esConfigText.Contains($ManagedMarker)
+if ((Test-Path -LiteralPath $esCerts) -and -not $alreadyManaged) {
+    throw "Elasticsearch in $EsHome was already started with security auto-configuration ($esCerts exists). Stop it, delete $EsHome and re-run this script."
+}
+
+Backup-OriginalFile $esConfig
+$esYaml = @"
+$ManagedMarker
+# The archive's original file is kept as elasticsearch.yml.orig.
+cluster.name: forensic-elk
+node.name: forensic-elk-node-1
+
+# Listen on every IPv4 interface so the host (127.0.0.1) and VMs on the
+# workstation's virtual networks can reach the REST API.
+network.host: 0.0.0.0
+http.port: $ElasticsearchPort
+
+# Standalone node: no cluster formation, and production bootstrap checks
+# that would otherwise apply to a non-loopback bind are not enforced.
+discovery.type: single-node
+
+# No authentication or TLS: the Kibana UI and the REST API need no username
+# or password. Anyone who can reach this port has full access to all data.
+xpack.security.enabled: false
+xpack.security.enrollment.enabled: false
+xpack.security.http.ssl.enabled: false
+xpack.security.transport.ssl.enabled: false
+"@
+Write-TextFile $esConfig $esYaml
+Write-Info "Wrote $esConfig"
+
+$heapFile = Join-Path $EsHome 'config\jvm.options.d\forensic-elk-heap.options'
+if ($HeapSize) {
+    $heap = $HeapSize.ToLowerInvariant()
+    Write-TextFile $heapFile "-Xms$heap`n-Xmx$heap`n"
+    Write-Info "Set Elasticsearch heap to $heap ($heapFile)"
+} elseif (Test-Path -LiteralPath $heapFile) {
+    Remove-Item -LiteralPath $heapFile -Force
+    Write-Info 'Removed heap override; Elasticsearch will size its heap automatically'
+}
+
+# ---------------------------------------------------------------------------
+# 2 + 3. Kibana: listen on all interfaces and connect to Elasticsearch
+# ---------------------------------------------------------------------------
+$kibanaConfig = Join-Path $KibanaHome 'config\kibana.yml'
+$keyNames = @(
+    'xpack.encryptedSavedObjects.encryptionKey',
+    'xpack.reporting.encryptionKey',
+    'xpack.security.encryptionKey'
+)
+$keys = @{}
+foreach ($name in $keyNames) {
+    $existing = Get-ExistingYamlValue $kibanaConfig $name
+    if ($existing -and $existing.Length -ge 32) { $keys[$name] = $existing } else { $keys[$name] = New-RandomKey }
+}
+
+Backup-OriginalFile $kibanaConfig
+$kibanaYaml = @"
+$ManagedMarker
+# The archive's original file is kept as kibana.yml.orig.
+
+# Listen on every IPv4 interface so the host and VMs can open the UI and
+# call the Kibana APIs (for example to create Data Views).
+server.host: "0.0.0.0"
+server.port: $KibanaPort
+
+# Connect to the local Elasticsearch node. Security is disabled there, so no
+# enrolment token, service account token or password is used. 127.0.0.1 is
+# used instead of localhost because Node.js may resolve localhost to ::1,
+# and Elasticsearch listens on IPv4 only.
+elasticsearch.hosts: ["http://127.0.0.1:$ElasticsearchPort"]
+
+# Stable keys for encrypted saved objects (alerting rules, connectors,
+# reporting). Generated once; later runs reuse them.
+xpack.encryptedSavedObjects.encryptionKey: "$($keys['xpack.encryptedSavedObjects.encryptionKey'])"
+xpack.reporting.encryptionKey: "$($keys['xpack.reporting.encryptionKey'])"
+xpack.security.encryptionKey: "$($keys['xpack.security.encryptionKey'])"
+
+telemetry.optIn: false
+"@
+Write-TextFile $kibanaConfig $kibanaYaml
+Write-Info "Wrote $kibanaConfig"
+
+# ---------------------------------------------------------------------------
+# 3. Windows Defender Firewall
+# ---------------------------------------------------------------------------
+if ($SkipFirewall) {
+    Write-Info 'Skipping firewall configuration (-SkipFirewall)'
+} elseif (Test-IsAdministrator) {
+    Set-FirewallRules $EsHome $KibanaHome
+} else {
+    Write-Warn ("Not running as Administrator, so no firewall rules were added. VMs may not reach " +
+        "TCP $ElasticsearchPort/$KibanaPort until you re-run this script from an elevated PowerShell " +
+        "(it reuses the downloads and keeps the configuration), or allow java.exe and node.exe when Windows prompts.")
+}
+
+# ---------------------------------------------------------------------------
+# 5. start.bat
+# ---------------------------------------------------------------------------
+$esDirName = Split-Path $EsHome -Leaf
+$kibanaDirName = Split-Path $KibanaHome -Leaf
+# The wait loop runs in PowerShell; the URL comes from an environment
+# variable so the command line contains no cmd.exe-sensitive characters.
+$waitCommand = "`$u = `$env:FELK_WAIT_URL; `$d = (Get-Date).AddSeconds([int]`$env:FELK_WAIT_SECONDS); " +
+    "while ((Get-Date) -lt `$d) { try { `$r = Invoke-WebRequest -Uri `$u -UseBasicParsing -TimeoutSec 5; " +
+    "if (`$r.StatusCode -eq 200) { exit 0 } } catch { }; Start-Sleep -Seconds 3 }; exit 1"
+$probeCommand = "try { `$r = Invoke-WebRequest -Uri `$env:FELK_WAIT_URL -UseBasicParsing -TimeoutSec 3; " +
+    "if (`$r.StatusCode -eq 200) { exit 0 } } catch { }; exit 1"
+
+$startBat = @"
+@echo off
+rem Starts the forensic-elk Elasticsearch and Kibana instance.
+rem Generated by Install-ForensicELK.ps1. Each service runs in its own
+rem window; press Ctrl+C in that window (or close it) to stop the service.
+setlocal
+set "ROOT=%~dp0"
+set "ES_HOME=%ROOT%$esDirName"
+set "KIBANA_HOME=%ROOT%$kibanaDirName"
+set "ES_URL=http://127.0.0.1:$ElasticsearchPort"
+set "KIBANA_URL=http://127.0.0.1:$KibanaPort"
+set "FELK_WAIT_SECONDS=$StartupTimeoutSeconds"
+set "PS=powershell.exe -NoProfile -ExecutionPolicy Bypass -Command"
+
+set "FELK_WAIT_URL=%ES_URL%/_cluster/health"
+%PS% "$probeCommand"
+if not errorlevel 1 goto es_running
+echo Starting Elasticsearch...
+start "Forensic ELK - Elasticsearch" /D "%ES_HOME%" cmd /k bin\elasticsearch.bat
+goto es_wait
+:es_running
+echo Elasticsearch is already running at %ES_URL%
+:es_wait
+echo Waiting up to %FELK_WAIT_SECONDS% seconds for Elasticsearch...
+%PS% "$waitCommand"
+if errorlevel 1 goto es_failed
+echo Elasticsearch is up at %ES_URL%
+
+set "FELK_WAIT_URL=%KIBANA_URL%/api/status"
+%PS% "$probeCommand"
+if not errorlevel 1 goto kibana_running
+echo Starting Kibana...
+start "Forensic ELK - Kibana" /D "%KIBANA_HOME%" cmd /k bin\kibana.bat
+goto kibana_wait
+:kibana_running
+echo Kibana is already running at %KIBANA_URL%
+:kibana_wait
+echo Waiting up to %FELK_WAIT_SECONDS% seconds for Kibana...
+%PS% "$waitCommand"
+if errorlevel 1 goto kibana_failed
+echo Kibana is up at %KIBANA_URL%
+echo.
+echo Forensic ELK is ready. From VMs, use this workstation's IP address with ports $ElasticsearchPort and $KibanaPort.
+exit /b 0
+
+:es_failed
+echo ERROR: Elasticsearch did not answer at %ES_URL% within %FELK_WAIT_SECONDS% seconds.
+echo Check the "Forensic ELK - Elasticsearch" window and %ES_HOME%\logs\forensic-elk.log
+exit /b 1
+
+:kibana_failed
+echo ERROR: Kibana did not answer at %KIBANA_URL% within %FELK_WAIT_SECONDS% seconds.
+echo Check the "Forensic ELK - Kibana" window.
+exit /b 1
+"@
+$startBatPath = Join-Path $ElkRoot 'start.bat'
+Write-TextFile $startBatPath $startBat -Ascii
+Write-Info "Wrote $startBatPath"
+
+# ---------------------------------------------------------------------------
+# Start and verify
+# ---------------------------------------------------------------------------
+if ($NoStart) {
+    Write-Info "Setup complete. Run $startBatPath to start Elasticsearch and Kibana."
+} else {
+    Write-Info 'Starting Elasticsearch and Kibana via start.bat'
+    & $startBatPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "start.bat reported a startup failure (exit code $LASTEXITCODE)."
+    }
+
+    # Confirm the API answers without credentials and reports the expected version.
+    $info = Invoke-RestMethod -Uri "http://127.0.0.1:$ElasticsearchPort/" -UseBasicParsing
+    Write-Info "Elasticsearch $($info.version.number) answered without credentials (cluster '$($info.cluster_name)')"
+    if ($info.version.number -ne $ElasticVersion) {
+        Write-Warn "Expected Elasticsearch $ElasticVersion but the node reports $($info.version.number)"
+    }
+}
+
+Write-Host ''
+Write-Host 'Endpoints (no username or password):'
+Write-Host "  This workstation : http://localhost:$KibanaPort  (Kibana)   http://localhost:$ElasticsearchPort  (Elasticsearch)"
+foreach ($addr in Get-HostIPv4Addresses) {
+    Write-Host ("  {0,-17}: http://{1}:{2}  (Kibana)   http://{1}:{3}  (Elasticsearch)" -f $addr.InterfaceAlias, $addr.IPAddress, $KibanaPort, $ElasticsearchPort)
+}
+Write-Host ''
+Write-Host 'From a VM, use the address of the adapter on that VM''s network, for example:'
+Write-Host "  python3 SOF-ELK_CreateDataViews.py --kibana http://<workstation-ip>:$KibanaPort"
+Write-Host "  python3 SOF-ELK_ImportWrapper.py <case-dir> <hostname> --es http://<workstation-ip>:$ElasticsearchPort"
+Write-Host "Later starts: run $startBatPath"

@@ -9,6 +9,7 @@ sof_elk_all_importers/
 ├── SOF-ELK_ImportWrapper.py
 ├── SOF-ELK_CreateDataViews.py
 ├── SOF-ELK_ConfigureRemoteIngest.sh
+├── Install-ForensicELK.ps1
 ├── README.md
 ├── Windows
 │   ├── common/
@@ -496,6 +497,36 @@ python3 SOF-ELK_CreateDataViews.py --overwrite
 - `--dry-run`: display the Data Views that would be managed without making API changes.
 
 Run the Data View creator after Kibana is available and before using the corresponding indexes in Discover. Because `allowNoIndex` is enabled, it is also safe to create the Data Views before the direct-import scripts have created their first host-specific indexes.
+
+## Windows Elasticsearch and Kibana setup
+
+`Install-ForensicELK.ps1` builds a standalone Elasticsearch 9.4.3 and Kibana 9.4.3 instance on a Windows analyst workstation, as an alternative to a SOF-ELK VM. Run it from the directory that should hold the install (keep the path short, such as `C:\Tools`, because the Kibana archive has deeply nested files), ideally from an elevated PowerShell so it can add firewall rules:
+
+```powershell
+cd C:\Tools
+powershell.exe -ExecutionPolicy Bypass -File C:\path\to\Install-ForensicELK.ps1
+```
+
+It creates `forensic-elk\`, downloads both Windows zips from artifacts.elastic.co into it and checks them against Elastic's published SHA-512 checksums, extracts them, writes `elasticsearch.yml` and `kibana.yml` (originals kept as `*.orig`), adds Windows Defender Firewall rules, writes `forensic-elk\start.bat`, then starts both services and checks that Elasticsearch answers without credentials. Re-running it is safe: verified downloads and complete extractions are reused, and the Kibana encryption keys are kept.
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `network.host` / `server.host` | `0.0.0.0` | The host (`localhost`) and VMs on the workstation's virtual networks reach TCP/9200 and TCP/5601. |
+| `discovery.type` | `single-node` | Standalone node; no production bootstrap checks for the non-loopback bind. |
+| `xpack.security.enabled` (and enrollment, HTTP/transport TLS) | `false` | No username or password for the Kibana UI or the REST APIs. Written before the first start, so Elasticsearch never auto-generates TLS certificates or the `elastic` password. |
+| `elasticsearch.hosts` | `http://127.0.0.1:9200` | Connects Kibana to Elasticsearch. With security disabled there is no enrolment token to use; this is the whole integration. |
+| Firewall rules (group "Forensic ELK") | Inbound TCP 9200/5601 from `LocalSubnet`, tied to the bundled `java.exe`/`node.exe` | Lets VMs on host-only/NAT/Hyper-V networks connect. Change the scope with `-FirewallRemoteAddress 192.168.56.0/24`, or skip with `-SkipFirewall`. Without Administrator rights the script skips this and warns. |
+
+Other options: `-InstallRoot DIR` (where `forensic-elk` is created; default is the current directory), `-HeapSize 4g` (fixed JVM heap instead of automatic sizing), `-NoStart` (configure only), and `-StartupTimeoutSeconds N` (how long `start.bat` waits for each service; default 300).
+
+For later starts, run `forensic-elk\start.bat`. It starts Elasticsearch in its own window, waits for `/_cluster/health`, then starts Kibana in another window and waits for `/api/status`; a service that is already running is not started twice. Stop a service with Ctrl+C in its window. From a VM, point the toolkit at the workstation's address on that VM's network (the setup script prints each adapter's address):
+
+```bash
+python3 SOF-ELK_CreateDataViews.py --kibana http://192.168.56.1:5601
+python3 SOF-ELK_ImportWrapper.py /cases/IR-2026-042 WS01 --es http://192.168.56.1:9200
+```
+
+Anyone who can reach these ports can read, change and delete every index without credentials, so keep the firewall scope narrow and do not run this on an untrusted network. This is a vanilla Elasticsearch, not SOF-ELK: it has the toolkit's own index templates (the importers install them), but not the index templates SOF-ELK itself loads for its native indexes (`evtxlogs-*`, `filesystem-*`, `lnkfiles-*`, `prefetch-*`), so those are mapped dynamically and some field types can differ from a SOF-ELK VM.
 
 ## Remote ingest configuration
 
