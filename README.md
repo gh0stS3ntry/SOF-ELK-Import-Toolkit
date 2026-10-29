@@ -60,6 +60,7 @@ sof_elk_all_importers/
 │   ├── tests/
 │   └── README.md
 ├── sof-elk-templates/     (SOF-ELK's native index templates, loaded by Install-ForensicELK.ps1)
+├── sof-elk-kibana/        (SOF-ELK's out-of-box Data Views and Kibana defaults, used by SOF-ELK_CreateDataViews.py)
 ├── docs/schemas/
 └── hunting/
     ├── queries/          (Windows queries by tactic; AWS queries under queries/aws/)
@@ -418,7 +419,13 @@ The importers accept an Elasticsearch URL and optional HTTP Basic credentials. U
 
 ## Kibana Data View creator
 
-`SOF-ELK_CreateDataViews.py` creates the seventeen Kibana Data Views that are not included out-of-box in the stock SOF-ELK distribution but are required for the additional direct-import indexes used by this package:
+`SOF-ELK_CreateDataViews.py` creates two sets of Kibana Data Views.
+
+**SOF-ELK's out-of-box Data Views** (skip with `--toolkit-only`). A plain Elasticsearch/Kibana, such as the one `Install-ForensicELK.ps1` builds, has none of them. They are loaded from unmodified copies of SOF-ELK's `kibana/data_views/*.json` in [`sof-elk-kibana/data_views/`](sof-elk-kibana/data_views), with the same ids, titles and field formats: `all-records`, `appleul-*`, `aws-*`, `azure-*`, `evtxlogs-*`, `filesystem-*`, `gcp-*`, `gws-*`, `httpdlog-*`, `icsnpp-*`, `kape` (`filefolderaccess-*,filesystem-*,lnkfiles-*,evtxlogs-*`), `kubernetes-*`, `lnkfiles-*`, `logstash-*`, `microsoft365-*`, `netflow-*`, `plaso-*`, `prefetch-*`, `volatility-*` and `zeek-*`. On a SOF-ELK VM they already exist and are skipped.
+
+The script also applies SOF-ELK's Kibana advanced settings from `sof-elk-kibana/sof-elk_config.json` (skip with `--skip-kibana-settings`): `dateFormat:tz` = `UTC`, SOF-ELK's date formats, `defaultIndex` = `logstash`, the Discover sample size and row height, the dark-mode setting and the Security IP-reputation links. The Data Views' `@timestamp` format ends in a literal `Z`, so without the UTC time zone Kibana would show local times labelled as UTC. `defaultRoute` is left out because it opens a SOF-ELK dashboard that the script does not install. If Kibana refuses the batch, each setting is retried on its own and failures are reported.
+
+**The toolkit's Data Views**, which stock SOF-ELK does not have:
 
 | Script / data source | Kibana Data View | Indexes created by importer |
 |---|---|---|
@@ -440,13 +447,13 @@ The importers accept an Elasticsearch URL and optional HTTP Basic credentials. U
 | `AWS/waf2sofelk.py` | `aws-waf-*` | `aws-waf-<source>` |
 | `Generic-CSV/genericcsv2sofelk.py` | `genericcsv-*` | `genericcsv-<hostname>` |
 
-The script deliberately does not create the `filesystem-*`, `evtxlogs-*`, `lnkfiles-*`, or `prefetch-*` Data Views because those are already available in SOF-ELK out-of-box. SOF-ELK's own `aws-*` Data View (for its Logstash CloudTrail output) is left alone too; the AWS importers' indexes get the narrower patterns above. `AWS/alb2sofelk.py` writes ALB/ELB access logs to `httpdlog-<source>`, which SOF-ELK's stock `httpdlog-*` Data View already covers.
+The `filesystem-*`, `evtxlogs-*`, `lnkfiles-*` and `prefetch-*` Data Views come from SOF-ELK's set. The AWS importers' indexes get the narrower patterns above, next to SOF-ELK's own `aws-*` Data View (for its Logstash CloudTrail output). `AWS/alb2sofelk.py` writes ALB/ELB access logs to `httpdlog-<source>`, which SOF-ELK's stock `httpdlog-*` Data View already covers.
 
-The script uses Kibana's Data Views API and is standard-library only. By default it is idempotent: an existing Data View is detected and left unchanged. Use `--overwrite` to delete and recreate the seventeen managed views. The Data Views are configured to use `@timestamp` as the time field and `allowNoIndex=true`, so they can be created before the first corresponding Elasticsearch index exists.
+The script uses Kibana's Data Views API and is standard-library only. By default it is idempotent: an existing Data View is detected and left unchanged. Use `--overwrite` to delete and recreate the managed views (SOF-ELK's are recreated with the same ids, so its dashboards keep working on a SOF-ELK VM). The Data Views are configured to use `@timestamp` as the time field and `allowNoIndex=true`, so they can be created before the first corresponding Elasticsearch index exists.
 
 ### Usage
 
-Preview the seventeen Data Views without modifying Kibana:
+Preview the Data Views and settings without modifying Kibana:
 
 ```bash
 python3 SOF-ELK_CreateDataViews.py --dry-run
@@ -481,7 +488,7 @@ python3 SOF-ELK_CreateDataViews.py \
     --insecure
 ```
 
-Force recreation of the seventeen managed Data Views:
+Force recreation of the managed Data Views:
 
 ```bash
 python3 SOF-ELK_CreateDataViews.py --overwrite
@@ -493,7 +500,9 @@ python3 SOF-ELK_CreateDataViews.py --overwrite
 - `--user USER`: HTTP Basic authentication username.
 - `--password PASSWORD`: HTTP Basic authentication password.
 - `--insecure`: disable TLS certificate verification.
-- `--overwrite`: delete and recreate the seventeen managed Data Views if they already exist.
+- `--overwrite`: delete and recreate the managed Data Views if they already exist.
+- `--toolkit-only`: only the toolkit's Data Views; leave SOF-ELK's Data Views and Kibana settings alone.
+- `--skip-kibana-settings`: create the Data Views but do not apply SOF-ELK's Kibana advanced settings.
 - `--dry-run`: display the Data Views that would be managed without making API changes.
 
 Run the Data View creator after Kibana is available and before using the corresponding indexes in Discover. Because `allowNoIndex` is enabled, it is also safe to create the Data Views before the direct-import scripts have created their first host-specific indexes.
@@ -515,7 +524,7 @@ It creates `forensic-elk\`, downloads both Windows zips from artifacts.elastic.c
 | `discovery.type` | `single-node` | Standalone node; no production bootstrap checks for the non-loopback bind. |
 | `xpack.security.enabled` (and enrollment, HTTP/transport TLS) | `false` | No username or password for the Kibana UI or the REST APIs. Written before the first start, so Elasticsearch never auto-generates TLS certificates or the `elastic` password. |
 | `elasticsearch.hosts` | `http://127.0.0.1:9200` | Connects Kibana to Elasticsearch. With security disabled there is no enrolment token to use; this is the whole integration. |
-| Index templates | SOF-ELK's native component and index templates from [`sof-elk-templates/`](sof-elk-templates/README.md) (`evtxlogs`, `filesystem`, `lnkfiles`, `aws`, `zeek` and the rest, under SOF-ELK's own names), plus the toolkit's templates from `Windows/`, `AWS/` and `Generic-CSV/index_templates/` (`sofelk-toolkit-*`) | New indexes get the same settings and mappings as on a SOF-ELK VM with the toolkit, even before the first import. Copied to `forensic-elk\templates\` and loaded by `forensic-elk\load-templates.ps1`. |
+| Index templates | SOF-ELK's native component and index templates from [`sof-elk-templates/`](sof-elk-templates/README.md) (`evtxlogs`, `filesystem`, `lnkfiles`, `aws`, `zeek` and the rest, under SOF-ELK's own names), plus the toolkit's templates from `Windows/`, `AWS/` and `Generic-CSV/index_templates/` (`sofelk-toolkit-*`; `AWS/index_templates/index-httpdlog.json` is left out, as the ALB importer never installs it as a template) | New indexes get the same settings and mappings as on a SOF-ELK VM with the toolkit, even before the first import. Copied to `forensic-elk\templates\` and loaded by `forensic-elk\load-templates.ps1`. |
 | Firewall rules (group "Forensic ELK") | Inbound TCP 9200/5601 from `LocalSubnet`, tied to the bundled `java.exe`/`node.exe` | Lets VMs on host-only/NAT/Hyper-V networks connect. Change the scope with `-FirewallRemoteAddress 192.168.56.0/24`, or skip with `-SkipFirewall`. Without Administrator rights the script skips this and warns. |
 
 Other options: `-InstallRoot DIR` (where `forensic-elk` is created; default is the current directory), `-HeapSize 4g` (fixed JVM heap instead of automatic sizing), `-SkipTemplates` (do not stage or load any templates), `-NoStart` (configure only), and `-StartupTimeoutSeconds N` (how long `start.bat` waits for each service; default 300).
@@ -527,7 +536,7 @@ python3 SOF-ELK_CreateDataViews.py --kibana http://192.168.56.1:5601
 python3 SOF-ELK_ImportWrapper.py /cases/IR-2026-042 WS01 --es http://192.168.56.1:9200
 ```
 
-Anyone who can reach these ports can read, change and delete every index without credentials, so keep the firewall scope narrow and do not run this on an untrusted network. Templates only apply to indexes created after they load; `prefetch-*` has no SOF-ELK template (as on a SOF-ELK VM), and the PECmd importer creates it with its own explicit mapping. SOF-ELK's Kibana dashboards and Data Views are not installed; use `SOF-ELK_CreateDataViews.py` for the toolkit's Data Views.
+Anyone who can reach these ports can read, change and delete every index without credentials, so keep the firewall scope narrow and do not run this on an untrusted network. Templates only apply to indexes created after they load; `prefetch-*` has no SOF-ELK template (as on a SOF-ELK VM), and the PECmd importer creates it with its own explicit mapping. Kibana starts with no Data Views: run `SOF-ELK_CreateDataViews.py` (above) to create SOF-ELK's out-of-box Data Views and the toolkit's, and to apply SOF-ELK's Kibana defaults such as the UTC display time zone. SOF-ELK's dashboards and saved searches are not installed.
 
 ## Remote ingest configuration
 
