@@ -1,7 +1,7 @@
-// AEXF-03 | Clients that pulled the most data through the load balancer
+// AEXF-03 | Clients that pulled the most data from the web front end (ALB/ELB and other web servers)
 // Tactic: TA0010 Exfiltration | ATT&CK: T1530, T1567
-// Indexes: aws-alb-* | Needs: ALB or Classic ELB access logs
-FROM aws-alb-* METADATA _index
+// Indexes: httpdlog-* | Needs: web access logs with response sizes (destination.bytes): ALB or Classic ELB, or IIS/NGINX/Apache
+FROM httpdlog-* METADATA _index
 | EVAL big = COALESCE(destination.bytes, 0) >= 10485760  // EDIT: 10 MB
 | STATS
     requests = COUNT(*),

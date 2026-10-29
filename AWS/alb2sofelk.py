@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Load AWS Application Load Balancer (and Classic ELB) access logs into SOF-ELK as aws-alb-<source>.
+"""Load AWS Application Load Balancer (and Classic ELB) access logs into SOF-ELK as httpdlog-<source>.
+
+The index family is SOF-ELK's web access log family (httpdlog-*), so ALB requests sit next to
+other web server logs (IIS, NGINX, Apache) and one ES|QL query (FROM httpdlog-*) hunts across
+all of them. event.dataset (aws.alb, aws.elb_classic) tells the sources apart. No index template
+is installed for httpdlog-*: SOF-ELK's own template keeps governing its httpdlog-YYYY.MM indexes,
+and each httpdlog-<source> index is created with the toolkit mapping (index-httpdlog.json).
 
 Field names follow SOF-ELK's ELB parsing (configfiles/6100-httpd.conf grok and
 8004-postprocess-httpd.conf): elb -> aws.elb.name, client:port -> source.ip/source.port,
@@ -337,8 +343,8 @@ def detect(path, head):
 
 
 LOG = AwsLog(
-    prefix="aws-alb", namespace="aws.elb", title="AWS ALB/ELB access", dataset="aws.alb",
-    detect=detect, parse=parse,
+    prefix="httpdlog", namespace="aws.elb", title="AWS ALB/ELB access", dataset="aws.alb",
+    detect=detect, parse=parse, index_template=False,
     describe=[
         "ALB access logs as delivered to S3 (.log / .log.gz), one request per line",
         "Classic Load Balancer access logs (same delivery)",
@@ -346,4 +352,4 @@ LOG = AwsLog(
     ])
 
 if __name__ == "__main__":
-    sys.exit(run(LOG, "Load AWS ALB / Classic ELB access logs into SOF-ELK (index aws-alb-<source>)"))
+    sys.exit(run(LOG, "Load AWS ALB / Classic ELB access logs into SOF-ELK (index httpdlog-<source>)"))

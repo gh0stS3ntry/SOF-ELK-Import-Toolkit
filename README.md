@@ -416,7 +416,7 @@ The importers accept an Elasticsearch URL and optional HTTP Basic credentials. U
 
 ## Kibana Data View creator
 
-`SOF-ELK_CreateDataViews.py` creates the eighteen Kibana Data Views that are not included out-of-box in the stock SOF-ELK distribution but are required for the additional direct-import indexes used by this package:
+`SOF-ELK_CreateDataViews.py` creates the seventeen Kibana Data Views that are not included out-of-box in the stock SOF-ELK distribution but are required for the additional direct-import indexes used by this package:
 
 | Script / data source | Kibana Data View | Indexes created by importer |
 |---|---|---|
@@ -435,17 +435,16 @@ The importers accept an Elasticsearch URL and optional HTTP Basic credentials. U
 | ConvertUsageLogsTo-CSV.ps1 | `clrusagelogs-*` | `clrusagelogs-<hostname>` |
 | `AWS/cloudtrail2sofelk.py` | `aws-cloudtrail-*` | `aws-cloudtrail-<source>` |
 | `AWS/vpcflow2sofelk.py` | `aws-vpcflow-*` | `aws-vpcflow-<source>` |
-| `AWS/alb2sofelk.py` | `aws-alb-*` | `aws-alb-<source>` |
 | `AWS/waf2sofelk.py` | `aws-waf-*` | `aws-waf-<source>` |
 | `Generic-CSV/genericcsv2sofelk.py` | `genericcsv-*` | `genericcsv-<hostname>` |
 
-The script deliberately does not create the `filesystem-*`, `evtxlogs-*`, `lnkfiles-*`, or `prefetch-*` Data Views because those are already available in SOF-ELK out-of-box. SOF-ELK's own `aws-*` Data View (for its Logstash CloudTrail output) is left alone too; the AWS importers' indexes get the narrower patterns above.
+The script deliberately does not create the `filesystem-*`, `evtxlogs-*`, `lnkfiles-*`, or `prefetch-*` Data Views because those are already available in SOF-ELK out-of-box. SOF-ELK's own `aws-*` Data View (for its Logstash CloudTrail output) is left alone too; the AWS importers' indexes get the narrower patterns above. `AWS/alb2sofelk.py` writes ALB/ELB access logs to `httpdlog-<source>`, which SOF-ELK's stock `httpdlog-*` Data View already covers.
 
-The script uses Kibana's Data Views API and is standard-library only. By default it is idempotent: an existing Data View is detected and left unchanged. Use `--overwrite` to delete and recreate the eighteen managed views. The Data Views are configured to use `@timestamp` as the time field and `allowNoIndex=true`, so they can be created before the first corresponding Elasticsearch index exists.
+The script uses Kibana's Data Views API and is standard-library only. By default it is idempotent: an existing Data View is detected and left unchanged. Use `--overwrite` to delete and recreate the seventeen managed views. The Data Views are configured to use `@timestamp` as the time field and `allowNoIndex=true`, so they can be created before the first corresponding Elasticsearch index exists.
 
 ### Usage
 
-Preview the eighteen Data Views without modifying Kibana:
+Preview the seventeen Data Views without modifying Kibana:
 
 ```bash
 python3 SOF-ELK_CreateDataViews.py --dry-run
@@ -480,7 +479,7 @@ python3 SOF-ELK_CreateDataViews.py \
     --insecure
 ```
 
-Force recreation of the eighteen managed Data Views:
+Force recreation of the seventeen managed Data Views:
 
 ```bash
 python3 SOF-ELK_CreateDataViews.py --overwrite
@@ -492,7 +491,7 @@ python3 SOF-ELK_CreateDataViews.py --overwrite
 - `--user USER`: HTTP Basic authentication username.
 - `--password PASSWORD`: HTTP Basic authentication password.
 - `--insecure`: disable TLS certificate verification.
-- `--overwrite`: delete and recreate the eighteen managed Data Views if they already exist.
+- `--overwrite`: delete and recreate the seventeen managed Data Views if they already exist.
 - `--dry-run`: display the Data Views that would be managed without making API changes.
 
 Run the Data View creator after Kibana is available and before using the corresponding indexes in Discover. Because `allowNoIndex` is enabled, it is also safe to create the Data Views before the direct-import scripts have created their first host-specific indexes.

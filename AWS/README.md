@@ -6,7 +6,7 @@ Four standalone importers that load AWS logs straight into SOF-ELK's Elasticsear
 |---|---|---|---|
 | `cloudtrail2sofelk.py` | AWS CloudTrail | `aws-cloudtrail-<source>` | [aws-cloudtrail.md](../docs/schemas/aws-cloudtrail.md) |
 | `vpcflow2sofelk.py` | VPC Flow Logs | `aws-vpcflow-<source>` | [aws-vpcflow.md](../docs/schemas/aws-vpcflow.md) |
-| `alb2sofelk.py` | Application Load Balancer and Classic ELB access logs | `aws-alb-<source>` | [aws-alb.md](../docs/schemas/aws-alb.md) |
+| `alb2sofelk.py` | Application Load Balancer and Classic ELB access logs | `httpdlog-<source>` | [aws-alb.md](../docs/schemas/aws-alb.md) |
 | `waf2sofelk.py` | AWS WAF (v2) web ACL logs | `aws-waf-<source>` | [aws-waf.md](../docs/schemas/aws-waf.md) |
 
 Common fields, index names, document IDs and the CSV rules are in [aws-common.md](../docs/schemas/aws-common.md). Hunting queries for these indexes are in [`hunting/queries/aws/`](../hunting/queries/aws/), with checklists in [`hunting/checklists/`](../hunting/checklists/) (`aws-*.md`).
@@ -23,13 +23,15 @@ python3 AWS/vpcflow2sofelk.py    /cases/IR-42/AWSLogs/123456789012/vpcflowlogs -
 python3 AWS/alb2sofelk.py        /cases/IR-42/AWSLogs/123456789012/elasticloadbalancing --source 123456789012
 python3 AWS/waf2sofelk.py        /cases/IR-42/waf --source 123456789012
 
-# Kibana Data Views (aws-cloudtrail-*, aws-vpcflow-*, aws-alb-*, aws-waf-*), once
+# Kibana Data Views (aws-cloudtrail-*, aws-vpcflow-*, aws-waf-*), once; ALB logs use SOF-ELK's stock httpdlog-* view
 python3 SOF-ELK_CreateDataViews.py
 ```
 
 Each importer takes files or folders (searched recursively; `.gz` is read whether or not the name says so), keeps only the files that look like its log type, and reports the rest as skipped. `--source` is required: it names the index (`aws-cloudtrail-<source>`) and is stored in `labels.evidence_source`. Use the account ID, or a label such as `prod` when one account has several evidence sets. Loading the same files again overwrites instead of duplicating.
 
 The first run installs the component template `sofelk-toolkit-aws-common` and the index template for the log type (priority 200, so it wins over SOF-ELK's `aws-*` template). An existing index that was not made with the toolkit's template is refused rather than mixed.
+
+ALB/ELB access logs go to `httpdlog-<source>`, SOF-ELK's web access log family, so they can be hunted together with IIS, NGINX and Apache access logs: one `FROM httpdlog-*` query covers all of them, and `event.dataset` (`aws.alb`, `aws.elb_classic`) says which rows came from a load balancer. For that family the importer installs no index template (it would take over SOF-ELK's own `httpdlog-YYYY.MM` indexes); it creates `httpdlog-<source>` itself with the toolkit mapping. Give each web evidence source its own `--source` (the account ID for an ALB, the host name for a web server), so each lands in its own index.
 
 ## Inputs
 

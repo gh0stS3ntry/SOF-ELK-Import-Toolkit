@@ -564,10 +564,13 @@ class AwsLog:
                  id_key is a string unique to the record (a record ID, or the raw line);
                  doc is the document without the common fields
     describe     list of "input format" lines for --help and the dry run
+    index_template  False when <prefix>-* is a SOF-ELK index family (httpdlog-*): installing a
+                 toolkit index template there would take over SOF-ELK's own monthly indexes,
+                 so each index is created with the template body directly instead
     """
 
     def __init__(self, prefix, namespace, title, dataset, detect, parse, describe=(),
-                 add_arguments=None, use_occurrence=True):
+                 add_arguments=None, use_occurrence=True, index_template=True):
         self.prefix = prefix
         self.namespace = namespace
         self.title = title
@@ -579,6 +582,7 @@ class AwsLog:
         # Content-keyed records (VPC Flow, ALB) can legitimately repeat; number repeats so each
         # copy is kept while a re-run of the same files still overwrites instead of duplicating.
         self.use_occurrence = use_occurrence
+        self.index_template = index_template
 
 
 class Context:
@@ -604,8 +608,10 @@ class ES(EsClient):
         return self.request(method, path, body, ctype)
 
     def install_templates(self, log, component, index_tpl):
-        for path, body in ((f"/_component_template/{COMMON_COMPONENT}", component),
-                           (f"/_index_template/sofelk-toolkit-{log.prefix}", index_tpl)):
+        templates = [(f"/_component_template/{COMMON_COMPONENT}", component)]
+        if log.index_template:
+            templates.append((f"/_index_template/sofelk-toolkit-{log.prefix}", index_tpl))
+        for path, body in templates:
             status, resp = self.call("PUT", path, body)
             if status >= 300:
                 sys.exit(f"Could not install template {path} ({status}): {json.dumps(resp)[:500]}")
@@ -721,6 +727,8 @@ def run(log, description, argv=None):
     except ValueError as exc:
         sys.exit(str(exc))
     index = resolve_index(log.prefix, source, args.index)
+    if not log.index_template and re.fullmatch(rf"{re.escape(log.prefix)}-\d{{4}}\.\d{{2}}", index):
+        sys.exit(f"'{index}' looks like one of SOF-ELK's own monthly indexes; choose another --source.")
 
     component, index_tpl, body = load_templates(log.prefix)
     exact, open_prefixes = template_fields(body["mappings"])
@@ -753,7 +761,11 @@ def run(log, description, argv=None):
             sys.exit(f"\nElasticsearch returned {status}: {json.dumps(info)[:300]}")
         print(f"Connected to Elasticsearch {info.get('version', {}).get('number', '?')} at {args.es}")
         es.install_templates(log, component, index_tpl)
-        print(f"Installed index template 'sofelk-toolkit-{log.prefix}' ({log.prefix}-*)")
+        if log.index_template:
+            print(f"Installed index template 'sofelk-toolkit-{log.prefix}' ({log.prefix}-*)")
+        else:
+            print(f"No index template installed for {log.prefix}-* (SOF-ELK's own template stays in charge"
+                  f" of its {log.prefix}-YYYY.MM indexes); the index is created with the toolkit mapping")
         print(f"Index '{index}': {es.prepare_index(log, index, body)}")
 
     total = {"records": 0, "ok": 0, "errors": 0, "updated": 0}

@@ -1,6 +1,6 @@
-# AWS ALB / Classic ELB access log schema (`aws-alb-*`)
+# AWS ALB / Classic ELB access log schema (`httpdlog-<source>`)
 
-Loaded by `AWS/alb2sofelk.py`; template `AWS/index_templates/index-aws-alb.json`. Common fields: [aws-common.md](aws-common.md). `event.dataset` is `aws.alb` (Application Load Balancer) or `aws.elb_classic`; `event.category` is `web`; `@timestamp` is `time`.
+Loaded by `AWS/alb2sofelk.py` into `httpdlog-<source>`, SOF-ELK's web access log family, so ALB requests can be hunted together with IIS, NGINX and Apache logs in `httpdlog-*`. Mapping: `AWS/index_templates/index-httpdlog.json`, applied when the importer creates the index (no index template is installed, so SOF-ELK's own `httpdlog-YYYY.MM` indexes keep SOF-ELK's template; see [aws-common.md](aws-common.md#index-names)). Common fields: [aws-common.md](aws-common.md). `event.dataset` is `aws.alb` (Application Load Balancer) or `aws.elb_classic`; `event.category` is `web`; `@timestamp` is `time`.
 
 Names follow SOF-ELK's ELB grok in `configfiles/6100-httpd.conf` and the clean-up in `8004-postprocess-httpd.conf`. `-` values are left out.
 
@@ -14,7 +14,7 @@ Names follow SOF-ELK's ELB grok in `configfiles/6100-httpd.conf` and the clean-u
 | `request_processing_time` | `aws.elb.request_processing_time.sec` | double | `-1` when the request never reached a target |
 | `target_processing_time` (`backend_processing_time`) | `aws.elb.backend_processing_time.sec` | double | |
 | `response_processing_time` | `aws.elb.response_processing_time.sec` | double | |
-| `elb_status_code` | `http.response.status_code` | integer | |
+| `elb_status_code` | `http.response.status_code` | short | `short`, as in SOF-ELK's `httpdlog` template |
 | `target_status_code` (`backend_status_code`) | `aws.elb.backend.http.response.status_code` | integer | |
 | `received_bytes` / `sent_bytes` | `source.bytes` / `destination.bytes` | long | |
 | `request` | `http.request.method`, `url.original`, `url.scheme`, `url.domain`, `destination.port`, `url.path`, `url.query`, `url.extension`, `http.version` | | unparseable request lines go to `sof-elk.rawrequest`, as SOF-ELK |
