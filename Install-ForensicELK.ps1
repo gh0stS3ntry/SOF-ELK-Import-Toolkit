@@ -22,7 +22,18 @@
          neither the Kibana UI nor the REST APIs ask for a username or
          password.
       5. Writes forensic-elk\start.bat, which starts Elasticsearch, waits for
-         it to answer, then starts Kibana and waits for it.
+         it to answer, loads the index templates, then starts Kibana and
+         waits for it.
+
+    Index templates: the script copies SOF-ELK's native templates
+    (sof-elk-templates\, used by evtxlogs-*, filesystem-*, lnkfiles-* and
+    the other SOF-ELK indexes) and the toolkit's own templates
+    (Windows\index_templates\, AWS\index_templates\,
+    Generic-CSV\index_templates\) from the toolkit checkout it is run from
+    into forensic-elk\templates\, and writes forensic-elk\load-templates.ps1.
+    start.bat runs that loader on every start, before any data is ingested,
+    so new indexes get the same settings and mappings as on a SOF-ELK VM
+    with the toolkit. Keep this script in the root of the toolkit checkout.
 
     The settings are written before Elasticsearch first starts, which stops
     Elasticsearch from auto-configuring TLS and the elastic password.
@@ -53,6 +64,9 @@
     Elasticsearch sizes the heap automatically from the machine's memory,
     which on a workstation running VMs may be more than you want to give it.
 
+.PARAMETER SkipTemplates
+    Do not stage or load any index templates.
+
 .PARAMETER NoStart
     Configure everything but do not start Elasticsearch and Kibana.
 
@@ -72,6 +86,7 @@ param(
     [switch]$SkipFirewall,
     [ValidatePattern('^[1-9][0-9]*[mMgG]$')]
     [string]$HeapSize,
+    [switch]$SkipTemplates,
     [switch]$NoStart,
     [ValidateRange(30, 3600)]
     [int]$StartupTimeoutSeconds = 300
@@ -291,6 +306,57 @@ function Set-FirewallRules([string]$ElasticsearchHome, [string]$KibanaHome) {
     }
 }
 
+function Copy-IndexTemplates([string]$SourceRoot, [string]$Destination) {
+    # Stages every template under <Destination>\component and
+    # <Destination>\index, with the file named after the template it
+    # installs, so the loader is a plain loop over the files.
+    #   SOF-ELK:  component-<x>.json -> <x>,  index-<x>.json -> <x>
+    #             (as SOF-ELK's load_all_dashboards.sh names them)
+    #   Toolkit:  component-<x>.json -> sofelk-<x>,  index-<x>.json -> sofelk-toolkit-<x>
+    #             (as the importers name them when they install them)
+    $sources = @(
+        @{ Dir = 'sof-elk-templates\component_templates'; ComponentPrefix = ''; IndexPrefix = '' },
+        @{ Dir = 'sof-elk-templates\index_templates'; ComponentPrefix = ''; IndexPrefix = '' },
+        @{ Dir = 'Windows\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
+        @{ Dir = 'AWS\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
+        @{ Dir = 'Generic-CSV\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' }
+    )
+    if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }
+    $componentDir = Join-Path $Destination 'component'
+    $indexDir = Join-Path $Destination 'index'
+    New-Item -ItemType Directory -Path $componentDir, $indexDir | Out-Null
+
+    $seen = @{}
+    $counts = @{ component = 0; index = 0 }
+    foreach ($src in $sources) {
+        $dir = Join-Path $SourceRoot $src.Dir
+        if (-not (Test-Path -LiteralPath $dir)) {
+            throw "Template directory $dir not found. Run this script from the root of the SOF-ELK Import Toolkit checkout, or use -SkipTemplates."
+        }
+        foreach ($file in Get-ChildItem -LiteralPath $dir -Filter '*.json' -File | Sort-Object Name) {
+            if ($file.BaseName -like 'component-*') {
+                $kind = 'component'
+                $name = $src.ComponentPrefix + $file.BaseName.Substring('component-'.Length)
+                $target = Join-Path $componentDir "$name.json"
+            } elseif ($file.BaseName -like 'index-*') {
+                $kind = 'index'
+                $name = $src.IndexPrefix + $file.BaseName.Substring('index-'.Length)
+                $target = Join-Path $indexDir "$name.json"
+            } else {
+                continue
+            }
+            $key = "$kind/$name"
+            if ($seen.ContainsKey($key)) {
+                throw "Template name clash: $($file.FullName) and $($seen[$key]) both install $kind template '$name'"
+            }
+            $seen[$key] = $file.FullName
+            Copy-Item -LiteralPath $file.FullName -Destination $target
+            $counts[$kind]++
+        }
+    }
+    Write-Info "Staged $($counts['component']) component and $($counts['index']) index templates in $Destination"
+}
+
 function Get-HostIPv4Addresses {
     try {
         return @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
@@ -437,6 +503,58 @@ if ($SkipFirewall) {
 }
 
 # ---------------------------------------------------------------------------
+# Index templates (SOF-ELK native + toolkit) and their loader
+# ---------------------------------------------------------------------------
+$templatesDir = Join-Path $ElkRoot 'templates'
+$loaderPath = Join-Path $ElkRoot 'load-templates.ps1'
+if ($SkipTemplates) {
+    Write-Info 'Skipping index templates (-SkipTemplates)'
+    # start.bat only loads templates when the loader exists.
+    Remove-Item -LiteralPath $loaderPath -Force -ErrorAction SilentlyContinue
+} else {
+    Copy-IndexTemplates $PSScriptRoot $templatesDir
+    $loader = @'
+# Loads the forensic-elk index templates into Elasticsearch.
+# Generated by Install-ForensicELK.ps1 and run by start.bat on every start.
+# PUT replaces a template of the same name, so re-running is safe. Templates
+# apply to indexes created afterwards; existing indexes keep their mappings.
+param([string]$ElasticsearchUrl = 'http://127.0.0.1:9200')
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$root = Join-Path $PSScriptRoot 'templates'
+$loaded = 0
+$failed = 0
+# Component templates first: index templates name them in composed_of.
+$kinds = @(
+    @{ Dir = 'component'; Api = '_component_template' },
+    @{ Dir = 'index'; Api = '_index_template' }
+)
+foreach ($kind in $kinds) {
+    $dir = Join-Path $root $kind.Dir
+    if (-not (Test-Path -LiteralPath $dir)) { continue }
+    foreach ($file in Get-ChildItem -LiteralPath $dir -Filter '*.json' -File | Sort-Object Name) {
+        $uri = "$ElasticsearchUrl/$($kind.Api)/$($file.BaseName)"
+        try {
+            $body = [System.IO.File]::ReadAllBytes($file.FullName)
+            Invoke-RestMethod -Method Put -Uri $uri -Body $body -ContentType 'application/json' -UseBasicParsing | Out-Null
+            $loaded++
+        } catch {
+            $failed++
+            $detail = $_.Exception.Message
+            if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $detail = $_.ErrorDetails.Message }
+            Write-Host "ERROR loading $($kind.Api)/$($file.BaseName): $detail"
+        }
+    }
+}
+Write-Host "Loaded $loaded index and component templates ($failed failed)"
+if ($failed -gt 0) { exit 1 }
+exit 0
+'@
+    Write-TextFile $loaderPath $loader
+    Write-Info "Wrote $loaderPath"
+}
+
+# ---------------------------------------------------------------------------
 # 5. start.bat
 # ---------------------------------------------------------------------------
 $esDirName = Split-Path $EsHome -Leaf
@@ -477,6 +595,13 @@ echo Waiting up to %FELK_WAIT_SECONDS% seconds for Elasticsearch...
 if errorlevel 1 goto es_failed
 echo Elasticsearch is up at %ES_URL%
 
+rem Load the index templates before anything is ingested.
+if not exist "%ROOT%load-templates.ps1" goto kibana_start
+echo Loading index templates...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%load-templates.ps1" -ElasticsearchUrl "%ES_URL%"
+if errorlevel 1 set "FELK_TEMPLATES_FAILED=1"
+
+:kibana_start
 set "FELK_WAIT_URL=%KIBANA_URL%/api/status"
 %PS% "$probeCommand"
 if not errorlevel 1 goto kibana_running
@@ -491,8 +616,14 @@ echo Waiting up to %FELK_WAIT_SECONDS% seconds for Kibana...
 if errorlevel 1 goto kibana_failed
 echo Kibana is up at %KIBANA_URL%
 echo.
+if defined FELK_TEMPLATES_FAILED goto templates_failed
 echo Forensic ELK is ready. From VMs, use this workstation's IP address with ports $ElasticsearchPort and $KibanaPort.
 exit /b 0
+
+:templates_failed
+echo WARNING: Elasticsearch and Kibana are running, but some index templates failed to load (see the errors above).
+echo Indexes created before they load will not get the SOF-ELK and toolkit mappings.
+exit /b 2
 
 :es_failed
 echo ERROR: Elasticsearch did not answer at %ES_URL% within %FELK_WAIT_SECONDS% seconds.
@@ -516,7 +647,9 @@ if ($NoStart) {
 } else {
     Write-Info 'Starting Elasticsearch and Kibana via start.bat'
     & $startBatPath
-    if ($LASTEXITCODE -ne 0) {
+    if ($LASTEXITCODE -eq 2) {
+        throw 'start.bat started both services but some index templates failed to load; see the errors above.'
+    } elseif ($LASTEXITCODE -ne 0) {
         throw "start.bat reported a startup failure (exit code $LASTEXITCODE)."
     }
 
