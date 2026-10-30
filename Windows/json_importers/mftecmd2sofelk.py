@@ -35,12 +35,17 @@ NTFS_FLAGS = {
     "virtual": 0x010000, "noscrubdata": 0x020000, "hasea": 0x040000,
     "directory": 0x10000000, "indexview": 0x20000000,
 }
+# MFTECmd leaves a $FILE_NAME (0x30) time blank when it equals the $STANDARD_INFORMATION (0x10)
+# time; no populated 0x30 value in its output ever equals 0x10. Restore those values so every
+# $MFT record has all eight MACB times, and list which ones were restored.
+FN_FROM_SI = {"created": "Created", "mtime": "LastModified", "accessed": "LastAccess", "ctime": "LastRecordChange"}
 DATE_FIELDS = [
     "file.stdinfo.ctime", "file.stdinfo.mtime", "file.stdinfo.accessed", "file.stdinfo.created",
     "file.filename.ctime", "file.filename.mtime", "file.filename.accessed", "file.filename.created",
 ]
 MAPPINGS = {"@timestamp": {"type": "date"}, "labels.type": {"type": "keyword"}, "tags": {"type": "keyword"},
-            "log.file.path": {"type": "keyword"}, "sof-elk.path": {"type": "keyword"}, "file.size": {"type": "long"}}
+            "log.file.path": {"type": "keyword"}, "sof-elk.path": {"type": "keyword"}, "file.size": {"type": "long"},
+            "kape.mft.fn_same_as_si": {"type": "keyword"}}
 MAPPINGS.update({field: {"type": "date"} for field in DATE_FIELDS})
 MAPPINGS.update({f"file.attributes.{flag}": {"type": "boolean"} for flag in NTFS_FLAGS})
 
@@ -106,6 +111,18 @@ def transform(raw, source_path, hostname, label_type, ingest_time):
     elif file_obj.get("extension"):
         ext = str(file_obj["extension"])
         file_obj["extension"] = ext[1:] if ext else ext
+
+    # Fill blank $FN times from $SI (see FN_FROM_SI). $J, $Boot and $SDS rows have no 0x10 columns.
+    if raw.get("FileName") not in (None, ""):
+        restored = []
+        for name, column in FN_FROM_SI.items():
+            si_value = raw.get(f"{column}0x10")
+            fn_value = raw.get(f"{column}0x30")
+            if (fn_value is None or not str(fn_value).strip()) and si_value is not None and str(si_value).strip():
+                set_nested(doc, f"file.filename.{name}", si_value)
+                restored.append(name)
+        if restored:
+            set_nested(doc, "kape.mft.fn_same_as_si", restored)
 
     # Logstash converts all eight MACB timestamps to date values in _source.
     for field in DATE_FIELDS:

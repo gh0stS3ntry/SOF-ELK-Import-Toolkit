@@ -78,10 +78,10 @@ RD01 dry run: 428,361 `$MFT` rows, 365,943 `$J` rows, plus 9,369 rows from `$Boo
 | `file.stdinfo.mtime` | LastModified0x10 | date | date | match |  |
 | `file.stdinfo.accessed` | LastAccess0x10 | date | date | match |  |
 | `file.stdinfo.ctime` | LastRecordChange0x10 | date | date | match | MFT record change time, not creation |
-| `file.filename.created` | Created0x30 | date | date | match |  |
-| `file.filename.mtime` | LastModified0x30 | date | date | match |  |
-| `file.filename.accessed` | LastAccess0x30 | date | date | match |  |
-| `file.filename.ctime` | LastRecordChange0x30 | date | date | match |  |
+| `file.filename.created` | Created0x30, else Created0x10 | date | date | **differs** | MFTECmd blanks 0x30 when equal to 0x10; the toolkit restores it, SOF-ELK leaves it absent |
+| `file.filename.mtime` | LastModified0x30, else LastModified0x10 | date | date | **differs** | MFTECmd blanks 0x30 when equal to 0x10; the toolkit restores it, SOF-ELK leaves it absent |
+| `file.filename.accessed` | LastAccess0x30, else LastAccess0x10 | date | date | **differs** | MFTECmd blanks 0x30 when equal to 0x10; the toolkit restores it, SOF-ELK leaves it absent |
+| `file.filename.ctime` | LastRecordChange0x30, else LastRecordChange0x10 | date | date | **differs** | MFTECmd blanks 0x30 when equal to 0x10; the toolkit restores it, SOF-ELK leaves it absent |
 | `file.name` | FileName ($MFT) / Name ($J) | text+keyword | text+keyword | match |  |
 | `file.directory` | ParentPath | text+keyword | text+keyword | match | Removed when empty |
 | `file.path` | file.directory + '\' + file.name | text+keyword | text+keyword | match | Built in 8005-postprocess-kape.conf |
@@ -106,6 +106,7 @@ RD01 dry run: 428,361 `$MFT` rows, 365,943 `$J` rows, plus 9,369 rows from `$Boo
 | `file.source_file` | SourceFile | text+keyword | text+keyword | match |  |
 | `file.attributes.<flag>` | SiFlags ($MFT, integer) / FileAttributes ($J, names joined by \|) | boolean x19 | boolean x19 | match | $MFT CSV gives names (`Hidden\|System`), not an integer; the toolkit accepts both |
 | `file.type` | isDirectory -> dir / file | text+keyword | text+keyword | match | Toolkit reads both isDirectory (JSON) and IsDirectory (CSV) |
+| `kape.mft.fn_same_as_si` | (derived) names of blank 0x30 times restored from 0x10 | (absent) | keyword (array) | **differs** | Toolkit only; `created`, `mtime`, `accessed`, `ctime` |
 | `kape.mft.inuse` | InUse | boolean | boolean | match |  |
 | `kape.mft.hasads` | HasAds | boolean | boolean | match |  |
 | `kape.mft.isads` | IsAds | boolean | boolean | match |  |
