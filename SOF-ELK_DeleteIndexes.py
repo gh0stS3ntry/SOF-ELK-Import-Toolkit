@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Delete every toolkit index that belongs to one evidence host.
+"""Delete the toolkit indexes of one evidence host, one case, or both.
 
 Every importer in this toolkit writes one index per evidence host, named
-<prefix>-<hostname> (amcache-rd01, filesystem-rd01, aws-cloudtrail-prod, ...). This
-script finds those indexes for a hostname, lists them, asks for confirmation and
-deletes them, for example to reload a host from scratch or to clear a test import.
+<prefix>-<hostname> (amcache-rd01, filesystem-rd01, aws-cloudtrail-prod, ...), and
+stores the optional --case ID in every document's `case` field. This script finds
+the indexes for a hostname (--hostname) or a case ID (--case), lists them, asks for
+confirmation and deletes them, for example to reload a host from scratch or to clear
+a finished or test case.
 
-Matching is deliberately strict so that a similar hostname is never caught:
+By hostname, matching is deliberately strict so that a similar hostname is never caught:
 
 * The hostname is normalized exactly as the importers do it (lower-case, other
   characters replaced by "-"), and only indexes whose name ends in "-<hostname>" are
@@ -19,9 +21,19 @@ Matching is deliberately strict so that a similar hostname is never caught:
   loaded by an older importer) is selected only when the part before "-<hostname>"
   is one of the toolkit's own prefixes, or one given with --prefix.
 
+By case, the case ID is not part of the index name, so every (non-hidden) index is
+searched for documents whose `case` equals the ID (ignoring upper/lower case). An
+index is deleted only when ALL of its documents belong to that case. An index that
+also holds documents from another case, or without a case (the same host imported
+twice under different --case values), is listed and left alone, so another case's
+evidence is never removed. Closed indexes cannot be searched and are skipped.
+
+With both --hostname and --case, only that host's indexes whose documents all belong
+to the case are deleted.
+
 Deletion is irreversible: the script lists the selected indexes first and requires
-the hostname to be typed back, unless --yes is given. --dry-run only lists them.
-Kibana Data Views use wildcards (amcache-*, ...), so they are not touched.
+the hostname (or case ID) to be typed back, unless --yes is given. --dry-run only
+lists them. Kibana Data Views use wildcards (amcache-*, ...), so they are not touched.
 
 Standard library only.
 """
@@ -62,19 +74,24 @@ def sanitize_hostname(hostname):
     return value
 
 
-def list_candidates(client, host):
-    """Indexes named *-<host>, as dicts from _cat/indices (open and closed, not hidden)."""
-    path = (f"/_cat/indices/{quote('*-' + host, safe='*-._')}"
+def list_indexes(client, pattern="*"):
+    """Indexes matching pattern, as dicts from _cat/indices (open and closed, not hidden)."""
+    path = (f"/_cat/indices/{quote(pattern, safe='*-._')}"
             "?format=json&h=index,status,health,docs.count,store.size&s=index&expand_wildcards=open,closed")
     status, payload = client.request("GET", path)
     if status == 404:
         return []
     if status >= 300 or not isinstance(payload, list):
         raise SystemExit(f"ERROR: could not list indexes: HTTP {status}: {payload}")
-    suffix = f"-{host}"
     return [row for row in payload
-            if isinstance(row, dict) and str(row.get("index", "")).endswith(suffix)
-            and len(row["index"]) > len(suffix) and not row["index"].startswith(".")]
+            if isinstance(row, dict) and row.get("index") and not str(row["index"]).startswith(".")]
+
+
+def list_candidates(client, host):
+    """Indexes named *-<host>."""
+    suffix = f"-{host}"
+    return [row for row in list_indexes(client, "*" + suffix)
+            if row["index"].endswith(suffix) and len(row["index"]) > len(suffix)]
 
 
 def index_owners(client, index):
@@ -124,6 +141,53 @@ def classify(client, host, rows, prefixes):
     return selected, skipped
 
 
+def case_query(case):
+    return {"term": {"case": {"value": case, "case_insensitive": True}}}
+
+
+def case_counts(client, case):
+    """{index: number of documents whose case is this ID}, over all open non-hidden indexes."""
+    body = {"size": 0, "track_total_hits": False, "query": case_query(case),
+            "aggs": {"indexes": {"terms": {"field": "_index", "size": 10000}}}}
+    status, payload = client.request(
+        "POST", "/*,-.*/_search?ignore_unavailable=true&allow_no_indices=true", body)
+    if status >= 300 or not isinstance(payload, dict):
+        raise SystemExit(f"ERROR: could not search for case '{case}': HTTP {status}: {payload}")
+    buckets = payload.get("aggregations", {}).get("indexes", {}).get("buckets", [])
+    return {str(b["key"]): int(b.get("doc_count", 0)) for b in buckets if b.get("key")}
+
+
+def other_docs(client, index, case):
+    """Documents in index that do not belong to case (no case, or another one); None if unknown."""
+    body = {"query": {"bool": {"must_not": [case_query(case)]}}}
+    status, payload = client.request("POST", f"/{quote(index, safe='')}/_count", body)
+    if status >= 300 or not isinstance(payload, dict) or "count" not in payload:
+        return None
+    return int(payload["count"])
+
+
+def classify_case(client, case, rows, counts, report_missing):
+    """Keep only indexes whose documents all belong to case; returns (selected, skipped)."""
+    selected, skipped = [], []
+    for row in rows:
+        index = row["index"]
+        hits = counts.get(index, 0)
+        if not hits:
+            if report_missing:
+                what = "closed, cannot be searched" if row.get("status") == "close" else "no documents"
+                skipped.append((row, f"{what} for case '{case}'"))
+            continue
+        other = other_docs(client, index, case)
+        if other == 0:
+            selected.append((row, f"all {hits} doc(s) are case '{case}'"))
+        elif other is None:
+            skipped.append((row, f"{hits} doc(s) are case '{case}', the rest could not be counted"))
+        else:
+            skipped.append((row, f"{hits} doc(s) are case '{case}' but {other} are not; "
+                                 "the index holds other evidence, so it is kept"))
+    return selected, skipped
+
+
 def show(title, entries):
     print(f"\n{title} ({len(entries)}):")
     if not entries:
@@ -136,15 +200,15 @@ def show(title, entries):
         print(f"  {row['index']:<{width}}  {str(row.get('status', '')):<6} docs={docs:<10} size={size:<9} {note}")
 
 
-def confirm(host, count):
+def confirm(what, token, count):
     if not sys.stdin.isatty():
         raise SystemExit("ERROR: refusing to delete without confirmation; stdin is not a terminal. "
                          "Re-run with --yes to delete without prompting.")
     try:
-        answer = input(f"\nThis permanently deletes {count} index(es). Type the hostname '{host}' to confirm: ")
+        answer = input(f"\nThis permanently deletes {count} index(es). Type the {what} '{token}' to confirm: ")
     except EOFError:
         answer = ""
-    return answer.strip().lower() == host
+    return answer.strip().lower() == token.lower()
 
 
 def delete_indexes(client, entries):
@@ -165,8 +229,9 @@ def delete_indexes(client, entries):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Delete every <prefix>-<hostname> index that belongs to one evidence host.")
-    parser.add_argument("hostname", help="Evidence host name, as given to the importers (normalized the same way)")
+        description="Delete the toolkit indexes of one evidence host (--hostname), one case (--case), or both.")
+    parser.add_argument("--hostname", help="Evidence host name, as given to the importers (normalized the same way)")
+    parser.add_argument("--case", help="Case ID, as given to the importers with --case (upper/lower case ignored)")
     parser.add_argument("--prefix", action="append", default=[], metavar="PREFIX",
                         help="Only consider indexes with this prefix (repeatable), e.g. --prefix amcache. "
                              "Also allows a custom --index prefix such as amcache-test")
@@ -177,33 +242,63 @@ def parse_args(argv=None):
     parser.add_argument("--password", help="Elasticsearch password")
     parser.add_argument("--insecure", action="store_true", help="Skip TLS certificate verification")
     add_client_arguments(parser)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    args.case = (args.case or "").strip() or None
+    if not args.hostname and not args.case:
+        parser.error("give --hostname, --case, or both")
+    return args
+
+
+def has_prefix(index, prefixes):
+    return any(index.startswith(p + "-") for p in prefixes)
 
 
 def main(argv=None):
     args = parse_args(argv)
     apply_client_arguments(args)
-    host = sanitize_hostname(args.hostname)
-    if host != args.hostname:
+    host = sanitize_hostname(args.hostname) if args.hostname else None
+    if host and host != args.hostname:
         print(f"note: hostname normalized to '{host}', as the importers do")
+    case = args.case
     prefixes = {p.strip().lower().rstrip("-") for p in args.prefix if p.strip()}
     client = EsClient(args.es, args.user, args.password, args.insecure)
 
     try:
-        rows = list_candidates(client, host)
-        selected, skipped = classify(client, host, rows, prefixes)
         print(f"Elasticsearch: {args.es}")
-        print(f"Hostname: {host}  (indexes named <prefix>-{host})")
+        if host:
+            print(f"Hostname: {host}  (indexes named <prefix>-{host})")
+        if case:
+            print(f"Case: {case}  (indexes whose documents all have case = '{case}')")
+        selected, skipped = [], []
+        if host:
+            selected, skipped = classify(client, host, list_candidates(client, host), prefixes)
+        if case:
+            counts = case_counts(client, case)
+            if host:
+                rows = [row for row, _ in selected]
+            else:
+                rows = [row for row in list_indexes(client) if row["index"] in counts]
+                if prefixes:
+                    skipped += [(row, "prefix not in --prefix") for row in rows if not has_prefix(row["index"], prefixes)]
+                    rows = [row for row in rows if has_prefix(row["index"], prefixes)]
+            selected, case_skipped = classify_case(client, case, rows, counts, report_missing=bool(host))
+            skipped += case_skipped
         show("Indexes to delete", selected)
         if skipped:
-            show("Indexes ending in -" + host + " that are NOT selected", skipped)
+            show("Matching indexes that are NOT selected", skipped)
+        if case and not host:
+            closed = [row["index"] for row in list_indexes(client) if row.get("status") == "close"]
+            if closed:
+                print(f"\nnote: {len(closed)} closed index(es) cannot be searched for the case and were "
+                      f"skipped: {', '.join(closed)}")
         if not selected:
             print("\nNothing to delete.")
             return 0
         if args.dry_run:
             print("\nDry run: nothing was deleted.")
             return 0
-        if not args.yes and not confirm(host, len(selected)):
+        what, token = ("hostname", host) if host else ("case ID", case)
+        if not args.yes and not confirm(what, token, len(selected)):
             print("Aborted: nothing was deleted.")
             return 1
         print()
