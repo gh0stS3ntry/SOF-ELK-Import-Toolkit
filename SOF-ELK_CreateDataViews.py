@@ -234,14 +234,17 @@ def ensure_data_view(args, view_id, body, headers, ctx):
 
 
 def post_settings(args, changes, headers, ctx):
-    """POST /api/kibana/settings. Returns None on success, else an error string."""
+    """POST /api/kibana/settings. Returns None on success, else an error string.
+    It is an internal Kibana API: Kibana 9 (server.restrictInternalApis) answers
+    "exists but is not available with the current configuration" unless the
+    request carries x-elastic-internal-origin, as Kibana's own UI does."""
     try:
         status, body = call(
             args.kibana,
             "POST",
             "/api/kibana/settings",
             body={"changes": changes},
-            headers=headers,
+            headers={**headers, "x-elastic-internal-origin": "Kibana"},
             ctx=ctx,
         )
     except RuntimeError as exc:
