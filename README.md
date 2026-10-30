@@ -516,7 +516,7 @@ cd C:\Tools
 powershell.exe -ExecutionPolicy Bypass -File C:\path\to\Install-ForensicELK.ps1
 ```
 
-It creates `forensic-elk\`, downloads both Windows zips from artifacts.elastic.co into it and checks them against Elastic's published SHA-512 checksums, extracts them, writes `elasticsearch.yml` and `kibana.yml` (originals kept as `*.orig`), adds Windows Defender Firewall rules, stages the index templates, writes `forensic-elk\start.bat`, then starts both services and checks that Elasticsearch answers without credentials. Run it from the root of the toolkit checkout (where it lives), because it copies the templates from there. Re-running it is safe: verified downloads and complete extractions are reused, and the Kibana encryption keys are kept.
+It creates `forensic-elk\`, downloads both Windows zips from artifacts.elastic.co into it and checks them against Elastic's published SHA-512 checksums, extracts them, writes `elasticsearch.yml` and `kibana.yml` (originals kept as `*.orig`), adds Windows Defender Firewall rules, stages the index templates, writes `forensic-elk\start.bat`, then starts both services, checks that Elasticsearch answers without credentials, and finally deletes the downloaded zip files and their `.sha512` files (keep them with `-KeepDownloads`). Run it from the root of the toolkit checkout (where it lives), because it copies the templates from there. Re-running it is safe: an already-extracted Elasticsearch or Kibana is reused without downloading it again, and the Kibana encryption keys are kept.
 
 | Setting | Value | Why |
 | --- | --- | --- |
@@ -527,7 +527,19 @@ It creates `forensic-elk\`, downloads both Windows zips from artifacts.elastic.c
 | Index templates | SOF-ELK's native component and index templates from [`sof-elk-templates/`](sof-elk-templates/README.md) (`evtxlogs`, `filesystem`, `lnkfiles`, `aws`, `zeek` and the rest, under SOF-ELK's own names), plus the toolkit's templates from `Windows/`, `AWS/` and `Generic-CSV/index_templates/` (`sofelk-toolkit-*`; `AWS/index_templates/index-httpdlog.json` is left out, as the ALB importer never installs it as a template) | New indexes get the same settings and mappings as on a SOF-ELK VM with the toolkit, even before the first import. Copied to `forensic-elk\templates\` and loaded by `forensic-elk\load-templates.ps1`. |
 | Firewall rules (group "Forensic ELK") | Inbound TCP 9200/5601 from `LocalSubnet`, tied to the bundled `java.exe`/`node.exe` | Lets VMs on host-only/NAT/Hyper-V networks connect. Change the scope with `-FirewallRemoteAddress 192.168.56.0/24`, or skip with `-SkipFirewall`. Without Administrator rights the script skips this and warns. |
 
-Other options: `-InstallRoot DIR` (where `forensic-elk` is created; default is the current directory), `-HeapSize 4g` (fixed JVM heap instead of automatic sizing), `-SkipTemplates` (do not stage or load any templates), `-NoStart` (configure only), and `-StartupTimeoutSeconds N` (how long `start.bat` waits for each service; default 300).
+Other options: `-InstallRoot DIR` (where `forensic-elk` is created; default is the current directory), `-HeapSize 4g` (fixed JVM heap instead of automatic sizing), `-SkipTemplates` (do not stage or load any templates), `-NoStart` (configure only), `-KeepDownloads` (keep the zip files), and `-StartupTimeoutSeconds N` (how long `start.bat` waits for each service; default 300).
+
+### Running selected steps
+
+The setup runs as named steps, in this order: `Install` (create `forensic-elk`, download and extract), `Configure` (`elasticsearch.yml`, `kibana.yml`, heap), `Firewall`, `Templates` (stage templates and write `load-templates.ps1`), `StartScript` (write `start.bat`), `Start` (run `start.bat` and verify) and `Cleanup` (delete the zips). `-Only` runs just the steps you name; every step except `Install` works on an existing `forensic-elk` under `-InstallRoot`.
+
+A `forensic-elk` folder can be copied to another computer as-is (for example on a USB drive): `start.bat`, `load-templates.ps1` and both configuration files use no absolute paths. The firewall rules do not travel with it, because they belong to the computer and name the absolute path of the bundled `java.exe` and `node.exe`. On the new computer, from an elevated PowerShell:
+
+```powershell
+.\Install-ForensicELK.ps1 -InstallRoot C:\Tools -Only Firewall
+```
+
+`-InstallRoot` is the folder that contains `forensic-elk`. With `-Only Firewall` the script fails if it is not elevated, instead of only warning. Other examples: `-Only Configure, StartScript -HeapSize 8g` changes the heap, and `-Only Templates` re-stages templates after pulling a newer toolkit. Stop Elasticsearch and Kibana before copying the folder, and copy it into a short path.
 
 For later starts, run `forensic-elk\start.bat`. It starts Elasticsearch in its own window, waits for `/_cluster/health`, re-loads the index templates (a PUT per template, so this is idempotent and picks up template changes), then starts Kibana in another window and waits for `/api/status`; a service that is already running is not started twice. Stop a service with Ctrl+C in its window. From a VM, point the toolkit at the workstation's address on that VM's network (the setup script prints each adapter's address):
 
