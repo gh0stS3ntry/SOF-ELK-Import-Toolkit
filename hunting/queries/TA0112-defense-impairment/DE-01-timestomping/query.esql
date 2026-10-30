@@ -5,6 +5,8 @@ FROM filesystem-* METADATA _index
 | WHERE file.update_reasons IS NULL
 | WHERE COALESCE(TO_STRING(file.type), "") != "dir"
 | WHERE file.stdinfo.created IS NOT NULL AND file.filename.created IS NOT NULL
+// Records whose $FN created equals $SI created (MFTECmd leaves 0x30 blank, the importer restores it) are not timestomped.
+| WHERE file.filename.created != file.stdinfo.created
 | EVAL fname = TO_LOWER(COALESCE(TO_STRING(file.name), ""))
 | EVAL p = TO_LOWER(COALESCE(TO_STRING(file.path), TO_STRING(file.directory), ""))
 | WHERE NOT p RLIKE ".*\\\\(winsxs|servicing|softwaredistribution|assembly|driverstore|catroot|catroot2|installer)\\\\.*"
