@@ -8,6 +8,7 @@ This package contains a recursive wrapper and seventeen standalone Python import
 sof_elk_all_importers/
 ├── SOF-ELK_ImportWrapper.py
 ├── SOF-ELK_CreateDataViews.py
+├── SOF-ELK_DeleteIndexes.py
 ├── SOF-ELK_ConfigureRemoteIngest.sh
 ├── Install-ForensicELK.ps1
 ├── README.md
@@ -508,6 +509,52 @@ python3 SOF-ELK_CreateDataViews.py --overwrite
 - `--dry-run`: display the Data Views that would be managed without making API changes.
 
 Run the Data View creator after Kibana is available and before using the corresponding indexes in Discover. Because `allowNoIndex` is enabled, it is also safe to create the Data Views before the direct-import scripts have created their first host-specific indexes.
+
+## Deleting indexes by host or case
+
+`SOF-ELK_DeleteIndexes.py` deletes the toolkit indexes of one evidence host (`--hostname`), one case (`--case`), or both, for example to reload a host from scratch (several sections above say "delete it and reload the host") or to clear a finished or test case. It is standard-library only and uses the same Elasticsearch client, connection options and retry options as the importers.
+
+Always preview first:
+
+```bash
+python3 SOF-ELK_DeleteIndexes.py --hostname RD01 --dry-run --es http://192.168.233.128:9200
+python3 SOF-ELK_DeleteIndexes.py --case IR-2026-042 --dry-run --es http://192.168.233.128:9200
+```
+
+**By hostname.** The hostname is normalized exactly as the importers do it (`RD01` becomes `rd01`). Matching is strict so that a similar hostname is never caught:
+
+- Only indexes named `<prefix>-<hostname>` are considered: `rd01` matches `amcache-rd01` and `aws-cloudtrail-rd01`, but not `amcache-rd011` or `amcache-rd01-old`.
+- Each candidate's documents are checked. When they carry `host.name` (Windows and Generic-CSV importers) or `labels.evidence_source` (AWS importers), the index is selected only if that value is the hostname. This protects `amcache-ws-01` (host `ws-01`) when you delete host `01`.
+- An index whose documents do not say which host they came from (empty, closed, or loaded by an older importer) is selected only when its prefix is one of the toolkit's (`amcache`, `filesystem`, `evtxlogs`, `aws-cloudtrail`, `httpdlog`, `genericcsv`, ...) or one given with `--prefix`.
+
+**By case.** The case ID is not part of the index name; the importers store it in each document's `case` field (from their `--case` option). The script searches every non-hidden index for documents with that `case` (upper/lower case ignored) and deletes an index only when **all** of its documents belong to the case. An index that also holds documents from another case, or without a case (for example the same host imported twice under different `--case` values), is listed with its counts and kept, so another case's evidence is never removed; delete those documents by hand with `_delete_by_query` if needed. Documents imported without `--case` cannot be found this way; use `--hostname` for them. Closed indexes cannot be searched and are listed as skipped.
+
+**Both.** `--hostname RD01 --case IR-2026-042` deletes only RD01's indexes whose documents all belong to that case.
+
+The script prints the indexes it will delete (with document count and size) and the matching indexes it leaves alone, with the reason. To delete, it asks you to type the hostname (or, with `--case` alone, the case ID) back; `--yes` skips that prompt (needed when stdin is not a terminal). Each index is deleted with its own request, so it works when wildcard deletes are disabled (`action.destructive_requires_name`). The Kibana Data Views use wildcards such as `amcache-*`, so they are not affected.
+
+```bash
+# Delete everything for RD01 after confirming
+python3 SOF-ELK_DeleteIndexes.py --hostname RD01 --es http://192.168.233.128:9200
+
+# Delete every index that belongs entirely to case IR-2026-042
+python3 SOF-ELK_DeleteIndexes.py --case IR-2026-042 --es http://192.168.233.128:9200
+
+# Only RD01's Amcache and filesystem indexes, without prompting
+python3 SOF-ELK_DeleteIndexes.py --hostname RD01 --prefix amcache --prefix filesystem --yes
+```
+
+| Option | Purpose |
+|---|---|
+| `--hostname HOST` | Evidence host name, as given to the importers. |
+| `--case ID` | Case ID, as given to the importers with `--case`. At least one of `--hostname` and `--case` is required. |
+| `--prefix PREFIX` | Only consider indexes with this prefix; repeatable. Also selects a custom `--index` prefix such as `amcache-test`. |
+| `--dry-run` | List the matching indexes and delete nothing. |
+| `--yes`, `-y` | Delete without the confirmation prompt. |
+| `--es`, `--user`, `--password`, `--insecure` | Connection options, as for the importers. |
+| `--max-retries`, `--retry-backoff`, `--timeout`, `--log-file` | Retry and logging options, as for the importers. |
+
+The exit status is `0` on success or when there is nothing to delete, `1` when the prompt is declined or a delete fails, and `2` when Elasticsearch is unreachable. Tests: `python3 tests/test_delete_indexes.py -v`.
 
 ## Windows Elasticsearch and Kibana setup
 
