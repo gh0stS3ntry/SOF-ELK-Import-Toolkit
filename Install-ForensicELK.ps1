@@ -24,6 +24,23 @@
       5. Writes forensic-elk\start.bat, which starts Elasticsearch, waits for
          it to answer, loads the index templates, then starts Kibana and
          waits for it.
+      6. Runs start.bat, then deletes the downloaded zip files (and their
+         .sha512 files) once everything has succeeded.
+
+    Steps: the work is split into named steps, run in this order:
+      Install      create forensic-elk, download and extract (skipped for a
+                   product that is already extracted there)
+      Configure    write elasticsearch.yml, kibana.yml and the heap override
+      Firewall     (re)create the Windows Defender Firewall rules
+      Templates    stage the index templates and write load-templates.ps1
+      StartScript  write start.bat
+      Start        run start.bat and check Elasticsearch answers
+      Cleanup      delete the downloaded zip files
+    By default every step runs. -Only runs just the named steps, for example
+    -Only Firewall on a computer that received a copy of forensic-elk (such
+    as from a USB drive): the copy runs as-is, because start.bat and the
+    configuration use no absolute paths, but the firewall rules belong to
+    the computer and name the absolute path of java.exe and node.exe.
 
     Index templates: the script copies SOF-ELK's native templates
     (sof-elk-templates\, used by evtxlogs-*, filesystem-*, lnkfiles-* and
@@ -56,6 +73,11 @@
     the VM subnet, so "LocalSubnet" covers VMs on those networks. Note that it
     also covers the subnet of the host's physical network adapter.
 
+.PARAMETER Only
+    Run only these steps (see Steps above): Install, Configure, Firewall,
+    Templates, StartScript, Start, Cleanup. The others are skipped. Steps
+    other than Install need an existing forensic-elk under -InstallRoot.
+
 .PARAMETER SkipFirewall
     Do not create or change Windows Defender Firewall rules.
 
@@ -70,6 +92,9 @@
 .PARAMETER NoStart
     Configure everything but do not start Elasticsearch and Kibana.
 
+.PARAMETER KeepDownloads
+    Keep the downloaded zip files instead of deleting them at the end.
+
 .PARAMETER StartupTimeoutSeconds
     How long start.bat waits for each service to answer. Default 300.
 
@@ -78,6 +103,15 @@
 
 .EXAMPLE
     .\Install-ForensicELK.ps1 -InstallRoot C:\Tools -HeapSize 4g -FirewallRemoteAddress 192.168.56.0/24
+
+.EXAMPLE
+    # On a computer that received a copy of C:\Tools\forensic-elk, from an
+    # elevated PowerShell: add the firewall rules only.
+    .\Install-ForensicELK.ps1 -InstallRoot C:\Tools -Only Firewall
+
+.EXAMPLE
+    # Rewrite the configuration and start.bat with a new heap size only.
+    .\Install-ForensicELK.ps1 -InstallRoot C:\Tools -Only Configure, StartScript -HeapSize 8g
 #>
 [CmdletBinding()]
 param(
@@ -88,6 +122,9 @@ param(
     [string]$HeapSize,
     [switch]$SkipTemplates,
     [switch]$NoStart,
+    [switch]$KeepDownloads,
+    [ValidateSet('Install', 'Configure', 'Firewall', 'Templates', 'StartScript', 'Start', 'Cleanup')]
+    [string[]]$Only,
     [ValidateRange(30, 3600)]
     [int]$StartupTimeoutSeconds = 300
 )
@@ -108,6 +145,21 @@ $ElasticsearchPort = 9200
 $KibanaPort = 5601
 $FirewallGroup = 'Forensic ELK'
 $ManagedMarker = '# Managed by Install-ForensicELK.ps1'
+
+# Steps in the order they run; -Only picks a subset, and the -Skip*/-NoStart/
+# -KeepDownloads switches remove one.
+$AllSteps = @('Install', 'Configure', 'Firewall', 'Templates', 'StartScript', 'Start', 'Cleanup')
+$requested = $AllSteps
+if ($Only) { $requested = @($AllSteps | Where-Object { $Only -contains $_ }) }
+$Steps = @($requested | Where-Object {
+        -not (($_ -eq 'Firewall' -and $SkipFirewall) -or
+            ($_ -eq 'Templates' -and $SkipTemplates) -or
+            ($_ -eq 'Start' -and $NoStart) -or
+            ($_ -eq 'Cleanup' -and $KeepDownloads))
+    })
+if ($Steps.Count -eq 0) {
+    throw 'No steps left to run: -Only and the -Skip*/-NoStart/-KeepDownloads switches exclude every step.'
+}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -204,6 +256,17 @@ function Get-ZipTopLevelDirectory([string]$ZipPath) {
         throw "Expected one top-level directory in $ZipPath, found: $($roots -join ', ')"
     }
     return $roots[0]
+}
+
+function Find-ProductHome([string]$Directory, [string]$Product, [string]$MarkerRelativePath) {
+    # Returns the extracted <product>-<version>* folder that contains the
+    # marker file, or $null when there is none.
+    if (-not (Test-Path -LiteralPath $Directory)) { return $null }
+    $match = Get-ChildItem -LiteralPath $Directory -Directory -Filter "$Product-$ElasticVersion*" |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName $MarkerRelativePath) } |
+        Select-Object -First 1
+    if ($match) { return $match.FullName }
+    return $null
 }
 
 function Expand-ElasticArchive([string]$ZipPath, [string]$Directory, [string]$MarkerRelativePath) {
@@ -374,51 +437,71 @@ function Get-HostIPv4Addresses {
 }
 
 # ---------------------------------------------------------------------------
-# 1. Create forensic-elk and download the archives
+# Install: create forensic-elk, download and extract (skipped when already extracted)
 # ---------------------------------------------------------------------------
-if (-not [Environment]::Is64BitOperatingSystem) {
-    throw 'Elasticsearch and Kibana for Windows require 64-bit Windows.'
-}
-# Windows PowerShell 5.1 may default to TLS 1.0/1.1, which artifacts.elastic.co refuses.
-[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-
 $InstallRoot = (Resolve-Path -LiteralPath $InstallRoot).Path
 $ElkRoot = Join-Path $InstallRoot 'forensic-elk'
-if (Test-Path -LiteralPath $ElkRoot) {
-    Write-Info "Using existing directory $ElkRoot"
-} else {
-    New-Item -ItemType Directory -Path $ElkRoot | Out-Null
-    Write-Info "Created $ElkRoot"
+Write-Info "Steps: $($Steps -join ', ')"
+if ($Steps -contains 'Install') {
+    if (-not [Environment]::Is64BitOperatingSystem) {
+        throw 'Elasticsearch and Kibana for Windows require 64-bit Windows.'
+    }
+    # Windows PowerShell 5.1 may default to TLS 1.0/1.1, which artifacts.elastic.co refuses.
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    if (Test-Path -LiteralPath $ElkRoot) {
+        Write-Info "Using existing directory $ElkRoot"
+    } else {
+        New-Item -ItemType Directory -Path $ElkRoot | Out-Null
+        Write-Info "Created $ElkRoot"
+    }
+} elseif (-not (Test-Path -LiteralPath $ElkRoot)) {
+    throw "$ElkRoot not found. Set -InstallRoot to the folder that contains forensic-elk, or run the Install step first."
 }
 
-$esZip = Save-VerifiedArtifact $ElasticsearchUrl $ElkRoot
-$kibanaZip = Save-VerifiedArtifact $KibanaUrl $ElkRoot
-
-# ---------------------------------------------------------------------------
-# 2. Extract
-# ---------------------------------------------------------------------------
-$EsHome = Expand-ElasticArchive $esZip $ElkRoot 'bin\elasticsearch.bat'
-$KibanaHome = Expand-ElasticArchive $kibanaZip $ElkRoot 'bin\kibana.bat'
-
-# ---------------------------------------------------------------------------
-# 3 + 4. Elasticsearch: listen on all interfaces, single node, no security
-# ---------------------------------------------------------------------------
-$esConfig = Join-Path $EsHome 'config\elasticsearch.yml'
-
-# If Elasticsearch was started before this script configured it, it has
-# already auto-configured TLS and stored keystore secrets for it; disabling
-# security on top of that is not reliable, so ask for a clean extraction.
-$esCerts = Join-Path $EsHome 'config\certs'
-$esConfigText = ''
-if (Test-Path -LiteralPath $esConfig) { $esConfigText = Get-Content -LiteralPath $esConfig -Raw }
-if ($null -eq $esConfigText) { $esConfigText = '' }
-$alreadyManaged = $esConfigText.Contains($ManagedMarker)
-if ((Test-Path -LiteralPath $esCerts) -and -not $alreadyManaged) {
-    throw "Elasticsearch in $EsHome was already started with security auto-configuration ($esCerts exists). Stop it, delete $EsHome and re-run this script."
+# An extracted (or copied) instance is found by its folder, so later runs
+# need neither the zip files nor a download.
+$EsHome = Find-ProductHome $ElkRoot 'elasticsearch' 'bin\elasticsearch.bat'
+$KibanaHome = Find-ProductHome $ElkRoot 'kibana' 'bin\kibana.bat'
+if ($Steps -contains 'Install') {
+    if ($EsHome) {
+        Write-Info "Elasticsearch is already extracted in $EsHome; skipping download and extraction"
+    } else {
+        $esZip = Save-VerifiedArtifact $ElasticsearchUrl $ElkRoot
+        $EsHome = Expand-ElasticArchive $esZip $ElkRoot 'bin\elasticsearch.bat'
+    }
+    if ($KibanaHome) {
+        Write-Info "Kibana is already extracted in $KibanaHome; skipping download and extraction"
+    } else {
+        $kibanaZip = Save-VerifiedArtifact $KibanaUrl $ElkRoot
+        $KibanaHome = Expand-ElasticArchive $kibanaZip $ElkRoot 'bin\kibana.bat'
+    }
+}
+$needsHomes = @($Steps | Where-Object { $_ -in @('Configure', 'Firewall', 'StartScript', 'Cleanup') })
+if ($needsHomes.Count -gt 0 -and -not ($EsHome -and $KibanaHome)) {
+    throw "No complete Elasticsearch $ElasticVersion and Kibana $ElasticVersion installation found in $ElkRoot (needed by: $($needsHomes -join ', ')). Run the Install step first."
 }
 
-Backup-OriginalFile $esConfig
-$esYaml = @"
+# ---------------------------------------------------------------------------
+# Configure: Elasticsearch and Kibana listen on all interfaces, no security,
+# Kibana connected to Elasticsearch
+# ---------------------------------------------------------------------------
+if ($Steps -contains 'Configure') {
+    $esConfig = Join-Path $EsHome 'config\elasticsearch.yml'
+
+    # If Elasticsearch was started before this script configured it, it has
+    # already auto-configured TLS and stored keystore secrets for it; disabling
+    # security on top of that is not reliable, so ask for a clean extraction.
+    $esCerts = Join-Path $EsHome 'config\certs'
+    $esConfigText = ''
+    if (Test-Path -LiteralPath $esConfig) { $esConfigText = Get-Content -LiteralPath $esConfig -Raw }
+    if ($null -eq $esConfigText) { $esConfigText = '' }
+    $alreadyManaged = $esConfigText.Contains($ManagedMarker)
+    if ((Test-Path -LiteralPath $esCerts) -and -not $alreadyManaged) {
+        throw "Elasticsearch in $EsHome was already started with security auto-configuration ($esCerts exists). Stop it, delete $EsHome and re-run this script."
+    }
+
+    Backup-OriginalFile $esConfig
+    $esYaml = @"
 $ManagedMarker
 # The archive's original file is kept as elasticsearch.yml.orig.
 cluster.name: forensic-elk
@@ -440,36 +523,36 @@ xpack.security.enrollment.enabled: false
 xpack.security.http.ssl.enabled: false
 xpack.security.transport.ssl.enabled: false
 "@
-Write-TextFile $esConfig $esYaml
-Write-Info "Wrote $esConfig"
+    Write-TextFile $esConfig $esYaml
+    Write-Info "Wrote $esConfig"
 
-$heapFile = Join-Path $EsHome 'config\jvm.options.d\forensic-elk-heap.options'
-if ($HeapSize) {
-    $heap = $HeapSize.ToLowerInvariant()
-    Write-TextFile $heapFile "-Xms$heap`n-Xmx$heap`n"
-    Write-Info "Set Elasticsearch heap to $heap ($heapFile)"
-} elseif (Test-Path -LiteralPath $heapFile) {
-    Remove-Item -LiteralPath $heapFile -Force
-    Write-Info 'Removed heap override; Elasticsearch will size its heap automatically'
-}
+    $heapFile = Join-Path $EsHome 'config\jvm.options.d\forensic-elk-heap.options'
+    if ($HeapSize) {
+        $heap = $HeapSize.ToLowerInvariant()
+        Write-TextFile $heapFile "-Xms$heap`n-Xmx$heap`n"
+        Write-Info "Set Elasticsearch heap to $heap ($heapFile)"
+    } elseif (Test-Path -LiteralPath $heapFile) {
+        Remove-Item -LiteralPath $heapFile -Force
+        Write-Info 'Removed heap override; Elasticsearch will size its heap automatically'
+    }
 
-# ---------------------------------------------------------------------------
-# 2 + 3. Kibana: listen on all interfaces and connect to Elasticsearch
-# ---------------------------------------------------------------------------
-$kibanaConfig = Join-Path $KibanaHome 'config\kibana.yml'
-$keyNames = @(
-    'xpack.encryptedSavedObjects.encryptionKey',
-    'xpack.reporting.encryptionKey',
-    'xpack.security.encryptionKey'
-)
-$keys = @{}
-foreach ($name in $keyNames) {
-    $existing = Get-ExistingYamlValue $kibanaConfig $name
-    if ($existing -and $existing.Length -ge 32) { $keys[$name] = $existing } else { $keys[$name] = New-RandomKey }
-}
+    # ---------------------------------------------------------------------------
+    # 2 + 3. Kibana: listen on all interfaces and connect to Elasticsearch
+    # ---------------------------------------------------------------------------
+    $kibanaConfig = Join-Path $KibanaHome 'config\kibana.yml'
+    $keyNames = @(
+        'xpack.encryptedSavedObjects.encryptionKey',
+        'xpack.reporting.encryptionKey',
+        'xpack.security.encryptionKey'
+    )
+    $keys = @{}
+    foreach ($name in $keyNames) {
+        $existing = Get-ExistingYamlValue $kibanaConfig $name
+        if ($existing -and $existing.Length -ge 32) { $keys[$name] = $existing } else { $keys[$name] = New-RandomKey }
+    }
 
-Backup-OriginalFile $kibanaConfig
-$kibanaYaml = @"
+    Backup-OriginalFile $kibanaConfig
+    $kibanaYaml = @"
 $ManagedMarker
 # The archive's original file is kept as kibana.yml.orig.
 
@@ -492,32 +575,31 @@ xpack.security.encryptionKey: "$($keys['xpack.security.encryptionKey'])"
 
 telemetry.optIn: false
 "@
-Write-TextFile $kibanaConfig $kibanaYaml
-Write-Info "Wrote $kibanaConfig"
-
-# ---------------------------------------------------------------------------
-# 3. Windows Defender Firewall
-# ---------------------------------------------------------------------------
-if ($SkipFirewall) {
-    Write-Info 'Skipping firewall configuration (-SkipFirewall)'
-} elseif (Test-IsAdministrator) {
-    Set-FirewallRules $EsHome $KibanaHome
-} else {
-    Write-Warn ("Not running as Administrator, so no firewall rules were added. VMs may not reach " +
-        "TCP $ElasticsearchPort/$KibanaPort until you re-run this script from an elevated PowerShell " +
-        "(it reuses the downloads and keeps the configuration), or allow java.exe and node.exe when Windows prompts.")
+    Write-TextFile $kibanaConfig $kibanaYaml
+    Write-Info "Wrote $kibanaConfig"
 }
 
 # ---------------------------------------------------------------------------
-# Index templates (SOF-ELK native + toolkit) and their loader
+# Firewall: Windows Defender Firewall rules for TCP 9200 and 5601
+# ---------------------------------------------------------------------------
+if ($Steps -contains 'Firewall') {
+    if (Test-IsAdministrator) {
+        Set-FirewallRules $EsHome $KibanaHome
+    } elseif ($Only) {
+        throw 'The Firewall step needs an elevated PowerShell (Run as Administrator).'
+    } else {
+        Write-Warn ("Not running as Administrator, so no firewall rules were added. VMs may not reach " +
+            "TCP $ElasticsearchPort/$KibanaPort until you run '.\Install-ForensicELK.ps1 -Only Firewall' " +
+            "from an elevated PowerShell, or allow java.exe and node.exe when Windows prompts.")
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Templates: index templates (SOF-ELK native + toolkit) and their loader
 # ---------------------------------------------------------------------------
 $templatesDir = Join-Path $ElkRoot 'templates'
 $loaderPath = Join-Path $ElkRoot 'load-templates.ps1'
-if ($SkipTemplates) {
-    Write-Info 'Skipping index templates (-SkipTemplates)'
-    # start.bat only loads templates when the loader exists.
-    Remove-Item -LiteralPath $loaderPath -Force -ErrorAction SilentlyContinue
-} else {
+if ($Steps -contains 'Templates') {
     Copy-IndexTemplates $PSScriptRoot $templatesDir
     $loader = @'
 # Loads the forensic-elk index templates into Elasticsearch.
@@ -558,22 +640,28 @@ exit 0
 '@
     Write-TextFile $loaderPath $loader
     Write-Info "Wrote $loaderPath"
+} elseif ($SkipTemplates) {
+    Write-Info 'Skipping index templates (-SkipTemplates)'
+    # start.bat only loads templates when the loader exists.
+    Remove-Item -LiteralPath $loaderPath -Force -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------------------------
-# 5. start.bat
+# StartScript: write start.bat
 # ---------------------------------------------------------------------------
-$esDirName = Split-Path $EsHome -Leaf
-$kibanaDirName = Split-Path $KibanaHome -Leaf
-# The wait loop runs in PowerShell; the URL comes from an environment
-# variable so the command line contains no cmd.exe-sensitive characters.
-$waitCommand = "`$u = `$env:FELK_WAIT_URL; `$d = (Get-Date).AddSeconds([int]`$env:FELK_WAIT_SECONDS); " +
-    "while ((Get-Date) -lt `$d) { try { `$r = Invoke-WebRequest -Uri `$u -UseBasicParsing -TimeoutSec 5; " +
-    "if (`$r.StatusCode -eq 200) { exit 0 } } catch { }; Start-Sleep -Seconds 3 }; exit 1"
-$probeCommand = "try { `$r = Invoke-WebRequest -Uri `$env:FELK_WAIT_URL -UseBasicParsing -TimeoutSec 3; " +
-    "if (`$r.StatusCode -eq 200) { exit 0 } } catch { }; exit 1"
+$startBatPath = Join-Path $ElkRoot 'start.bat'
+if ($Steps -contains 'StartScript') {
+    $esDirName = Split-Path $EsHome -Leaf
+    $kibanaDirName = Split-Path $KibanaHome -Leaf
+    # The wait loop runs in PowerShell; the URL comes from an environment
+    # variable so the command line contains no cmd.exe-sensitive characters.
+    $waitCommand = "`$u = `$env:FELK_WAIT_URL; `$d = (Get-Date).AddSeconds([int]`$env:FELK_WAIT_SECONDS); " +
+        "while ((Get-Date) -lt `$d) { try { `$r = Invoke-WebRequest -Uri `$u -UseBasicParsing -TimeoutSec 5; " +
+        "if (`$r.StatusCode -eq 200) { exit 0 } } catch { }; Start-Sleep -Seconds 3 }; exit 1"
+    $probeCommand = "try { `$r = Invoke-WebRequest -Uri `$env:FELK_WAIT_URL -UseBasicParsing -TimeoutSec 3; " +
+        "if (`$r.StatusCode -eq 200) { exit 0 } } catch { }; exit 1"
 
-$startBat = @"
+    $startBat = @"
 @echo off
 rem Starts the forensic-elk Elasticsearch and Kibana instance.
 rem Generated by Install-ForensicELK.ps1. Each service runs in its own
@@ -641,16 +729,17 @@ echo ERROR: Kibana did not answer at %KIBANA_URL% within %FELK_WAIT_SECONDS% sec
 echo Check the "Forensic ELK - Kibana" window.
 exit /b 1
 "@
-$startBatPath = Join-Path $ElkRoot 'start.bat'
-Write-TextFile $startBatPath $startBat -Ascii
-Write-Info "Wrote $startBatPath"
+    Write-TextFile $startBatPath $startBat -Ascii
+    Write-Info "Wrote $startBatPath"
+}
 
 # ---------------------------------------------------------------------------
-# Start and verify
+# Start: run start.bat and verify
 # ---------------------------------------------------------------------------
-if ($NoStart) {
-    Write-Info "Setup complete. Run $startBatPath to start Elasticsearch and Kibana."
-} else {
+if ($Steps -contains 'Start') {
+    if (-not (Test-Path -LiteralPath $startBatPath)) {
+        throw "$startBatPath not found. Run the StartScript step first."
+    }
     Write-Info 'Starting Elasticsearch and Kibana via start.bat'
     & $startBatPath
     if ($LASTEXITCODE -eq 2) {
@@ -665,6 +754,22 @@ if ($NoStart) {
     if ($info.version.number -ne $ElasticVersion) {
         Write-Warn "Expected Elasticsearch $ElasticVersion but the node reports $($info.version.number)"
     }
+} elseif (Test-Path -LiteralPath $startBatPath) {
+    Write-Info "Run $startBatPath to start Elasticsearch and Kibana."
+}
+
+# ---------------------------------------------------------------------------
+# Cleanup: remove the downloaded zip files once everything above succeeded
+# ---------------------------------------------------------------------------
+if ($Steps -contains 'Cleanup') {
+    # Matches the zips, their .sha512 checksum files and any partial download.
+    $downloads = @(Get-ChildItem -LiteralPath $ElkRoot -File |
+        Where-Object { $_.Name -like 'elasticsearch-*-windows-x86_64.zip*' -or $_.Name -like 'kibana-*-windows-x86_64.zip*' })
+    foreach ($file in $downloads) {
+        Remove-Item -LiteralPath $file.FullName -Force
+        Write-Info "Removed $($file.FullName)"
+    }
+    if ($downloads.Count -eq 0) { Write-Info 'No downloaded zip files to remove' }
 }
 
 Write-Host ''
