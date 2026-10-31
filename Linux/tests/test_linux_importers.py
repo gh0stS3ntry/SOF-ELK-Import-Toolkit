@@ -520,7 +520,7 @@ class LinuxFrontEndTests(unittest.TestCase):
                           "httpd", "browser", "vsftpd"])
         for s in linux2sofelk.SOURCES:
             common.load_templates(s.prefix, s.templates)  # every source has its template
-        self.assertEqual([s.index_template for s in linux2sofelk.SOURCES], [False, False, True, True, True, True, True])
+        self.assertEqual([s.index_template for s in linux2sofelk.SOURCES], [False, False, True, True, True, True, True, False, True, False])
 
 
 class MessageTests(unittest.TestCase):
