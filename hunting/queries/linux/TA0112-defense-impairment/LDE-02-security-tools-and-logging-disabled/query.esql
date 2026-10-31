@@ -1,0 +1,34 @@
+// LDE-02 | Security, logging and firewall tooling stopped, disabled, masked or removed, and SELinux, AppArmor and audit turned off
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1562.001, T1562.004, T1562.012
+// Indexes: logstash-*, auditd-*, packages-*, linuxconfig-* | Needs: any of logstash-*, auditd-*, packages-*, linuxconfig-*
+FROM logstash-*, auditd-*, packages-*, linuxconfig-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL text = TO_LOWER(COALESCE(process.command_line, linuxconfig.line, ""))
+| EVAL m = TO_LOWER(COALESCE(message, ""))
+| EVAL is_cmd = (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") OR (STARTS_WITH(event.dataset, "linux.") AND COALESCE(linuxconfig.init.kind, "") != "init.d"))
+    AND (text RLIKE ".*(systemctl|service|chkconfig|update-rc[.]d|rc-update|rc-service|kill|pkill|killall) .*(auditd|rsyslog|syslog-ng|systemd-journald|apparmor|ufw|firewalld|iptables|nftables|netfilter-persistent|clamav-daemon|clamav-freshclam|clamd|falco|osqueryd|wazuh-agent|ossec|elastic-agent|filebeat|auditbeat|packetbeat|falcon-sensor|crowdstrike|sentinelone|cbagent|cb-psc-sensor|mdatp|microsoft-defender|sysmon|sysmonforlinux|fail2ban|aide|tripwire|rkhunter|chkrootkit|selinux|setroubleshoot|snapd-apparmor|qualys-cloud-agent|amazon-ssm-agent|google-guest-agent|cortex|traps_pmd|xdr|tanium|velociraptor|splunkd|splunkforwarder|nxlog|td-agent|fluent-bit|datadog-agent|newrelic-infra).*(stop|disable|mask|kill|del|remove|off)?.*"
+         AND text RLIKE ".*(stop|disable|mask|kill|pkill|killall|del|remove| off).*"
+      OR text RLIKE ".*(setenforce +0|selinux=(disabled|permissive)|aa-disable|aa-teardown|aa-complain|apparmor_parser +-r|ufw +disable|ufw +default +allow|iptables +(-f|--flush|-x|-p +(input|output|forward) +accept)|ip6tables +(-f|--flush)|nft +flush +ruleset|auditctl +(-d|-e +0)|chmod +-x +.*(auditd|rsyslog|syslog-ng|systemd-journald|apparmor|ufw|firewalld|iptables|nftables|netfilter-persistent|clamav-daemon|clamav-freshclam|clamd|falco|osqueryd|wazuh-agent|ossec|elastic-agent|filebeat|auditbeat|packetbeat|falcon-sensor|crowdstrike|sentinelone|cbagent|cb-psc-sensor|mdatp|microsoft-defender|sysmon|sysmonforlinux|fail2ban|aide|tripwire|rkhunter|chkrootkit|selinux|setroubleshoot|snapd-apparmor|qualys-cloud-agent|amazon-ssm-agent|google-guest-agent|cortex|traps_pmd|xdr|tanium|velociraptor|splunkd|splunkforwarder|nxlog|td-agent|fluent-bit|datadog-agent|newrelic-infra)|mv +.*/(auditd|rsyslog|syslog-ng|systemd-journald|apparmor|ufw|firewalld|iptables|nftables|netfilter-persistent|clamav-daemon|clamav-freshclam|clamd|falco|osqueryd|wazuh-agent|ossec|elastic-agent|filebeat|auditbeat|packetbeat|falcon-sensor|crowdstrike|sentinelone|cbagent|cb-psc-sensor|mdatp|microsoft-defender|sysmon|sysmonforlinux|fail2ban|aide|tripwire|rkhunter|chkrootkit|selinux|setroubleshoot|snapd-apparmor|qualys-cloud-agent|amazon-ssm-agent|google-guest-agent|cortex|traps_pmd|xdr|tanium|velociraptor|splunkd|splunkforwarder|nxlog|td-agent|fluent-bit|datadog-agent|newrelic-infra) |echo +0 +[>] */proc/sys/kernel/(yama|randomize_va_space)).*")
+| EVAL is_msg = event.dataset IN ("syslog.journal", "syslog.file") AND process.name == "systemd"
+    AND (STARTS_WITH(m, "stopped ") OR STARTS_WITH(m, "stopping ")) AND m RLIKE ".*(auditd|rsyslog|syslog-ng|systemd-journald|apparmor|ufw|firewalld|iptables|nftables|netfilter-persistent|clamav-daemon|clamav-freshclam|clamd|falco|osqueryd|wazuh-agent|ossec|elastic-agent|filebeat|auditbeat|packetbeat|falcon-sensor|crowdstrike|sentinelone|cbagent|cb-psc-sensor|mdatp|microsoft-defender|sysmon|sysmonforlinux|fail2ban|aide|tripwire|rkhunter|chkrootkit|selinux|setroubleshoot|snapd-apparmor|qualys-cloud-agent|amazon-ssm-agent|google-guest-agent|cortex|traps_pmd|xdr|tanium|velociraptor|splunkd|splunkforwarder|nxlog|td-agent|fluent-bit|datadog-agent|newrelic-infra).*"
+| EVAL is_audit = event.dataset == "auditd.log" AND event.action IN ("changed-audit-configuration", "daemon-end", "daemon-abort", "config-change", "stopped-service")
+| EVAL is_pkg = event.dataset IN ("packages.dpkg", "packages.apt", "packages.dnf", "packages.dnf_history", "packages.yum", "packages.zypper")
+    AND event.action IN ("remove", "purge", "obsoleted") AND package.name RLIKE ".*(auditd|rsyslog|syslog-ng|systemd-journald|apparmor|ufw|firewalld|iptables|nftables|netfilter-persistent|clamav-daemon|clamav-freshclam|clamd|falco|osqueryd|wazuh-agent|ossec|elastic-agent|filebeat|auditbeat|packetbeat|falcon-sensor|crowdstrike|sentinelone|cbagent|cb-psc-sensor|mdatp|microsoft-defender|sysmon|sysmonforlinux|fail2ban|aide|tripwire|rkhunter|chkrootkit|selinux|setroubleshoot|snapd-apparmor|qualys-cloud-agent|amazon-ssm-agent|google-guest-agent|cortex|traps_pmd|xdr|tanium|velociraptor|splunkd|splunkforwarder|nxlog|td-agent|fluent-bit|datadog-agent|newrelic-infra).*"
+| EVAL is_masked = event.dataset == "linux.systemd_unit" AND linuxconfig.systemd.masked == true AND TO_LOWER(COALESCE(linuxconfig.systemd.unit, "")) RLIKE ".*(auditd|rsyslog|syslog-ng|systemd-journald|apparmor|ufw|firewalld|iptables|nftables|netfilter-persistent|clamav-daemon|clamav-freshclam|clamd|falco|osqueryd|wazuh-agent|ossec|elastic-agent|filebeat|auditbeat|packetbeat|falcon-sensor|crowdstrike|sentinelone|cbagent|cb-psc-sensor|mdatp|microsoft-defender|sysmon|sysmonforlinux|fail2ban|aide|tripwire|rkhunter|chkrootkit|selinux|setroubleshoot|snapd-apparmor|qualys-cloud-agent|amazon-ssm-agent|google-guest-agent|cortex|traps_pmd|xdr|tanium|velociraptor|splunkd|splunkforwarder|nxlog|td-agent|fluent-bit|datadog-agent|newrelic-infra).*"
+| WHERE is_cmd OR is_msg OR is_audit OR is_pkg OR is_masked
+| EVAL artifact = CASE(is_cmd, COALESCE(event.action, event.dataset), is_msg, "systemd stop message", is_audit, "audit record",
+    is_pkg, "package removed", "unit masked (link mtime)")
+| EVAL detail = CASE(is_cmd, COALESCE(process.command_line, linuxconfig.line), is_msg, message, is_audit, message,
+    is_pkg, CONCAT(package.name, " ", COALESCE(package.version, ""), " ", COALESCE(process.command_line, "")),
+    CONCAT(COALESCE(linuxconfig.systemd.unit, ""), " -> ", COALESCE(linuxconfig.systemd.link_target, "/dev/null"), " ", COALESCE(file.path, "")))
+| EVAL score = CASE(is_cmd, 4, 0) + CASE(is_masked, 3, 0) + CASE(is_pkg, 3, 0) + CASE(is_audit, 2, 0) + CASE(is_msg, 1, 0)
+| KEEP
+    @timestamp,
+    host.name,
+    score,
+    artifact,
+    user.name,
+    detail,
+    _index
+| SORT score DESC, @timestamp DESC
+| LIMIT 2000

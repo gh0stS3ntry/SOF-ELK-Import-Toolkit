@@ -1,0 +1,63 @@
+// LDE-04 | Hidden files and folders, binaries masquerading as kernel threads or system daemons, and processes running from deleted binaries
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1564.001, T1036.005, T1070.004
+// Indexes: bodyfile-*, logstash-*, auditd-* | Needs: bodyfile-*; journal export in logstash-* or auditd-* for running processes
+FROM bodyfile-*, logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL lp = TO_LOWER(COALESCE(file.path, ""))
+| EVAL n = COALESCE(file.name, "")
+| EVAL exe = COALESCE(process.executable, "")
+| EVAL is_bf = event.dataset == "bodyfile"
+// odd names: "...", ". ", " ", ".. " and names with control-looking or bracketed text
+| EVAL f_odd_name = is_bf AND (n RLIKE "[. ]+" AND NOT n IN (".", "..") OR n RLIKE ".*[\\[\\]].*" OR n RLIKE ".* +")
+| EVAL f_in_dev = is_bf AND bodyfile.regular_file_in_dev == true
+| EVAL f_hidden_exec = is_bf AND bodyfile.hidden == true AND bodyfile.executable == true AND file.type == "file"
+    AND NOT lp LIKE "*/.git/*" AND NOT lp LIKE "*/.cache/*" AND NOT lp LIKE "*/.local/*" AND NOT lp LIKE "*/.cargo/*"
+    AND NOT lp LIKE "*/.rustup/*" AND NOT lp LIKE "*/.vscode*" AND NOT lp LIKE "*/.npm/*" AND NOT lp LIKE "*/.nvm/*" AND NOT lp LIKE "*/.pyenv/*"
+    AND NOT lp LIKE "*/.oh-my-zsh/*" AND NOT lp LIKE "*/.mozilla/*" AND NOT lp LIKE "*/.config/*"
+| EVAL f_masq_file = is_bf AND bodyfile.executable == true AND file.type == "file"
+    AND TO_LOWER(n) RLIKE "(kworker.*|kthreadd|ksoftirqd.*|kswapd.*|migration.*|rcu_.*|watchdogd|kdevtmpfs.*|kthreaddi|irqbalance|sshd|systemd|systemd-.*|crond|cron|atd|dbus-daemon|rsyslogd|syslogd|udevd|agetty|polkitd|networkd|containerd|dockerd|bash|sh|init|apache2|httpd|nginx|php-fpm|mysqld|postgres)"
+    AND NOT (STARTS_WITH(lp, "/usr/") OR STARTS_WITH(lp, "/bin/") OR STARTS_WITH(lp, "/sbin/") OR STARTS_WITH(lp, "/lib/") OR STARTS_WITH(lp, "/snap/")
+             OR STARTS_WITH(lp, "/etc/") OR STARTS_WITH(lp, "/opt/") OR STARTS_WITH(lp, "/var/lib/"))
+| EVAL f_deleted_exe = NOT is_bf AND exe LIKE "* (deleted)"
+| EVAL f_masq_proc = NOT is_bf AND exe != "" AND (TO_LOWER(COALESCE(process.name, "")) RLIKE "(kworker.*|kthreadd|ksoftirqd.*|kswapd.*|migration.*|rcu_.*|\\[.*)"
+    OR (process.name IN ("sshd", "systemd", "cron", "crond", "dbus-daemon", "rsyslogd", "bash", "sh") AND NOT (STARTS_WITH(exe, "/usr/") OR STARTS_WITH(exe, "/bin/") OR STARTS_WITH(exe, "/sbin/") OR STARTS_WITH(exe, "/lib/"))))
+| EVAL f_tmp_proc = NOT is_bf AND (STARTS_WITH(exe, "/tmp/") OR STARTS_WITH(exe, "/var/tmp/") OR STARTS_WITH(exe, "/dev/shm/") OR STARTS_WITH(exe, "/dev/"))
+| WHERE f_odd_name OR f_in_dev OR f_hidden_exec OR f_masq_file OR f_deleted_exe OR f_masq_proc OR f_tmp_proc
+| EVAL what = CASE(is_bf, file.path, exe)
+| EVAL kind = CASE(f_deleted_exe, "process running from a deleted binary", f_masq_proc, "process name does not match its executable",
+    f_tmp_proc, "process running from a temporary folder", f_masq_file, "system-looking name outside system folders",
+    f_in_dev, "regular file under /dev", f_odd_name, "odd file or folder name", "hidden executable")
+| STATS
+    records = COUNT(*),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    process_names = VALUES(process.name),
+    command_lines = VALUES(process.command_line),
+    users = VALUES(process.user.id),
+    owner = VALUES(file.owner),
+    size = MAX(file.size),
+    file_created = MAX(COALESCE(file.created, file.ctime)),
+    sha1 = VALUES(file.hash.sha1),
+    indexes = VALUES(_index)
+  BY host.name, kind, what
+| EVAL score = CASE(kind == "process running from a deleted binary", 5, kind IN ("process name does not match its executable", "process running from a temporary folder"), 4,
+    kind == "system-looking name outside system folders", 3, kind IN ("regular file under /dev", "odd file or folder name"), 3, 1)
+| EVAL command_lines = MV_SLICE(command_lines, 0, 2)
+| KEEP
+    host.name,
+    score,
+    kind,
+    what,
+    records,
+    first_seen,
+    last_seen,
+    process_names,
+    command_lines,
+    users,
+    owner,
+    size,
+    file_created,
+    sha1,
+    indexes
+| SORT score DESC, last_seen DESC
+| LIMIT 2000

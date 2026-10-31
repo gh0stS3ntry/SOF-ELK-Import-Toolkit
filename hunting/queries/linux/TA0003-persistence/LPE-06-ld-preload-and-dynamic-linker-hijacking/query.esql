@@ -1,0 +1,42 @@
+// LPE-06 | LD_PRELOAD and dynamic linker hijacking: ld.so.preload, library paths, preloaded libraries in odd places
+// Tactic: TA0003 Persistence | ATT&CK: T1574.006
+// Indexes: linuxconfig-*, bodyfile-*, logstash-*, auditd-* | Needs: linuxconfig-* or bodyfile-*; logstash-*, auditd-* for commands and loader errors
+FROM linuxconfig-*, bodyfile-*, logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL p = COALESCE(file.path, "")
+| EVAL lp = TO_LOWER(p)
+| EVAL text = TO_LOWER(COALESCE(process.command_line, linuxconfig.line, message, ""))
+| EVAL flags = COALESCE(MV_CONCAT(linuxconfig.flags, ","), "")
+| EVAL env = TO_LOWER(COALESCE(MV_CONCAT(linuxconfig.systemd.environment, " "), ""))
+| EVAL f_preload_file = p == "/etc/ld.so.preload"
+| EVAL f_ld_config = event.dataset == "linux.ld_preload"
+| EVAL f_env = text LIKE "*ld_preload*" OR text LIKE "*ld_library_path*" OR env LIKE "*ld_preload*" OR env LIKE "*ld_library_path*"
+    OR flags LIKE "*ld_preload*" OR flags LIKE "*env_preserved*"
+| EVAL f_loader_msg = event.dataset IN ("syslog.journal", "syslog.file") AND text LIKE "*ld.so*preload*"
+| EVAL f_odd_so = event.dataset == "bodyfile" AND (lp LIKE "*.so" OR lp LIKE "*.so.*")
+    AND (STARTS_WITH(lp, "/tmp/") OR STARTS_WITH(lp, "/var/tmp/") OR STARTS_WITH(lp, "/dev/shm/") OR STARTS_WITH(lp, "/dev/")
+         OR lp LIKE "*/.*" OR STARTS_WITH(lp, "/etc/") OR STARTS_WITH(lp, "/var/www/") OR STARTS_WITH(lp, "/root/"))
+    AND NOT lp LIKE "*/.cache/*" AND NOT lp LIKE "*/.local/lib/python*" AND NOT lp LIKE "*/.cargo/*" AND NOT lp LIKE "*/.rustup/*"
+    AND NOT lp LIKE "*/.vscode*" AND NOT lp LIKE "*/.mozilla/*"
+| WHERE f_preload_file OR f_ld_config OR f_env OR f_loader_msg OR f_odd_so
+| EVAL ts = CASE(event.dataset == "bodyfile", file.ctime, @timestamp)
+| EVAL artifact = COALESCE(event.action, event.dataset)
+| EVAL detail = CASE(event.dataset == "bodyfile", CONCAT(p, " size=", COALESCE(TO_STRING(file.size), ""), " owner=", COALESCE(file.owner, ""),
+        " sha1=", COALESCE(file.hash.sha1, "")),
+    event.dataset == "linux.ld_preload", CONCAT(p, ": ", COALESCE(linuxconfig.ld.entry, linuxconfig.line, "")),
+    event.dataset == "linux.systemd_unit", CONCAT(p, ": ", env),
+    STARTS_WITH(event.dataset, "linux."), CONCAT(p, ": ", COALESCE(linuxconfig.line, "")),
+    COALESCE(process.command_line, message, ""))
+| EVAL score = CASE(f_preload_file, 5, 0) + CASE(f_ld_config AND event.action == "preload", 5, 0) + CASE(f_env, 3, 0)
+    + CASE(f_loader_msg, 3, 0) + CASE(f_odd_so, 2, 0)
+| KEEP
+    ts,
+    host.name,
+    score,
+    artifact,
+    user.name,
+    detail,
+    flags,
+    _index
+| SORT score DESC, ts DESC
+| LIMIT 2000

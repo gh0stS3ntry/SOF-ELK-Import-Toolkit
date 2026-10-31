@@ -1,0 +1,39 @@
+// LPR-02 | Setuid and setgid files outside the usual folders, and commands that set them
+// Tactic: TA0004 Privilege Escalation | ATT&CK: T1548.001, T1222.002
+// Indexes: bodyfile-*, logstash-*, auditd-* | Needs: bodyfile-* (file modes); logstash-*, auditd-* for chmod/setcap commands
+FROM bodyfile-*, logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL p = COALESCE(file.path, "")
+| EVAL cmd = TO_LOWER(COALESCE(process.command_line, ""))
+| EVAL is_file = event.dataset == "bodyfile" AND (bodyfile.setuid == true OR bodyfile.setgid == true) AND file.type == "file"
+| EVAL std_dir = file.directory IN ("/usr/bin", "/usr/sbin", "/bin", "/sbin", "/usr/libexec", "/usr/lib/openssh", "/usr/lib/dbus-1.0",
+    "/usr/lib/polkit-1", "/usr/lib/xorg", "/usr/lib/eject", "/usr/lib/snapd", "/usr/lib/policykit-1", "/usr/lib/chromium")
+    OR STARTS_WITH(p, "/snap/") OR STARTS_WITH(p, "/usr/lib/x86_64-linux-gnu/") OR STARTS_WITH(p, "/usr/lib64/")
+| EVAL is_cmd = event.action IN ("sudo-command", "pkexec-command", "executed", "ran-command")
+    AND cmd RLIKE ".*(chmod +([ugoa]*[+=][rwx]*s|[0-7]?[2-7][0-7][0-7][0-7] )|setcap |chown +root.*[&][&].*chmod|install +-m *[2-7][0-7][0-7][0-7]).*"
+| EVAL is_audit_chmod = event.action IN ("chmod", "fchmod", "fchmodat", "fchmodat2", "setxattr", "lsetxattr", "fsetxattr")
+| WHERE is_file OR is_cmd OR is_audit_chmod
+// EDIT: the start of the incident window; changes after it score higher
+| EVAL since = TO_DATETIME("2026-01-01T00:00:00Z")
+| EVAL f_odd_dir = is_file AND NOT std_dir
+| EVAL f_recent = is_file AND file.ctime >= since
+| EVAL f_user_owned = is_file AND file.uid != "0"
+| EVAL f_writable = is_file AND bodyfile.world_writable == true
+| WHERE f_odd_dir OR f_recent OR is_cmd OR is_audit_chmod
+| EVAL score = CASE(f_odd_dir, 3, 0) + CASE(f_recent, 2, 0) + CASE(f_user_owned, 1, 0) + CASE(f_writable, 3, 0) + CASE(is_cmd, 2, 0)
+    + CASE(is_audit_chmod, 1, 0)
+| EVAL ts = CASE(is_file, file.ctime, @timestamp)
+| EVAL artifact = CASE(is_file, "setuid/setgid file", is_cmd, "command", "audit permission change")
+| EVAL detail = CASE(is_file, CONCAT(p, " mode=", COALESCE(file.mode, ""), " owner=", COALESCE(file.owner, ""), " size=",
+        COALESCE(TO_STRING(file.size), ""), " mtime=", COALESCE(TO_STRING(file.mtime), ""), " sha1=", COALESCE(file.hash.sha1, "")),
+    COALESCE(process.command_line, CONCAT(COALESCE(event.action, ""), " ", p)))
+| KEEP
+    ts,
+    host.name,
+    score,
+    artifact,
+    user.name,
+    detail,
+    _index
+| SORT score DESC, ts DESC
+| LIMIT 2000

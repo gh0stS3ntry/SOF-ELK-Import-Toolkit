@@ -1,0 +1,48 @@
+// LEXF-03 | Clients that pulled the most data from the host's web and FTP servers
+// Tactic: TA0010 Exfiltration | ATT&CK: T1048.003, T1041
+// Indexes: httpdlog-*, logstash-* | Needs: httpdlog-* (web) or FTP logs in logstash-*
+FROM httpdlog-*, logstash-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL is_web = event.dataset LIKE "*.access"
+| EVAL is_ftp = event.dataset IN ("ftp.vsftpd", "ftp.xferlog") AND event.action IN ("ftp-download", "ftp-upload")
+| WHERE (is_web OR is_ftp) AND source.ip IS NOT NULL
+| EVAL out_bytes = CASE(is_web, TO_DOUBLE(destination.bytes), is_ftp AND event.action == "ftp-download", TO_DOUBLE(ftp.transfer.bytes), 0.0)
+| EVAL in_bytes = CASE(is_ftp AND event.action == "ftp-upload", TO_DOUBLE(ftp.transfer.bytes), 0.0)
+| EVAL item = CASE(is_web, url.path, file.path)
+| EVAL is_archive = TO_LOWER(COALESCE(item, "")) RLIKE ".*[.](tar|tgz|gz|bz2|xz|zst|zip|7z|rar|sql|dump|bak|backup|db|sqlite|csv|xlsx|pdf)"
+| STATS
+    requests = COUNT(*),
+    mb_sent = ROUND(SUM(out_bytes) / 1048576.0, 1),
+    mb_received = ROUND(SUM(in_bytes) / 1048576.0, 1),
+    largest_mb = ROUND(MAX(out_bytes) / 1048576.0, 1),
+    archive_hits = COUNT(*) WHERE is_archive,
+    sample_archives = VALUES(item) WHERE is_archive,
+    distinct_items = COUNT_DISTINCT(item),
+    users = VALUES(user.name),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    datasets = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, source.ip
+| EVAL internal = CIDR_MATCH(source.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10", "::1/128", "fe80::/10", "fc00::/7")
+| EVAL score = CASE(archive_hits > 0, 3, 0) + CASE(mb_sent >= 100, 2, 0) + CASE(mb_sent >= 1000, 2, 0) + CASE(NOT internal, 1, 0)
+| EVAL sample_archives = MV_SLICE(sample_archives, 0, 9)
+| KEEP
+    host.name,
+    score,
+    source.ip,
+    internal,
+    requests,
+    mb_sent,
+    mb_received,
+    largest_mb,
+    archive_hits,
+    sample_archives,
+    distinct_items,
+    users,
+    first_seen,
+    last_seen,
+    datasets,
+    indexes
+| SORT score DESC, mb_sent DESC
+| LIMIT 1000

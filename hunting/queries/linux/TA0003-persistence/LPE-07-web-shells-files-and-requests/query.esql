@@ -1,0 +1,68 @@
+// LPE-07 | Web shells: script files in web roots and the requests that reached them, joined by file name
+// Tactic: TA0003 Persistence | ATT&CK: T1505.003
+// Indexes: bodyfile-*, httpdlog-*, auditd-* | Needs: bodyfile-* and httpdlog-*
+FROM bodyfile-*, httpdlog-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL p = TO_LOWER(COALESCE(file.path, ""))
+| EVAL in_webroot = STARTS_WITH(p, "/var/www/") OR STARTS_WITH(p, "/srv/") OR STARTS_WITH(p, "/usr/share/nginx/")
+    OR p LIKE "/home/*/public_html/*" OR STARTS_WITH(p, "/opt/lampp/htdocs/") OR p LIKE "*/webapps/*" OR STARTS_WITH(p, "/usr/lib/cgi-bin/")
+// EDIT: add the application's own document root if it is elsewhere
+| EVAL is_access = event.dataset LIKE "*.access"
+| WHERE (event.dataset IN ("bodyfile", "auditd.log") AND in_webroot AND COALESCE(file.type, "file") == "file"
+         AND p RLIKE ".*[.](php[0-9]?|phtml|phar|inc|jsp|jspx|asp|aspx|cgi|pl|py|sh)")
+   OR (is_access AND url.extension IN ("php", "php3", "php4", "php5", "php7", "phtml", "phar", "inc", "jsp", "jspx", "asp", "aspx", "cgi", "pl", "py", "sh"))
+| EVAL name = CASE(is_access, TO_LOWER(REPLACE(url.path, "^.*/", "")), REPLACE(p, "^.*/", ""))
+| STATS
+    files = VALUES(file.path),
+    file_size = MAX(file.size),
+    file_mtime = MAX(file.mtime),
+    file_ctime = MAX(file.ctime),
+    file_created = MAX(file.created),
+    owner = VALUES(file.owner),
+    audited_writes = COUNT(*) WHERE event.dataset == "auditd.log",
+    requests = COUNT(*) WHERE is_access,
+    posts = COUNT(*) WHERE is_access AND http.request.method == "POST",
+    ok_requests = COUNT(*) WHERE is_access AND http.response.status_code >= 200 AND http.response.status_code < 300,
+    clients = COUNT_DISTINCT(source.ip),
+    client_ips = VALUES(source.ip),
+    paths = VALUES(url.path),
+    queries = VALUES(url.query),
+    first_request = MIN(@timestamp) WHERE is_access,
+    last_request = MAX(@timestamp) WHERE is_access,
+    indexes = VALUES(_index)
+  BY host.name, name
+// EDIT: the start of the incident window; changes after it score higher
+| EVAL since = TO_DATETIME("2026-01-01T00:00:00Z")
+| EVAL f_new = COALESCE(file_created, file_ctime) >= since
+| EVAL f_few_clients = requests > 0 AND clients <= 3
+| EVAL f_post = posts > 0
+| EVAL f_small = file_size IS NOT NULL AND file_size < 5000
+| EVAL f_no_file = requests > 0 AND files IS NULL AND ok_requests > 0
+| EVAL f_odd_name = name RLIKE ".*(shell|cmd|c99|r57|wso|b374k|alfa|upload|up|x|1|test|bypass|backdoor|indoxploit|mini)[.].*"
+| EVAL score = CASE(f_new, 2, 0) + CASE(f_few_clients, 2, 0) + CASE(f_post, 2, 0) + CASE(f_small, 1, 0) + CASE(f_no_file, 1, 0)
+    + CASE(f_odd_name, 2, 0) + CASE(audited_writes > 0, 2, 0)
+| WHERE score >= 2
+| EVAL client_ips = MV_SLICE(client_ips, 0, 9), paths = MV_SLICE(paths, 0, 4), queries = MV_SLICE(queries, 0, 4), files = MV_SLICE(files, 0, 4)
+| KEEP
+    host.name,
+    score,
+    name,
+    files,
+    file_size,
+    file_created,
+    file_mtime,
+    file_ctime,
+    owner,
+    requests,
+    posts,
+    ok_requests,
+    clients,
+    client_ips,
+    first_request,
+    last_request,
+    paths,
+    queries,
+    audited_writes,
+    indexes
+| SORT score DESC, file_ctime DESC
+| LIMIT 2000

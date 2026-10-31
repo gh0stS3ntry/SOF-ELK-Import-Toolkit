@@ -1,0 +1,51 @@
+// LPR-01 | sudo, su and pkexec use and refusals per account, with the sudoers rules that apply
+// Tactic: TA0004 Privilege Escalation | ATT&CK: T1548.003, T1078.003
+// Indexes: logstash-*, auditd-*, linuxconfig-* | Needs: logstash-* (sudo/su/pkexec/PAM) or auditd-*; linuxconfig-* for sudoers
+FROM logstash-*, auditd-*, linuxconfig-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL svc = TO_LOWER(COALESCE(pam.service, ""))
+| WHERE event.action IN ("sudo-command", "su", "pkexec-command", "ran-command")
+   OR (event.action == "authentication-failure" AND svc IN ("sudo", "su", "su-l", "polkit-1", "pkexec"))
+   OR (event.dataset == "linux.sudoers" AND event.action == "rule" AND linuxconfig.sudoers.principal_type == "user")
+| EVAL is_rule = event.dataset == "linux.sudoers"
+| EVAL ok = event.outcome == "success" AND NOT is_rule
+| EVAL failed = event.outcome == "failure"
+| STATS
+    elevations = COUNT(*) WHERE ok,
+    failures = COUNT(*) WHERE failed,
+    failure_results = VALUES(sudo.result) WHERE failed,
+    as_users = VALUES(user.effective.name),
+    distinct_commands = COUNT_DISTINCT(process.command_line),
+    shells_as_root = COUNT(*) WHERE ok AND TO_LOWER(COALESCE(process.command_line, "")) RLIKE "(.*/)?(bash|sh|zsh|dash|su|sudo -i|sudo -s|python[0-9.]*|perl)( .*)?",
+    first_seen = MIN(@timestamp) WHERE NOT is_rule,
+    last_seen = MAX(@timestamp) WHERE NOT is_rule,
+    first_failure = MIN(@timestamp) WHERE failed,
+    sudoers_rules = VALUES(linuxconfig.line) WHERE is_rule,
+    nopasswd = MV_MAX(VALUES(linuxconfig.sudoers.nopasswd)),
+    all_commands = MV_MAX(VALUES(linuxconfig.sudoers.all_commands)),
+    rule_files = VALUES(file.path) WHERE is_rule,
+    indexes = VALUES(_index)
+  BY host.name, user.name
+| WHERE user.name IS NOT NULL
+| EVAL score = CASE(failures > 0, 2, 0) + CASE(failures >= 5, 1, 0) + CASE(shells_as_root > 0, 2, 0) + CASE(nopasswd, 2, 0)
+    + CASE(elevations > 0 AND sudoers_rules IS NULL, 1, 0)
+| KEEP
+    host.name,
+    score,
+    user.name,
+    elevations,
+    distinct_commands,
+    shells_as_root,
+    as_users,
+    failures,
+    failure_results,
+    first_failure,
+    first_seen,
+    last_seen,
+    sudoers_rules,
+    nopasswd,
+    all_commands,
+    rule_files,
+    indexes
+| SORT score DESC, failures DESC, elevations DESC
+| LIMIT 2000

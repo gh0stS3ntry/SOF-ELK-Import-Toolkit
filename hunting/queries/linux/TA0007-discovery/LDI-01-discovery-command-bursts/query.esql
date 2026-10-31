@@ -1,0 +1,46 @@
+// LDI-01 | Discovery command bursts: many system, user and network discovery commands in a few minutes
+// Tactic: TA0007 Discovery | ATT&CK: T1082, T1033, T1016, T1057, T1083
+// Indexes: logstash-*, auditd-* | Needs: sudo/pkexec commands in logstash-*, or auditd-*
+FROM logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| WHERE event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command")
+| EVAL cmd = TO_LOWER(COALESCE(process.command_line, ""))
+| EVAL prog = REPLACE(MV_FIRST(SPLIT(cmd, " ")), "^.*/", "")
+| EVAL f_read_cfg = prog IN ("cat", "less", "more", "head", "tail", "grep", "ls", "find", "stat", "file")
+    AND cmd RLIKE ".*(/etc/(passwd|shadow|group|sudoers|hosts|resolv[.]conf|os-release|issue|crontab|ssh/|fstab|exports)|/proc/(version|cpuinfo|net/)|/home/|/root|[.]ssh|-perm|-writable|-user +root|-name +[*]?[.](conf|key|pem)).*"
+| EVAL f_enum_script = cmd RLIKE ".*(linpeas|linenum|lse[.]sh|linux-smart-enumeration|pspy|linux-exploit-suggester|les[.]sh|unix-privesc-check|deepce|traitor|sudo_killer|bloodhound|pwncat|autorecon).*"
+| EVAL is_disc = prog IN ("whoami", "id", "uname", "hostname", "hostnamectl", "ifconfig", "ip", "netstat", "ss", "ps", "w", "who", "last", "lastlog", "arp", "route", "nmcli", "lsblk", "df", "mount", "lscpu", "lsmod", "lsof", "getent", "groups", "users", "env", "printenv", "crontab", "dmidecode", "lshw", "uptime", "getcap", "list", "systemctl", "timedatectl", "resolvectl", "iptables", "nft", "ufw", "docker", "kubectl", "aws", "az", "gcloud", "dpkg", "rpm", "apt", "pstree", "top", "history", "netdiscover", "arp-scan", "ping", "traceroute", "dig", "nslookup", "host", "smbclient", "ldapsearch", "rpcclient", "enum4linux", "nbtscan") OR f_read_cfg OR f_enum_script OR cmd LIKE "sudo -l*" OR cmd == "list"
+| WHERE is_disc
+| EVAL window = DATE_TRUNC(10 minutes, @timestamp)
+| STATS
+    commands = COUNT(*),
+    distinct_tools = COUNT_DISTINCT(prog),
+    tools = VALUES(prog),
+    enum_scripts = COUNT(*) WHERE f_enum_script,
+    sample = VALUES(process.command_line),
+    first_time = MIN(@timestamp),
+    last_time = MAX(@timestamp),
+    as_users = VALUES(user.effective.name),
+    directories = VALUES(process.working_directory),
+    indexes = VALUES(_index)
+  BY host.name, user.name, window
+| WHERE distinct_tools >= 4 OR enum_scripts > 0
+| EVAL score = distinct_tools + CASE(enum_scripts > 0, 5, 0)
+| EVAL sample = MV_SLICE(sample, 0, 14)
+| KEEP
+    host.name,
+    score,
+    window,
+    user.name,
+    as_users,
+    commands,
+    distinct_tools,
+    tools,
+    enum_scripts,
+    first_time,
+    last_time,
+    sample,
+    directories,
+    indexes
+| SORT score DESC, window ASC
+| LIMIT 2000

@@ -1,0 +1,45 @@
+// LEX-04 | Download-and-run, encoded and interpreter one-liner command lines (logs, audit, cron, units, shell startup files)
+// Tactic: TA0002 Execution | ATT&CK: T1059.004, T1059.006, T1027, T1105
+// Indexes: logstash-*, auditd-*, linuxconfig-*, packages-* | Needs: command lines in logstash-*, auditd-*, linuxconfig-*, or packages-*
+FROM logstash-*, auditd-*, linuxconfig-*, packages-* METADATA _index
+| WHERE host.os.type == "linux"
+// vendor init.d scripts are hunted in LPE-03; their shell idioms would flood this list
+| WHERE COALESCE(linuxconfig.init.kind, "") != "init.d"
+| EVAL text = COALESCE(process.command_line, linuxconfig.line, "")
+| EVAL t = TO_LOWER(text)
+| EVAL flags = COALESCE(MV_CONCAT(linuxconfig.flags, ","), "")
+| EVAL f_download_exec = t RLIKE ".*(curl|wget|fetch|busybox wget|python3? -c .*urlopen).*[|] *(sudo )?(ba|da|z|k)?sh.*"
+    OR t RLIKE ".*(curl|wget).*(-o|-O|--output) *(/tmp|/dev/shm|/var/tmp)/.*" OR t RLIKE ".*(curl|wget) .*[&][&] *chmod .*"
+    OR flags LIKE "*download_exec*"
+| EVAL f_encoded = t LIKE "*base64 -d*" OR t LIKE "*base64 --decode*" OR t LIKE "*b64decode*" OR t LIKE "*xxd -r*"
+    OR t LIKE "*openssl enc -d*" OR t LIKE "*openssl base64 -d*" OR flags LIKE "*base64_decode*"
+| EVAL f_oneliner = t RLIKE ".*(python[0-9.]*|perl|ruby|php|lua|node) +(-c|-e|-r) .*" OR t RLIKE ".*(ba|z)?sh +-c +.*(curl|wget|base64|/dev/tcp|nc ).*"
+    OR t LIKE "*awk*begin*system*" OR t LIKE "*eval \"$(*" OR t LIKE "*exec(*"
+| EVAL f_temp_exec = t RLIKE ".*chmod .*(/tmp|/dev/shm|/var/tmp)/.*" OR t RLIKE "(/tmp|/dev/shm|/var/tmp)/[^ ]+( .*)?"
+| EVAL f_nohup = t RLIKE ".*(nohup|setsid|disown|screen -dm|tmux new -d).*"
+| WHERE f_download_exec OR f_encoded OR f_oneliner OR f_temp_exec
+| EVAL score = CASE(f_download_exec, 3, 0) + CASE(f_encoded, 2, 0) + CASE(f_oneliner, 2, 0) + CASE(f_temp_exec, 2, 0) + CASE(f_nohup, 1, 0)
+| EVAL artifact = CASE(STARTS_WITH(event.dataset, "linux.") OR STARTS_WITH(event.dataset, "packages."), event.dataset,
+    COALESCE(event.action, event.dataset))
+| STATS
+    seen = COUNT(*),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    users = VALUES(user.name),
+    artifacts = VALUES(artifact),
+    files = VALUES(file.path),
+    indexes = VALUES(_index)
+  BY host.name, score, text
+| KEEP
+    host.name,
+    score,
+    text,
+    seen,
+    first_seen,
+    last_seen,
+    users,
+    artifacts,
+    files,
+    indexes
+| SORT score DESC, first_seen ASC
+| LIMIT 2000

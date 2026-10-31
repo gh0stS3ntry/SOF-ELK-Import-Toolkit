@@ -172,6 +172,10 @@ Messages from the programs that matter most in an investigation are broken into 
 
 Each recognised message gets `event.category`, `event.type`, `event.action`, `event.outcome` and a tag such as `got_ssh` or `got_sudo`.
 
+## Hunting
+
+The Linux ES|QL hunting queries are in [`hunting/queries/linux/`](../hunting/queries/linux/), grouped by MITRE ATT&CK tactic, with the checklists [Baseline: all Linux hosts](../hunting/checklists/linux-baseline-all-hosts.md) and [Linux internet-facing server](../hunting/checklists/linux-internet-facing-server.md). Each hunt reads every index above that can answer it, and still runs when the optional `auditd-*`, `httpdlog-*` or `browsinghistory-*` indexes are missing. See [Linux evidence](../hunting/README.md#linux-evidence) for what each source can and cannot show.
+
 ## Tests
 
 ```bash

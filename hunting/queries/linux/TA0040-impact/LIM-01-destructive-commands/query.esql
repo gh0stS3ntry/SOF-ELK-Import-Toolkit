@@ -1,0 +1,29 @@
+// LIM-01 | Destructive commands: wiping disks and folders, dropping databases, killing services and containers
+// Tactic: TA0040 Impact | ATT&CK: T1485, T1561, T1489, T1531
+// Indexes: logstash-*, auditd-*, linuxconfig-* | Needs: commands in logstash-*, auditd-*, or linuxconfig-* (cron, units, startup files)
+FROM logstash-*, auditd-*, linuxconfig-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL text = TO_LOWER(COALESCE(process.command_line, linuxconfig.line, ""))
+| WHERE (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") OR (STARTS_WITH(event.dataset, "linux.") AND COALESCE(linuxconfig.init.kind, "") != "init.d")) AND text RLIKE ".*(rm +(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|--recursive|--no-preserve-root)[a-z -]* +(/|/[*]|/(etc|home|var|srv|opt|boot|usr|root|data|backup[s]?|mnt)(/[*]?)?)( .*)?|shred |wipe |srm |dd +.*if=/dev/(zero|urandom|random).*of=/dev/|mkfs|wipefs|sfdisk|sgdisk +(-z|--zap)|truncate +-s *0|crontab +-r|find .*-delete|systemctl +(stop|disable|mask) +(mysql|mariadb|postgresql|mongod|redis|docker|containerd|nginx|apache2|httpd|tomcat[0-9]*|elasticsearch|bacula.*|veeam.*)|docker +(rm +-f|system +prune|volume +(rm|prune))|kubectl +delete|virsh +(destroy|undefine)|esxcli +vm +process +kill|vim-cmd +vmsvc/power[.]off|(drop|truncate) +(database|table)|userdel +-r|passwd +-l +root|killall +-9|pkill +-9).*"
+| EVAL kind = CASE(
+    text RLIKE ".*(dd +.*of=/dev/|mkfs|wipefs|sfdisk|sgdisk|shred |wipe |srm ).*", "disk or file wiping",
+    text RLIKE ".*rm +.*", "recursive delete of a system or data folder",
+    text RLIKE ".*(drop|truncate) +(database|table).*", "database drop",
+    text RLIKE ".*(docker|kubectl|virsh|esxcli|vim-cmd).*", "containers or virtual machines",
+    text RLIKE ".*systemctl.*", "service stopped",
+    "other")
+| EVAL artifact = CASE(STARTS_WITH(event.dataset, "linux."), CONCAT(event.dataset, " (planted: file mtime)"), COALESCE(event.action, event.dataset))
+| KEEP
+    @timestamp,
+    host.name,
+    kind,
+    artifact,
+    user.name,
+    user.effective.name,
+    process.working_directory,
+    process.command_line,
+    linuxconfig.line,
+    file.path,
+    _index
+| SORT @timestamp DESC
+| LIMIT 2000

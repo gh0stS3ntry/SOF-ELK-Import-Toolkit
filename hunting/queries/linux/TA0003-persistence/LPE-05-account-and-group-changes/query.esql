@@ -1,0 +1,39 @@
+// LPE-05 | Account and group changes: created, deleted, modified, password changes, and the passwd/shadow/group files
+// Tactic: TA0003 Persistence | ATT&CK: T1136.001, T1098
+// Indexes: logstash-*, auditd-*, linuxconfig-*, bodyfile-* | Needs: any of logstash-*, auditd-*, linuxconfig-*, bodyfile-*
+FROM logstash-*, auditd-*, linuxconfig-*, bodyfile-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL p = COALESCE(file.path, "")
+| EVAL cmd = TO_LOWER(COALESCE(process.command_line, ""))
+| WHERE event.action IN ("user-created", "user-deleted", "user-changed", "user-locked", "group-created", "group-deleted",
+                         "group-membership-added", "group-membership-removed", "password-changed", "password-aging-changed",
+                         "added-user-account", "deleted-user-account", "modified-user-account", "added-group-account-to",
+                         "deleted-group-account-from", "changed-password", "modified-group-account")
+   OR (event.dataset == "linux.account" AND (linuxconfig.account.state != "present" OR linuxconfig.flags IS NOT NULL))
+   OR (event.dataset == "linux.group" AND (linuxconfig.group.state != "present" OR linuxconfig.group.privileged == true))
+   OR (event.dataset == "bodyfile" AND p IN ("/etc/passwd", "/etc/shadow", "/etc/group", "/etc/gshadow", "/etc/sudoers", "/etc/passwd-", "/etc/shadow-", "/etc/group-"))
+   OR (event.action IN ("sudo-command", "pkexec-command", "executed", "ran-command")
+       AND cmd RLIKE "(.*/)?(useradd|adduser|usermod|userdel|deluser|groupadd|addgroup|groupmod|groupdel|gpasswd|passwd|chpasswd|chage|vipw|vigr|newusers)( .*)?|.*(/etc/passwd|/etc/shadow|/etc/group).*")
+| EVAL ts = CASE(event.dataset == "bodyfile", file.ctime, event.dataset == "linux.account", COALESCE(linuxconfig.account.password_last_changed, @timestamp), @timestamp)
+| EVAL artifact = CASE(event.dataset == "bodyfile", "bodyfile (inode change time)", STARTS_WITH(event.dataset, "linux."), CONCAT(event.dataset, " (snapshot)"), event.dataset)
+| EVAL detail = CASE(
+    event.dataset == "linux.account", CONCAT("state=", COALESCE(linuxconfig.account.state, ""), " uid=", COALESCE(user.id, ""),
+        " shell=", COALESCE(linuxconfig.account.shell, ""), " password=", COALESCE(linuxconfig.account.password_state, ""),
+        " flags=", COALESCE(MV_CONCAT(linuxconfig.flags, ","), "")),
+    event.dataset == "linux.group", CONCAT("state=", COALESCE(linuxconfig.group.state, ""), " members=", COALESCE(MV_CONCAT(linuxconfig.group.members, ","), ""),
+        " added=", COALESCE(MV_CONCAT(linuxconfig.group.members_added, ","), ""), " removed=", COALESCE(MV_CONCAT(linuxconfig.group.members_removed, ","), "")),
+    event.dataset == "bodyfile", CONCAT(p, " mtime=", COALESCE(TO_STRING(file.mtime), ""), " size=", COALESCE(TO_STRING(file.size), "")),
+    COALESCE(process.command_line, message, ""))
+| KEEP
+    ts,
+    host.name,
+    artifact,
+    event.action,
+    event.outcome,
+    user.name,
+    user.target.name,
+    group.name,
+    detail,
+    _index
+| SORT ts DESC
+| LIMIT 5000

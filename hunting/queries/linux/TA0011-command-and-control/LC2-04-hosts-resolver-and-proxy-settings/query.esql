@@ -1,0 +1,35 @@
+// LC2-04 | Hosts file entries, DNS resolvers, proxy settings and VPN profiles, with changes to them
+// Tactic: TA0011 Command and Control | ATT&CK: T1565.001, T1090, T1071.004
+// Indexes: linuxconfig-*, bodyfile-*, logstash-*, auditd-* | Needs: linuxconfig-*; bodyfile-*, logstash-*, auditd-* add file times and edits
+FROM linuxconfig-*, bodyfile-*, logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL p = COALESCE(file.path, "")
+| EVAL cmd = TO_LOWER(COALESCE(process.command_line, ""))
+| EVAL line = TO_LOWER(COALESCE(linuxconfig.line, ""))
+| EVAL net_file = p RLIKE "/etc/(hosts|resolv[.]conf|nsswitch[.]conf|environment|proxychains[0-9]?[.]conf|wgetrc|gai[.]conf)|/etc/systemd/resolved[.]conf.*|/etc/apt/apt[.]conf[.]d/.*|/etc/profile[.]d/.*proxy.*|/etc/NetworkManager/system-connections/.*|/etc/openvpn/.*|/etc/wireguard/.*|/etc/dnsmasq[.]conf|/etc/dnsmasq[.]d/.*"
+| EVAL is_hosts = event.dataset == "linux.hosts"
+    AND NOT CIDR_MATCH(linuxconfig.hosts.ip, "127.0.0.0/8", "::1/128", "ff00::/8", "fe00::/7")
+| EVAL is_resolver = event.dataset == "linux.resolver"
+| EVAL is_proxy_line = STARTS_WITH(event.dataset, "linux.") AND line RLIKE ".*(http_proxy|https_proxy|all_proxy|ftp_proxy|no_proxy|socks[45]? ).*"
+| EVAL is_file = event.dataset IN ("bodyfile", "auditd.log") AND net_file AND COALESCE(file.type, "file") != "dir"
+| EVAL is_edit = event.action IN ("sudo-command", "pkexec-command", "executed", "ran-command")
+    AND cmd RLIKE ".*(/etc/hosts|/etc/resolv[.]conf|resolvectl|nmcli +(con|connection) +(add|mod|modify|import)|/etc/environment|_proxy=|/etc/proxychains|/etc/openvpn|/etc/wireguard|wg-quick|systemd-resolve).*"
+| WHERE is_hosts OR is_resolver OR is_proxy_line OR is_file OR is_edit
+| EVAL ts = CASE(event.dataset == "bodyfile", file.ctime, @timestamp)
+| EVAL artifact = CASE(is_hosts, "hosts entry (file mtime)", is_resolver, "resolver setting (file mtime)", is_proxy_line, "proxy setting (file mtime)",
+    is_file, CONCAT(event.dataset, " file (inode change time)"), "edit command")
+| EVAL detail = CASE(
+    is_hosts, CONCAT(TO_STRING(linuxconfig.hosts.ip), " ", COALESCE(MV_CONCAT(linuxconfig.hosts.names, " "), ""), CASE(linuxconfig.hosts.commented == true, " (commented out)", "")),
+    is_resolver, CONCAT(p, ": ", COALESCE(linuxconfig.line, "")),
+    is_proxy_line, CONCAT(p, ": ", COALESCE(linuxconfig.line, "")),
+    is_file, CONCAT(p, " mtime=", COALESCE(TO_STRING(file.mtime), ""), " size=", COALESCE(TO_STRING(file.size), "")),
+    COALESCE(process.command_line, ""))
+| KEEP
+    ts,
+    host.name,
+    artifact,
+    user.name,
+    detail,
+    _index
+| SORT ts DESC
+| LIMIT 2000
