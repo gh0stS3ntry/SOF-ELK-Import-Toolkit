@@ -1,0 +1,5 @@
+Oct 24 03:10:01 web02 CROND[900]: (root) CMD (/usr/local/bin/backup.sh)
+Oct 24 03:10:02 web02 kernel: [ 1234.567890] IN=eth0 OUT= MAC=00:0c:29:aa:bb:cc:00:50:56:dd:ee:ff:08:00 SRC=203.0.113.7 DST=10.0.0.5 LEN=60 TOS=0x00 PREC=0x00 TTL=52 ID=1 DF PROTO=TCP SPT=50123 DPT=22 WINDOW=64240 RES=0x00 SYN URGP=0
+Oct 24 03:11:00 web02 python3[950]: Traceback (most recent call last):
+  File "/opt/app/run.py", line 1, in <module>
+Oct 24 03:12:00 web02 kernel: loop0: module verification failed: signature and/or required key missing - tainting kernel

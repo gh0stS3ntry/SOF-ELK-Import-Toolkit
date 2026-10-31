@@ -1,0 +1,10 @@
+Dec 30 23:59:01 web02 sshd[1201]: Failed password for invalid user admin from 203.0.113.7 port 50122 ssh2
+Dec 30 23:59:03 web02 sshd[1201]: Connection closed by invalid user admin 203.0.113.7 port 50122 [preauth]
+Dec 31 08:00:00 web02 sudo[1300]:    alice : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/bin/cat /etc/shadow
+Jan  2 10:15:42 web02 sshd[2201]: Accepted publickey for alice from 198.51.100.20 port 40222 ssh2: ED25519 SHA256:abcdefABCDEF0123456789
+Jan  2 10:15:42 web02 sshd[2201]: pam_unix(sshd:session): session opened for user alice(uid=1000) by alice(uid=0)
+Jan  2 10:16:00 web02 sudo[2250]:    alice : TTY=pts/1 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/sbin/useradd -m bob
+Jan  2 10:16:00 web02 useradd[2251]: new user: name=bob, UID=1001, GID=1001, home=/home/bob, shell=/bin/bash, from=/dev/pts/1
+Jan  2 10:16:05 web02 usermod[2260]: add 'bob' to group 'wheel'
+Jan  2 10:16:30 web02 su[2270]: FAILED SU (to root) bob on pts/2
+Jan  2 10:17:00 web02 sshd[2201]: Received disconnect from 198.51.100.20 port 40222:11: disconnected by user

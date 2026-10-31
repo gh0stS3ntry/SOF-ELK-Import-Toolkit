@@ -1,0 +1,4 @@
+{"__CURSOR":"s=aa;i=1;b=bb;m=1;t=1;x=1","__REALTIME_TIMESTAMP":"1793440800000000","__MONOTONIC_TIMESTAMP":"5","_BOOT_ID":"bb","_MACHINE_ID":"fedcba9876543210fedcba9876543210","_HOSTNAME":"web01","PRIORITY":"6","SYSLOG_FACILITY":"10","SYSLOG_IDENTIFIER":"sshd","_PID":"3001","_COMM":"sshd","_UID":"0","_TRANSPORT":"syslog","MESSAGE":"Accepted password for carol from 192.0.2.10 port 41000 ssh2","_SYSTEMD_UNIT":"ssh.service","SYSLOG_TIMESTAMP":"Oct 31 10:00:00 "}
+{"__CURSOR":"s=aa;i=2;b=bb;m=2;t=2;x=2","__REALTIME_TIMESTAMP":"1793440801000000","_BOOT_ID":"bb","_HOSTNAME":"web01","PRIORITY":"5","SYSLOG_IDENTIFIER":"app","_COMM":"app","MESSAGE":[104,105,255,10,116,104,101,114,101],"CUSTOM_FIELD":["one","two"],"_TRANSPORT":"journal"}
+not json
+{"__CURSOR":"s=aa;i=3;b=bb;m=3;t=3;x=3","MESSAGE":"no time"}

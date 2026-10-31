@@ -1,0 +1,1 @@
+2026-10-24 03:15:00 WARNING: COMMAND_FAILED: '/usr/sbin/iptables -w10 -t nat -F' failed
