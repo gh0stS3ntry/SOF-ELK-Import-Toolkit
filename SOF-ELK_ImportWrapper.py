@@ -5,6 +5,11 @@ Expected layout:
   SOF-ELK_ImportWrapper.py
   Windows/csv_importers/<thirteen CSV importers and sof_elk_csv_bulk_common.py>
   Windows/json_importers/<four JSON importers and sof_elk_json_bulk_common.py>
+  Linux/linux2sofelk.py (UAC collections: a folder holding uac.log, or a UAC .zip)
+
+A UAC collection is handed to Linux/linux2sofelk.py as a whole and its folder is not
+searched for Windows exports (its [root]/ copy of the host's files could hold CSVs that
+would otherwise be mistaken for KAPE output).
 
 The wrapper only selects files and orchestrates the existing importers. It does not
 parse or index evidence itself.
@@ -20,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Iterable
 
@@ -45,6 +51,11 @@ CSV_IMPORTERS = {
     "SumECmd": ("sumecmd2sofelk.py", "sum"),
     "WxTCmd": ("wxtcmd2sofelk.py", "activitiescache"),
 }
+
+# Linux collections (UAC) go to one front end that runs every Linux importer.
+LINUX_LABEL = "Linux (UAC)"
+LINUX_IMPORTER = ("Linux", "linux2sofelk.py")
+UAC_MARKERS = {"[root]", "journal", "live_response", "bodyfile"}
 
 # CSV importers that do not accept --local-tz.
 NO_LOCAL_TZ = {"NirSoft BrowsingHistoryView", "ConvertUsageLogsTo-CSV"}
@@ -185,17 +196,38 @@ def classify_csv(path: Path, headers: list[str]) -> set[str]:
     return found
 
 
-def discover(root: Path) -> tuple[dict[str, list[Path]], dict[str, list[Path]]]:
-    """Walk the tree once; return selected files for the four JSON and thirteen CSV importers."""
+def is_uac_zip(path: Path) -> bool:
+    """A UAC output archive: a zip with uac.log at its top (or one folder down)."""
+    if path.suffix.lower() != ".zip":
+        return False
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return any(n.replace("\\", "/").rstrip("/").endswith("uac.log") and n.count("/") <= 1
+                       for n in zf.namelist())
+    except (zipfile.BadZipFile, OSError):
+        return False
+
+
+def discover(root: Path) -> tuple[dict[str, list[Path]], dict[str, list[Path]], list[Path]]:
+    """Walk the tree once; return selected files for the four JSON and thirteen CSV importers,
+    and the UAC collections (folders and zips) for the Linux importers."""
     json_files = {name: [] for name in HYBRID_IMPORTERS}
     csv_files = {name: [] for name in CSV_IMPORTERS}
+    linux: list[Path] = []
     # os.walk avoids materializing a list of every descendant path at once.
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if d not in {".git", "__pycache__"} and not d.startswith("sof-elk-import-"))
         directory = Path(dirpath)
+        if "uac.log" in filenames and UAC_MARKERS & set(dirnames):
+            linux.append(directory.resolve())
+            dirnames[:] = []
+            continue
         for filename in filenames:
             path = directory / filename
             lower = filename.lower()
+            if lower.endswith(".zip") and is_uac_zip(path):
+                linux.append(path.resolve())
+                continue
             for importer, (_script, patterns, excludes) in HYBRID_IMPORTERS.items():
                 if has_json_pattern(path, patterns, excludes):
                     json_files[importer].append(path)
@@ -207,7 +239,7 @@ def discover(root: Path) -> tuple[dict[str, list[Path]], dict[str, list[Path]]]:
     for collection in (json_files, csv_files):
         for key in collection:
             collection[key] = sorted(set(p.resolve() for p in collection[key]), key=lambda p: str(p).lower())
-    return json_files, csv_files
+    return json_files, csv_files, sorted(set(linux), key=lambda p: str(p).lower())
 
 
 def locate_script(wrapper_dir: Path, subdir: str, script: str) -> Path | None:
@@ -323,9 +355,40 @@ def run_one(label: str, script_path: Path, input_dir: Path, args: argparse.Names
     return result
 
 
+def run_linux(script_path: Path, evidence: Path, args: argparse.Namespace) -> int:
+    """Run Linux/linux2sofelk.py on one UAC collection (folder or zip), streaming its output."""
+    print("\n" + "=" * 76, flush=True)
+    print(f"[{LINUX_LABEL}] Starting import of {evidence}", flush=True)
+    command = [sys.executable, str(script_path), str(evidence)]
+    # Linux importers read the time zone from the evidence itself, so --local-tz is not passed.
+    add_common_cli_args(command, args, is_json=True, label=LINUX_LABEL)
+    command.extend(["--sample-docs", str(args.sample_docs)])
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    try:
+        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, encoding="utf-8", errors="replace", bufsize=1, env=env)
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            print(line, end="" if line.endswith("\n") else "\n", flush=True)
+        result = proc.wait()
+    except OSError as exc:
+        print(f"[{LINUX_LABEL}] ERROR: could not start importer: {exc}", flush=True)
+        return 127
+    if result == 0:
+        print(f"[{LINUX_LABEL}] Completed successfully", flush=True)
+    elif result == 3:
+        print(f"[{LINUX_LABEL}] ERROR: the journal was not loaded (no journalctl JSON export); see the"
+              " ACTION NEEDED message above", flush=True)
+    else:
+        print(f"[{LINUX_LABEL}] ERROR: importer exited with status {result}", flush=True)
+    return result
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Recursively discover SOF-ELK forensic exports and invoke the matching CSV/JSON importers.",
+        description="Recursively discover SOF-ELK forensic exports and invoke the matching CSV/JSON importers"
+                    " (and the Linux importers for UAC collections).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("directory", help="Root directory to search recursively")
@@ -369,7 +432,7 @@ def main() -> int:
     wrapper_dir = Path(__file__).resolve().parent
     print(f"SOF-ELK Import Wrapper\nInput directory: {root}\nHostname: {args.hostname}\nElasticsearch: {args.es}", flush=True)
     print("Scanning directory tree and checking file signatures...", flush=True)
-    json_files, csv_files = discover(root)
+    json_files, csv_files, linux_collections = discover(root)
 
     todo: list[tuple[str, str, str, list[Path], list[str] | None, bool]] = []
     failed: list[tuple[str, int]] = []
@@ -396,7 +459,11 @@ def main() -> int:
     for label, files in [(x, json_files[x]) for x in HYBRID_IMPORTERS] + [(x, csv_files[x]) for x in CSV_IMPORTERS]:
         print(f"  {label}: {len(files)} file(s)", flush=True)
         total_files += len(files)
-    if not todo:
+    print(f"  {LINUX_LABEL}: {len(linux_collections)} collection(s)", flush=True)
+    for path in linux_collections:
+        print(f"    {path}", flush=True)
+    total_files += len(linux_collections)
+    if not todo and not linux_collections:
         print("No eligible input files found (or all candidates were skipped).", flush=True)
         if not total_files:
             return 1
@@ -415,6 +482,19 @@ def main() -> int:
                 continue
             staged_dir = staging.add(label, files)
             code = run_one(label, script_path, staged_dir, args, staging, extra=extra, is_json=is_json)
+            if code == 0:
+                success += 1
+            else:
+                failed.append((label, code))
+    if linux_collections:
+        script_path = locate_script(wrapper_dir, *LINUX_IMPORTER)
+        for evidence in linux_collections:
+            label = f"{LINUX_LABEL} {evidence.name}"
+            if script_path is None:
+                print(f"[{LINUX_LABEL}] ERROR: could not locate {LINUX_IMPORTER[1]} under {wrapper_dir}", flush=True)
+                failed.append((label, 127))
+                continue
+            code = run_linux(script_path, evidence, args)
             if code == 0:
                 success += 1
             else:

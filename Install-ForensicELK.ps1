@@ -46,7 +46,7 @@
     (sof-elk-templates\, used by evtxlogs-*, filesystem-*, lnkfiles-* and
     the other SOF-ELK indexes) and the toolkit's own templates
     (Windows\index_templates\, AWS\index_templates\,
-    Generic-CSV\index_templates\) from the toolkit checkout it is run from
+    Generic-CSV\index_templates\, Linux\index_templates\) from the toolkit checkout it is run from
     into forensic-elk\templates\, and writes forensic-elk\load-templates.ps1.
     start.bat runs that loader on every start, before any data is ingested,
     so new indexes get the same settings and mappings as on a SOF-ELK VM
@@ -379,13 +379,16 @@ function Copy-IndexTemplates([string]$SourceRoot, [string]$Destination) {
     #             (as the importers name them when they install them)
     # Exclude lists files the importers deliberately never install as index
     # templates: AWS index-httpdlog.json would override SOF-ELK's httpdlog-*
-    # template, so alb2sofelk.py only uses it to create its own index.
+    # template, so alb2sofelk.py only uses it to create its own index. Linux
+    # index-logstash.json is the same for SOF-ELK's logstash-* (the Linux
+    # importers create logstash-<hostname> with it).
     $sources = @(
         @{ Dir = 'sof-elk-templates\component_templates'; ComponentPrefix = ''; IndexPrefix = '' },
         @{ Dir = 'sof-elk-templates\index_templates'; ComponentPrefix = ''; IndexPrefix = '' },
         @{ Dir = 'Windows\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
         @{ Dir = 'AWS\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-httpdlog.json') },
-        @{ Dir = 'Generic-CSV\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' }
+        @{ Dir = 'Generic-CSV\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
+        @{ Dir = 'Linux\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-logstash.json') }
     )
     if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }
     $componentDir = Join-Path $Destination 'component'

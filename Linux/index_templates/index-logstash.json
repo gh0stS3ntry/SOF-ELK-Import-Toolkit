@@ -1,0 +1,556 @@
+{
+  "index_patterns": [
+    "logstash-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-linux-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "logstash",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "message": {
+          "type": "keyword",
+          "ignore_above": 8191,
+          "fields": {
+            "text": {
+              "type": "match_only_text"
+            }
+          }
+        },
+        "log": {
+          "properties": {
+            "syslog": {
+              "properties": {
+                "hostname": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "appname": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "procid": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "msgid": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "priority": {
+                  "type": "integer"
+                },
+                "facility": {
+                  "properties": {
+                    "code": {
+                      "type": "integer"
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "severity": {
+                  "properties": {
+                    "code": {
+                      "type": "integer"
+                    },
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "host": {
+          "properties": {
+            "uptime": {
+              "type": "float"
+            }
+          }
+        },
+        "process": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "pid": {
+              "type": "long"
+            },
+            "executable": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "command_line": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "working_directory": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "user": {
+              "properties": {
+                "id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "group": {
+              "properties": {
+                "id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        },
+        "user": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "effective": {
+              "properties": {
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "target": {
+              "properties": {
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        },
+        "group": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "integer"
+            },
+            "address": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "mac": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "bytes": {
+              "type": "long"
+            }
+          }
+        },
+        "destination": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "integer"
+            },
+            "mac": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "network": {
+          "properties": {
+            "transport": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "bytes": {
+              "type": "long"
+            }
+          }
+        },
+        "observer": {
+          "properties": {
+            "ingress": {
+              "properties": {
+                "interface": {
+                  "properties": {
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                }
+              }
+            },
+            "egress": {
+              "properties": {
+                "interface": {
+                  "properties": {
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "event": {
+          "properties": {
+            "auth_result": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "ssh": {
+          "properties": {
+            "auth_result": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "login_method": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "user_validity": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "version": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "key_type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "key_id": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "disconnect_code": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "disconnect_statement": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "auth_reason": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "source_kex_methods": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "pam": {
+          "properties": {
+            "module": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "service": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "sessiontype": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "event": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "by_user": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "by_uid": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "logname": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "ruser": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "rhost": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "tty": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "sudo": {
+          "properties": {
+            "tty": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "result": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "env": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        "su": {
+          "properties": {
+            "tty": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "result": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "pkexec": {
+          "properties": {
+            "tty": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "result": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        "account": {
+          "properties": {
+            "home": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "shell": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "tty": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "logind": {
+          "properties": {
+            "session_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "iptables": {
+          "properties": {
+            "label": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "ttl": {
+              "type": "integer"
+            },
+            "ether_type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "journald": {
+          "properties": {
+            "transport": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "unit": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "user_unit": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "slice": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "cgroup": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "boot_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "machine_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "cursor": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "seqnum": {
+              "type": "long"
+            },
+            "seqnum_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "monotonic_timestamp": {
+              "type": "long"
+            },
+            "realtime_timestamp": {
+              "type": "long"
+            },
+            "source_realtime": {
+              "type": "date"
+            },
+            "audit_session": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "audit_loginuid": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "runtime_scope": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "message_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "invocation_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "cap_effective": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "selinux_context": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "kernel": {
+              "properties": {
+                "subsystem": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "device": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "udev": {
+              "properties": {
+                "sysname": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "devnode": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "code": {
+              "properties": {
+                "file": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "func": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "line": {
+                  "type": "long"
+                }
+              }
+            },
+            "errno": {
+              "type": "integer"
+            },
+            "extra": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Linux system logs (systemd journal JSON export and text syslog files) loaded by Linux/journal2sofelk.py and Linux/syslog2sofelk.py into logstash-<hostname>. Field names follow SOF-ELK's syslog parsing (1100-preprocess-syslog.conf, 6015-sshd.conf, 6016-pam.conf, 6017-iptables.conf). NOT installed as an index template: SOF-ELK's own logstash-* template stays in charge of its logstash-YYYY.MM indexes; each logstash-<hostname> index is created with this body.",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}

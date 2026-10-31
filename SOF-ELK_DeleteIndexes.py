@@ -60,6 +60,8 @@ TOOLKIT_PREFIXES = frozenset({
     "aws-cloudtrail", "aws-vpcflow", "aws-waf", "httpdlog",
     # Generic-CSV
     "genericcsv",
+    # Linux (journal and text syslog share SOF-ELK's logstash family)
+    "logstash",
 })
 
 # Fields that record which evidence host (or AWS evidence source) a document came from.

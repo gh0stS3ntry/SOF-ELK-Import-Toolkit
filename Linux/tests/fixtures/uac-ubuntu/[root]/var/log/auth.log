@@ -1,0 +1,5 @@
+2026-10-30T22:01:02.123456+00:00 web01 sshd[3001]: Invalid user oracle from 192.0.2.44 port 33000
+2026-10-30T22:01:04.000000+00:00 web01 sshd[3001]: Unable to negotiate with 192.0.2.44 port 33000: no matching key exchange method found. Their offer: diffie-hellman-group1-sha1,diffie-hellman-group14-sha1 [preauth]
+2026-10-30T22:05:00.000000+00:00 web01 pkexec[3100]: carol: Executing command [USER=root] [TTY=unknown] [CWD=/home/carol] [COMMAND=/usr/bin/bash]
+2026-10-30T22:06:00.000000+00:00 web01 passwd[3110]: pam_unix(passwd:chauthtok): password changed for carol
+2026-10-30T22:07:00.000000+00:00 web01 sudo: pam_unix(sudo:auth): authentication failure; logname=carol uid=1002 euid=0 tty=/dev/pts/3 ruser=carol rhost=  user=carol
