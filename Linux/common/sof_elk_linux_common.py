@@ -623,7 +623,8 @@ class LogSource:
 
     name        short name used in messages and --only ("journal", "syslog")
     prefix      index prefix ("logstash")
-    dataset     event.dataset of its documents, used for the index check ("syslog.journal")
+    dataset     event.dataset of its documents, used for the index check ("syslog.journal");
+                a list when one source writes several datasets ("linux.account", "linux.cron", ...)
     collect     (ev, profile, args) -> list of work items, or None if there is nothing to do
     parse       (ev, profile, args, item, report) -> iterator of (id_parts, doc) or (None, reason)
     missing     optional (ev, profile, args) -> (exit code, message) when collect found nothing
@@ -806,11 +807,13 @@ def run_source(source, ev, profile, args, es):
     new = total["ok"] - total["updated"]
     print(f"Done: {total['records']} record(s) read -> {new} new documents, {total['updated']}"
           f" already in index (re-run), {total['errors']} errors.")
+    datasets = source.dataset if isinstance(source.dataset, (list, tuple)) else [source.dataset]
     query = {"bool": {"filter": [{"term": {"host.name": profile.hostname}},
-                                 {"term": {"event.dataset": source.dataset}}]}}
+                                 {"terms": {"event.dataset": list(datasets)}}]}}
     in_index = es.count(index, query)
     if in_index is not None:
         verdict = "matches" if in_index == total["records"] else "DOES NOT MATCH"
-        print(f"Index check: '{index}' holds {in_index} {source.dataset} documents for host"
+        label = datasets[0] if len(datasets) == 1 else f"{source.name} ({len(datasets)} datasets)"
+        print(f"Index check: '{index}' holds {in_index} {label} documents for host"
               f" '{profile.hostname}' ({verdict} the {total['records']} records read).")
     return 1 if total["errors"] else 0

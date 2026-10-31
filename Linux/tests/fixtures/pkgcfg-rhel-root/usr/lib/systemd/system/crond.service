@@ -1,0 +1,6 @@
+[Unit]
+Description=Command Scheduler
+[Service]
+ExecStart=/usr/sbin/crond -n $CRONDARGS
+[Install]
+WantedBy=multi-user.target

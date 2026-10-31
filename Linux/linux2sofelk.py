@@ -12,6 +12,11 @@ Sources loaded (use --only to pick some):
            (journal2sofelk.py; event.dataset syslog.journal)
   syslog   text syslog files under /var/log (auth.log, secure,   -> logstash-<hostname>
            messages, syslog, ...; syslog2sofelk.py; event.dataset syslog.file)
+  packages package history and installed packages: dpkg, apt,     -> packages-<hostname>
+           dnf, yum, zypper, rpm, apk (packages2sofelk.py; event.dataset packages.*)
+  linuxconfig  accounts (shadow metadata only), groups, sudoers,  -> linuxconfig-<hostname>
+           cron, systemd units, init/profile scripts, autostart, SSH keys, hosts, resolver,
+           ld.so.preload, repositories (linuxconfig2sofelk.py; event.dataset linux.*)
 
 Exit status: 0 when everything loaded, 1 when Elasticsearch rejected documents, 3 when the
 collection has binary journal files but no JSON export (the journal was not loaded; the
@@ -27,10 +32,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "common"))
 
 from journal2sofelk import JOURNAL  # noqa: E402
+from linuxconfig2sofelk import LINUXCONFIG  # noqa: E402
+from packages2sofelk import PACKAGES  # noqa: E402
 from sof_elk_linux_common import run_sources  # noqa: E402
 from syslog2sofelk import SYSLOG  # noqa: E402
 
-SOURCES = [JOURNAL, SYSLOG]
+SOURCES = [JOURNAL, SYSLOG, PACKAGES, LINUXCONFIG]
 
 
 def main(argv=None):

@@ -1,0 +1,6 @@
+127.0.0.1	localhost
+127.0.1.1	deb01
+203.0.113.50	updates.example.com # pinned
+#10.10.10.5	dc01.corp.local corp.local
+# The following lines are desirable for IPv6 capable hosts
+::1     localhost ip6-localhost ip6-loopback
