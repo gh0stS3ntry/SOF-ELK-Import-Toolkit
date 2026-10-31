@@ -61,7 +61,7 @@ TOOLKIT_PREFIXES = frozenset({
     # Generic-CSV
     "genericcsv",
     # Linux (journal and text syslog share SOF-ELK's logstash family)
-    "logstash",
+    "logstash", "auditd", "bodyfile", "wtmp",
 })
 
 # Fields that record which evidence host (or AWS evidence source) a document came from.

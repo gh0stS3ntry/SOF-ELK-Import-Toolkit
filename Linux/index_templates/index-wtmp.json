@@ -1,0 +1,126 @@
+{
+  "index_patterns": [
+    "wtmp-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-linux-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "wtmp",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "user": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "address": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "process": {
+          "properties": {
+            "pid": {
+              "type": "long"
+            }
+          }
+        },
+        "event": {
+          "properties": {
+            "start": {
+              "type": "date"
+            },
+            "end": {
+              "type": "date"
+            },
+            "duration": {
+              "type": "long"
+            }
+          }
+        },
+        "wtmp": {
+          "properties": {
+            "source": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "type": {
+              "type": "integer"
+            },
+            "type_name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "line": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "user": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "host": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "session": {
+              "type": "long"
+            },
+            "exit": {
+              "properties": {
+                "termination": {
+                  "type": "integer"
+                },
+                "status": {
+                  "type": "integer"
+                }
+              }
+            },
+            "runlevel": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "previous_runlevel": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "logout_type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "service": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "record_id": {
+              "type": "long"
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Linux login records (wtmp2sofelk.py): wtmp, btmp and wtmpdb, one document per record, logins paired with logouts",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}

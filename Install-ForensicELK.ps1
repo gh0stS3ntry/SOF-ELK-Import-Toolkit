@@ -381,7 +381,9 @@ function Copy-IndexTemplates([string]$SourceRoot, [string]$Destination) {
     # templates: AWS index-httpdlog.json would override SOF-ELK's httpdlog-*
     # template, so alb2sofelk.py only uses it to create its own index. Linux
     # index-logstash.json is the same for SOF-ELK's logstash-* (the Linux
-    # importers create logstash-<hostname> with it).
+    # importers create logstash-<hostname> with it). The other Linux templates
+    # (index-auditd.json, index-bodyfile.json, index-wtmp.json) are toolkit-only
+    # families and are installed as sofelk-toolkit-auditd/-bodyfile/-wtmp.
     $sources = @(
         @{ Dir = 'sof-elk-templates\component_templates'; ComponentPrefix = ''; IndexPrefix = '' },
         @{ Dir = 'sof-elk-templates\index_templates'; ComponentPrefix = ''; IndexPrefix = '' },
