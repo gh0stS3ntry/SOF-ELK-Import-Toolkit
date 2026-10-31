@@ -1,0 +1,6 @@
+type=ADD_USER msg=audit(1767225500.101:880): pid=2101 uid=0 auid=1000 ses=4 subj=unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023 msg='op=add-user id=1002 exe="/usr/sbin/useradd" hostname=web02 addr=? terminal=pts/0 res=success'
+type=USER_CHAUTHTOK msg=audit(1767225510.202:881): pid=2110 uid=0 auid=1000 ses=4 subj=unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023 msg='op=PAM:chauthtok grantors=pam_pwquality,pam_unix acct="backdoor" exe="/usr/bin/passwd" hostname=web02 addr=? terminal=pts/0 res=success'
+type=SYSCALL msg=audit(1767225600.303:900): arch=c000003e syscall=313 success=yes exit=0 a0=3 a1=55d0c0a1b2c3 a2=0 a3=0 items=0 ppid=2200 pid=2201 auid=1000 uid=0 gid=0 euid=0 suid=0 fsuid=0 egid=0 sgid=0 fsgid=0 tty=pts0 ses=4 comm="insmod" exe="/usr/bin/kmod" subj=unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023 key="modules"
+type=KERN_MODULE msg=audit(1767225600.303:900): name="diamorphine"
+type=PROCTITLE msg=audit(1767225600.303:900): proctitle=696E736D6F64006469616D6F727068696E652E6B6F
+type=EOE msg=audit(1767225600.303:900): 

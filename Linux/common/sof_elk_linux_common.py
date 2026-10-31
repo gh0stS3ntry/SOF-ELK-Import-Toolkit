@@ -582,6 +582,59 @@ class HostProfile:
         return ", ".join(bits)
 
 
+def load_accounts(ev):
+    """({uid: name}, {gid: name}) from the evidence's /etc/passwd and /etc/group.
+
+    Only the name and numeric id columns are read; /etc/shadow is never opened. Ids are
+    strings, as in the documents. The names are those at collection time: an account deleted
+    or renumbered earlier is not resolved, or resolves to its later owner.
+    """
+    users, groups = {}, {}
+    for rel, table in (("etc/passwd", users), ("etc/group", groups)):
+        for line in (ev.read_text(ev.root_path(rel)) or "").splitlines():
+            parts = line.split(":")
+            if len(parts) >= 3 and parts[0] and parts[2].isdigit() and not line.startswith("#"):
+                table.setdefault(parts[2], parts[0])
+    return users, groups
+
+
+class EvidenceOrDiskFile:
+    """A file named on the command line: inside the evidence, or anywhere on disk.
+
+    Lets --bodyfile / --audit-log point at an export that is not part of the collection
+    (for example the output of `fls -r -m /` run against an image)."""
+
+    def __init__(self, ev, path):
+        self.ev = ev
+        as_member = path.replace("\\", "/").strip("/")
+        rel = ev.root_path(as_member)
+        disk = Path(path).expanduser()
+        if ev.exists(as_member):
+            self.rel, self.disk = as_member, None
+        elif ev.exists(rel):
+            self.rel, self.disk = rel, None
+        elif disk.is_file():
+            self.rel, self.disk = None, disk.resolve()
+        else:
+            raise FileNotFoundError(path)
+
+    @classmethod
+    def member(cls, ev, rel):
+        """A file known to be in the evidence, by its container path."""
+        obj = cls.__new__(cls)
+        obj.ev, obj.rel, obj.disk = ev, rel, None
+        return obj
+
+    def __str__(self):
+        return str(self.disk) if self.disk else self.rel
+
+    def open_binary(self):
+        return open_compressed(self.disk) if self.disk else self.ev.open_binary(self.rel)
+
+    def open_text(self):
+        return io.TextIOWrapper(self.open_binary(), encoding="utf-8", errors="replace", newline="")
+
+
 # --------------------------------------------------------------------------- templates
 
 def _load_json(name, folder=TEMPLATE_DIR):
@@ -638,6 +691,9 @@ def unknown_fields(doc, exact):
             path = f"{prefix}{k}"
             if isinstance(v, dict):
                 walk(v, path + ".")
+            elif isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
+                for x in v:  # an array of objects maps like one object
+                    walk(x, path + ".")
             elif path not in exact:
                 out.append(path)
 

@@ -476,7 +476,7 @@ class BrowserTests(TemplateCheck):
 class FrontEndTests(unittest.TestCase):
     def test_sources_registered(self):
         self.assertEqual([s.name for s in linux2sofelk.SOURCES],
-                         ["journal", "syslog", "packages", "linuxconfig", "httpd", "browser", "vsftpd"])
+                         ["journal", "syslog", "auditd", "bodyfile", "wtmp", "packages", "linuxconfig", "httpd", "browser", "vsftpd"])
 
     def test_installer_excludes_httpdlog_template(self):
         """Install-ForensicELK.ps1 must not install either httpdlog template (SOF-ELK owns httpdlog-*)."""

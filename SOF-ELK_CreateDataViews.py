@@ -32,6 +32,9 @@ Create the Kibana Data Views used with the SOF-ELK direct-import toolkit.
   aws-vpcflow-*       AWS/vpcflow2sofelk.py (VPC Flow Logs)
   aws-waf-*           AWS/waf2sofelk.py (AWS WAF)
   genericcsv-*        Generic-CSV/genericcsv2sofelk.py (any CSV, fields from its header)
+  auditd-*            Linux/auditd2sofelk.py (Linux audit log, one document per event)
+  bodyfile-*          Linux/bodyfile2sofelk.py (Linux bodyfile file system timeline)
+  wtmp-*              Linux/wtmp2sofelk.py (wtmp, btmp and wtmpdb login records)
   packages-*          Linux/packages2sofelk.py (package history and installed packages)
   linuxconfig-*       Linux/linuxconfig2sofelk.py (accounts and persistence snapshot)
 
@@ -39,7 +42,8 @@ filesystem-*, evtxlogs-*, lnkfiles-* and prefetch-* come from SOF-ELK's set in
 step 1. The toolkit's AWS indexes get their own, narrower patterns so they do not
 mix with SOF-ELK's aws-* (Logstash CloudTrail output, aws-YYYY.MM). ALB/ELB access
 logs from AWS/alb2sofelk.py go to httpdlog-<source>, which SOF-ELK's httpdlog-*
-Data View covers.
+Data View covers. The Linux journal and text syslog go to logstash-<hostname>, which
+SOF-ELK's logstash-* Data View covers.
 
 Standard library only.
 """
@@ -76,6 +80,9 @@ DATA_VIEWS = [
     ("aws-vpcflow", "aws-vpcflow-*"),
     ("aws-waf", "aws-waf-*"),
     ("genericcsv", "genericcsv-*"),
+    ("auditd", "auditd-*"),
+    ("bodyfile", "bodyfile-*"),
+    ("wtmp", "wtmp-*"),
     ("packages", "packages-*"),
     ("linuxconfig", "linuxconfig-*"),
 ]

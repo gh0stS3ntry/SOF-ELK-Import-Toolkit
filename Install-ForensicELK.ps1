@@ -384,6 +384,9 @@ function Copy-IndexTemplates([string]$SourceRoot, [string]$Destination) {
     # logstash-* and httpdlog-* (the Linux importers create logstash-<hostname>
     # and httpdlog-<hostname> with them). Linux browser history uses
     # Windows\index_templates\index-browsinghistory.json.
+    # The other Linux templates (index-auditd.json, index-bodyfile.json,
+    # index-wtmp.json, index-packages.json, index-linuxconfig.json) are
+    # toolkit-only families, installed as sofelk-toolkit-<name>.
     $sources = @(
         @{ Dir = 'sof-elk-templates\component_templates'; ComponentPrefix = ''; IndexPrefix = '' },
         @{ Dir = 'sof-elk-templates\index_templates'; ComponentPrefix = ''; IndexPrefix = '' },
