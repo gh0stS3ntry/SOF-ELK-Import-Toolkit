@@ -1,6 +1,6 @@
 # SOF-ELK Import Toolkit
 
-This package contains a recursive wrapper and seventeen standalone Python importers for Windows forensic artifacts, four importers for AWS logs (CloudTrail, VPC Flow Logs, ALB/ELB access logs and AWS WAF; see [`AWS/README.md`](AWS/README.md)), a generic CSV importer for any other CSV export ([`Generic-CSV/README.md`](Generic-CSV/README.md)), Linux importers for the systemd journal and text syslog in UAC collections and collected root filesystems ([`Linux/README.md`](Linux/README.md)), and an ES|QL hunting pack with checklists ([`hunting/`](hunting/README.md)), for loading forensic CSV and JSON exports directly into Elasticsearch indexes used by SOF-ELK without relying on Logstash or Filebeat. The importers do not run KAPE, NirSoft, or Eric Zimmerman tools; they ingest exports that those tools have already produced.
+This package contains a recursive wrapper and seventeen standalone Python importers for Windows forensic artifacts, four importers for AWS logs (CloudTrail, VPC Flow Logs, ALB/ELB access logs and AWS WAF; see [`AWS/README.md`](AWS/README.md)), a generic CSV importer for any other CSV export ([`Generic-CSV/README.md`](Generic-CSV/README.md)), Linux importers for the systemd journal, text syslog, web server logs, browser history and FTP logs in UAC collections and collected root filesystems ([`Linux/README.md`](Linux/README.md)), and an ES|QL hunting pack with checklists ([`hunting/`](hunting/README.md)), for loading forensic CSV and JSON exports directly into Elasticsearch indexes used by SOF-ELK without relying on Logstash or Filebeat. The importers do not run KAPE, NirSoft, or Eric Zimmerman tools; they ingest exports that those tools have already produced.
 
 ## Contents
 
@@ -64,6 +64,9 @@ sof_elk_all_importers/
 │   ├── linux2sofelk.py      (runs every Linux importer on one collection)
 │   ├── journal2sofelk.py
 │   ├── syslog2sofelk.py
+│   ├── httpd2sofelk.py
+│   ├── browser2sofelk.py
+│   ├── vsftpd2sofelk.py
 │   ├── common/
 │   │   ├── sof_elk_linux_common.py
 │   │   └── sof_elk_linux_messages.py
@@ -151,6 +154,9 @@ Hostnames are normalized the same way by every importer: lowercased (Elasticsear
 | `json_importers/pecmd2sofelk.py` | Eric Zimmerman PECmd | JSON / JSON.GZ / CSV | `prefetch-<hostname>` |
 | `Linux/journal2sofelk.py` | systemd journal (`journalctl -o json` export) | JSON lines | `logstash-<hostname>` (`event.dataset` `syslog.journal`) |
 | `Linux/syslog2sofelk.py` | text syslog under `/var/log` (Debian, RHEL, SUSE and Alpine layouts, rotated and compressed) | text | `logstash-<hostname>` (`event.dataset` `syslog.file`) |
+| `Linux/httpd2sofelk.py` | Apache httpd, nginx and lighttpd access and error logs | text | `httpdlog-<hostname>` (`event.dataset` `apache.access`, `nginx.error`, ...) |
+| `Linux/browser2sofelk.py` | Firefox and Chromium-family history and downloads | SQLite | `browsinghistory-<hostname>` (`event.dataset` `browsinghistory`, `browsinghistory.download`) |
+| `Linux/vsftpd2sofelk.py` | vsftpd and xferlog FTP server logs | text | `logstash-<hostname>` (`event.dataset` `ftp.vsftpd`, `ftp.xferlog`) |
 
 The per-host index names are intended to be discovered by the corresponding Kibana wildcard Data Views, such as `filesystem-*`, `evtxlogs-*`, `lnkfiles-*`, `prefetch-*`, `browsinghistory-*`, `jumplist-*`, `shellbag-*`, `amcache-*`, `shimcache-*`, `registry-*`, `recyclebin-*`, `recentfilecache-*`, `sqlitedb-*`, `srum-*`, `sum-*`, and `activitiescache-*`, and `clrusagelogs-*`. These per-host names intentionally differ from SOF-ELK's conventional monthly `base_index-YYYY.MM` Logstash output names.
 
@@ -466,7 +472,7 @@ The script also applies SOF-ELK's Kibana advanced settings from `sof-elk-kibana/
 | `AWS/waf2sofelk.py` | `aws-waf-*` | `aws-waf-<source>` |
 | `Generic-CSV/genericcsv2sofelk.py` | `genericcsv-*` | `genericcsv-<hostname>` |
 
-The `filesystem-*`, `evtxlogs-*`, `lnkfiles-*` and `prefetch-*` Data Views come from SOF-ELK's set. The AWS importers' indexes get the narrower patterns above, next to SOF-ELK's own `aws-*` Data View (for its Logstash CloudTrail output). `AWS/alb2sofelk.py` writes ALB/ELB access logs to `httpdlog-<source>`, which SOF-ELK's stock `httpdlog-*` Data View already covers. The Linux importers write the journal and text syslog to `logstash-<hostname>`, which SOF-ELK's stock `logstash-*` Data View (Kibana's default) already covers, so no extra Data View is created for them.
+The `filesystem-*`, `evtxlogs-*`, `lnkfiles-*` and `prefetch-*` Data Views come from SOF-ELK's set. The AWS importers' indexes get the narrower patterns above, next to SOF-ELK's own `aws-*` Data View (for its Logstash CloudTrail output). `AWS/alb2sofelk.py` writes ALB/ELB access logs to `httpdlog-<source>`, which SOF-ELK's stock `httpdlog-*` Data View already covers. The Linux importers write the journal, text syslog and FTP logs to `logstash-<hostname>` and web server logs to `httpdlog-<hostname>`, which SOF-ELK's stock `logstash-*` (Kibana's default) and `httpdlog-*` Data Views already cover, and browser history to `browsinghistory-<hostname>`, covered by the toolkit's `browsinghistory-*` Data View, so no extra Data View is created for them.
 
 The script uses Kibana's Data Views API and is standard-library only. By default it is idempotent: an existing Data View is detected and left unchanged. Use `--overwrite` to delete and recreate the managed views (SOF-ELK's are recreated with the same ids, so its dashboards keep working on a SOF-ELK VM). The Data Views are configured to use `@timestamp` as the time field and `allowNoIndex=true`, so they can be created before the first corresponding Elasticsearch index exists.
 
@@ -589,7 +595,7 @@ It creates `forensic-elk\`, downloads both Windows zips from artifacts.elastic.c
 | `discovery.type` | `single-node` | Standalone node; no production bootstrap checks for the non-loopback bind. |
 | `xpack.security.enabled` (and enrollment, HTTP/transport TLS) | `false` | No username or password for the Kibana UI or the REST APIs. Written before the first start, so Elasticsearch never auto-generates TLS certificates or the `elastic` password. |
 | `elasticsearch.hosts` | `http://127.0.0.1:9200` | Connects Kibana to Elasticsearch. With security disabled there is no enrolment token to use; this is the whole integration. |
-| Index templates | SOF-ELK's native component and index templates from [`sof-elk-templates/`](sof-elk-templates/README.md) (`evtxlogs`, `filesystem`, `lnkfiles`, `aws`, `zeek` and the rest, under SOF-ELK's own names), plus the toolkit's templates from `Windows/`, `AWS/`, `Generic-CSV/` and `Linux/index_templates/` (`sofelk-toolkit-*`; `AWS/index_templates/index-httpdlog.json` and `Linux/index_templates/index-logstash.json` are left out, as their importers never install them as templates over SOF-ELK's own families) | New indexes get the same settings and mappings as on a SOF-ELK VM with the toolkit, even before the first import. Copied to `forensic-elk\templates\` and loaded by `forensic-elk\load-templates.ps1`. |
+| Index templates | SOF-ELK's native component and index templates from [`sof-elk-templates/`](sof-elk-templates/README.md) (`evtxlogs`, `filesystem`, `lnkfiles`, `aws`, `zeek` and the rest, under SOF-ELK's own names), plus the toolkit's templates from `Windows/`, `AWS/`, `Generic-CSV/` and `Linux/index_templates/` (`sofelk-toolkit-*`; `AWS/index_templates/index-httpdlog.json`, `Linux/index_templates/index-httpdlog.json` and `Linux/index_templates/index-logstash.json` are left out, as their importers never install them as templates over SOF-ELK's own families) | New indexes get the same settings and mappings as on a SOF-ELK VM with the toolkit, even before the first import. Copied to `forensic-elk\templates\` and loaded by `forensic-elk\load-templates.ps1`. |
 | Firewall rules (group "Forensic ELK") | Inbound TCP 9200/5601 from `LocalSubnet`, tied to the bundled `java.exe`/`node.exe` | Lets VMs on host-only/NAT/Hyper-V networks connect. Change the scope with `-FirewallRemoteAddress 192.168.56.0/24`, or skip with `-SkipFirewall`. Without Administrator rights the script skips this and warns. |
 
 Other options: `-InstallRoot DIR` (where `forensic-elk` is created; default is the current directory), `-HeapSize 4g` (fixed JVM heap instead of automatic sizing), `-SkipTemplates` (do not stage or load any templates), `-NoStart` (configure only), `-KeepDownloads` (keep the zip files), and `-StartupTimeoutSeconds N` (how long `start.bat` waits for each service; default 300).

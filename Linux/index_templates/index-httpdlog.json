@@ -1,0 +1,252 @@
+{
+  "index_patterns": [
+    "httpdlog-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-linux-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "httpdlog",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "message": {
+          "type": "keyword",
+          "ignore_above": 8191,
+          "fields": {
+            "text": {
+              "type": "match_only_text"
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "integer"
+            },
+            "address": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "bytes": {
+              "type": "long"
+            }
+          }
+        },
+        "destination": {
+          "properties": {
+            "port": {
+              "type": "integer"
+            },
+            "bytes": {
+              "type": "long"
+            }
+          }
+        },
+        "client": {
+          "properties": {
+            "user": {
+              "properties": {
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        },
+        "server": {
+          "properties": {
+            "user": {
+              "properties": {
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        },
+        "http": {
+          "properties": {
+            "version": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "request": {
+              "properties": {
+                "method": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "referrer": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                }
+              }
+            },
+            "response": {
+              "properties": {
+                "status_code": {
+                  "type": "short"
+                }
+              }
+            }
+          }
+        },
+        "url": {
+          "properties": {
+            "original": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "scheme": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "domain": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "path": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "query": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "extension": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "user_agent": {
+          "properties": {
+            "original": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        "tls": {
+          "properties": {
+            "cipher": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "protocol": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "sof-elk": {
+          "properties": {
+            "rawrequest": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        "log": {
+          "properties": {
+            "level": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "process": {
+          "properties": {
+            "pid": {
+              "type": "long"
+            },
+            "thread": {
+              "properties": {
+                "id": {
+                  "type": "long"
+                }
+              }
+            }
+          }
+        },
+        "error": {
+          "properties": {
+            "code": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "message": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            }
+          }
+        },
+        "apache": {
+          "properties": {
+            "error": {
+              "properties": {
+                "module": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        },
+        "httpd": {
+          "properties": {
+            "extra": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "connection_id": {
+              "type": "long"
+            },
+            "server_name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "upstream": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Linux web server logs (Apache httpd, nginx, lighttpd) loaded by Linux/httpd2sofelk.py into httpdlog-<hostname>. SOF-ELK httpd field names; types match AWS/index_templates/index-httpdlog.json so httpdlog-* queries span both. Used as the index body only: no index template is installed for httpdlog-*, which is SOF-ELK's own family.",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}

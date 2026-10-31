@@ -380,15 +380,17 @@ function Copy-IndexTemplates([string]$SourceRoot, [string]$Destination) {
     # Exclude lists files the importers deliberately never install as index
     # templates: AWS index-httpdlog.json would override SOF-ELK's httpdlog-*
     # template, so alb2sofelk.py only uses it to create its own index. Linux
-    # index-logstash.json is the same for SOF-ELK's logstash-* (the Linux
-    # importers create logstash-<hostname> with it).
+    # index-logstash.json and index-httpdlog.json are the same for SOF-ELK's
+    # logstash-* and httpdlog-* (the Linux importers create logstash-<hostname>
+    # and httpdlog-<hostname> with them). Linux browser history uses
+    # Windows\index_templates\index-browsinghistory.json.
     $sources = @(
         @{ Dir = 'sof-elk-templates\component_templates'; ComponentPrefix = ''; IndexPrefix = '' },
         @{ Dir = 'sof-elk-templates\index_templates'; ComponentPrefix = ''; IndexPrefix = '' },
         @{ Dir = 'Windows\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
         @{ Dir = 'AWS\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-httpdlog.json') },
         @{ Dir = 'Generic-CSV\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
-        @{ Dir = 'Linux\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-logstash.json') }
+        @{ Dir = 'Linux\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-logstash.json', 'index-httpdlog.json') }
     )
     if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }
     $componentDir = Join-Path $Destination 'component'

@@ -56,11 +56,12 @@ TOOLKIT_PREFIXES = frozenset({
     "registry", "recyclebin", "recentfilecache", "sqlitedb", "srum", "sum", "activitiescache",
     # Windows/json_importers
     "filesystem", "evtxlogs", "lnkfiles", "prefetch",
-    # AWS
+    # AWS (httpdlog also holds Linux/httpd2sofelk.py web server logs)
     "aws-cloudtrail", "aws-vpcflow", "aws-waf", "httpdlog",
     # Generic-CSV
     "genericcsv",
-    # Linux (journal and text syslog share SOF-ELK's logstash family)
+    # Linux (journal, text syslog and vsftpd share SOF-ELK's logstash family; web logs go to
+    # httpdlog and browser history to browsinghistory, both listed above)
     "logstash",
 })
 

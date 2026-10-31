@@ -544,6 +544,95 @@
               "ignore_above": 8191
             }
           }
+        },
+        "file": {
+          "properties": {
+            "path": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "ftp": {
+          "properties": {
+            "action": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "command": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "command_arg": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "response": {
+              "properties": {
+                "code": {
+                  "type": "integer"
+                },
+                "message": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                }
+              }
+            },
+            "transfer": {
+              "properties": {
+                "bytes": {
+                  "type": "long"
+                },
+                "rate": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "duration": {
+                  "type": "long"
+                },
+                "type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "direction": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "special_action": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "access_mode": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "service": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "auth_method": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "auth_user_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "completion": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "rename_to": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
         }
       }
     }

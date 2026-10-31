@@ -1,0 +1,1 @@
+shop.example.com:443 203.0.113.50 - - [30/Oct/2026:22:18:00 +0800] "GET /cart?id=7 HTTP/2.0" 200 1500 "https://shop.example.com/" "Mozilla/5.0"
