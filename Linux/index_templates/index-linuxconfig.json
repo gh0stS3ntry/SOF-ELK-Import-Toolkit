@@ -1,0 +1,585 @@
+{
+  "index_patterns": [
+    "linuxconfig-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-linux-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "linuxconfig",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "file": {
+          "properties": {
+            "path": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "directory": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "mtime": {
+              "type": "date"
+            },
+            "ctime": {
+              "type": "date"
+            },
+            "uid": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "gid": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "mode": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "size": {
+              "type": "long"
+            },
+            "type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "target_path": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        "process": {
+          "properties": {
+            "command_line": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "executable": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        "user": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "full_name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "group": {
+              "properties": {
+                "id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        },
+        "group": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "url": {
+          "properties": {
+            "original": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "scheme": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "domain": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "linuxconfig": {
+          "properties": {
+            "kind": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "mtime_source": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "line": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "line_number": {
+              "type": "integer"
+            },
+            "flags": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "account": {
+              "properties": {
+                "gecos": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "home": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "shell": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "login_shell": {
+                  "type": "boolean"
+                },
+                "system_account": {
+                  "type": "boolean"
+                },
+                "state": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "password_state": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "password_algorithm": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "password_last_changed": {
+                  "type": "date"
+                },
+                "password_min_days": {
+                  "type": "integer"
+                },
+                "password_max_days": {
+                  "type": "integer"
+                },
+                "password_warn_days": {
+                  "type": "integer"
+                },
+                "password_inactive_days": {
+                  "type": "integer"
+                },
+                "account_expires": {
+                  "type": "date"
+                }
+              }
+            },
+            "group": {
+              "properties": {
+                "members": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "primary_members": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "previous_members": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "members_added": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "members_removed": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "privileged": {
+                  "type": "boolean"
+                },
+                "state": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "sudoers": {
+              "properties": {
+                "principals": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "principal_type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "hosts": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "runas": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "tags": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "commands": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "nopasswd": {
+                  "type": "boolean"
+                },
+                "all_commands": {
+                  "type": "boolean"
+                },
+                "defaults": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "defaults_scope": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "alias_type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "alias_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "include": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                }
+              }
+            },
+            "cron": {
+              "properties": {
+                "source": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "schedule": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "variable_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "variable_value": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "job_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "delay_minutes": {
+                  "type": "integer"
+                }
+              }
+            },
+            "systemd": {
+              "properties": {
+                "unit": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "unit_type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "scope": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "origin": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "description": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "exec_start": {
+                  "type": "keyword",
+                  "ignore_above": 8191,
+                  "fields": {
+                    "text": {
+                      "type": "match_only_text"
+                    }
+                  }
+                },
+                "exec_other": {
+                  "type": "keyword",
+                  "ignore_above": 8191,
+                  "fields": {
+                    "text": {
+                      "type": "match_only_text"
+                    }
+                  }
+                },
+                "service_type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "run_as_user": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "environment": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "wanted_by": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "enabled_by": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "masked": {
+                  "type": "boolean"
+                },
+                "link_kind": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "link_target": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "link_inferred": {
+                  "type": "boolean"
+                },
+                "timer_schedule": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "triggers_unit": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "listen": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "path_watch": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                }
+              }
+            },
+            "init": {
+              "properties": {
+                "kind": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "autostart": {
+              "properties": {
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "hidden": {
+                  "type": "boolean"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "only_show_in": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "not_show_in": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "ssh": {
+              "properties": {
+                "key_type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "fingerprint": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "comment": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "options": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "forced_command": {
+                  "type": "keyword",
+                  "ignore_above": 8191,
+                  "fields": {
+                    "text": {
+                      "type": "match_only_text"
+                    }
+                  }
+                },
+                "from": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "marker": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "hashed": {
+                  "type": "boolean"
+                },
+                "hosts": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "hosts": {
+              "properties": {
+                "ip": {
+                  "type": "ip"
+                },
+                "names": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "commented": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "resolver": {
+              "properties": {
+                "directive": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "values": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "servers": {
+                  "type": "ip"
+                }
+              }
+            },
+            "ld": {
+              "properties": {
+                "entry": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                }
+              }
+            },
+            "repository": {
+              "properties": {
+                "manager": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "urls": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "suites": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "components": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "gpgcheck": {
+                  "type": "boolean"
+                },
+                "signed_by": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "trusted": {
+                  "type": "boolean"
+                },
+                "options": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Linux accounts and persistence snapshot (Linux/linuxconfig2sofelk.py): one document per account, group, sudoers rule, cron entry, systemd unit, script line, SSH key, hosts entry, resolver/loader setting, repository; ECS user/group/file/process/url + toolkit linuxconfig.*",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}

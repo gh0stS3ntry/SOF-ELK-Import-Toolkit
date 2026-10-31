@@ -1,0 +1,9 @@
+# /etc/sudoers
+Defaults	env_reset
+Defaults	env_keep += "LD_PRELOAD"
+Cmnd_Alias SHELLS = /bin/sh, /bin/bash
+root	ALL=(ALL:ALL) ALL
+%sudo	ALL=(ALL:ALL) ALL
+www-data ALL=(root) NOPASSWD: /usr/bin/find, \
+    /usr/bin/vim
+@includedir /etc/sudoers.d

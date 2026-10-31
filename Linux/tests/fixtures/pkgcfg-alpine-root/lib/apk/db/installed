@@ -1,0 +1,20 @@
+C:Q1abc=
+P:busybox
+V:1.36.1-r29
+A:x86_64
+S:500000
+I:900000
+T:Size optimized toolbox of many common UNIX utilities
+U:https://busybox.net/
+L:GPL-2.0-only
+o:busybox
+m:Sören Tempel <soeren+alpine@soeren-tempel.net>
+t:1718000000
+
+C:Q1def=
+P:socat
+V:1.8.0.0-r0
+A:x86_64
+T:Multipurpose relay for binary protocols
+t:1718100000
+

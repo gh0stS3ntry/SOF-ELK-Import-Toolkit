@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Updater
+Exec=/usr/local/bin/.sysupdate --gui
+X-GNOME-Autostart-enabled=true
+OnlyShowIn=GNOME;XFCE;

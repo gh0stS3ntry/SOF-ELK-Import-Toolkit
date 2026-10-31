@@ -2,14 +2,18 @@
 
 Importers that load a Linux evidence collection straight into SOF-ELK's Elasticsearch, without Logstash or Filebeat. Like the rest of the toolkit they use only the Python standard library (3.9+) and the retrying `_bulk` client in `../Windows/common/sof_elk_es_client.py`, so keep `Linux/` and `Windows/` side by side. They run on Windows as well as Linux.
 
-| Script | Evidence | Index | `event.dataset` | Field reference |
-|---|---|---|---|---|
-| `journal2sofelk.py` | systemd journal, as a `journalctl -o json` export | `logstash-<hostname>` | `syslog.journal` | [linux-logstash.md](../docs/schemas/linux-logstash.md) |
-| `syslog2sofelk.py` | text syslog files under `/var/log` (current and rotated) | `logstash-<hostname>` | `syslog.file` | [linux-logstash.md](../docs/schemas/linux-logstash.md) |
-| `auditd2sofelk.py` | `/var/log/audit/audit.log*`, one document per audit event | `auditd-<hostname>` | `auditd.log` | [linux-auditd.md](../docs/schemas/linux-auditd.md) |
-| `bodyfile2sofelk.py` | bodyfile (UAC `bodyfile/bodyfile.txt`, or `fls -r -m /`) with UAC executable hashes | `bodyfile-<hostname>` | `bodyfile` | [linux-bodyfile.md](../docs/schemas/linux-bodyfile.md) |
-| `wtmp2sofelk.py` | login records: `wtmp`, `btmp`, `wtmpdb` | `wtmp-<hostname>` | `wtmp` | [linux-wtmp.md](../docs/schemas/linux-wtmp.md) |
-| `linux2sofelk.py` | runs all of the above on one collection | all | all | |
+| Script | Evidence | Index | `event.dataset` |
+|---|---|---|---|
+| `journal2sofelk.py` | systemd journal, as a `journalctl -o json` export | `logstash-<hostname>` | `syslog.journal` |
+| `syslog2sofelk.py` | text syslog files under `/var/log` (current and rotated) | `logstash-<hostname>` | `syslog.file` |
+| `auditd2sofelk.py` | `/var/log/audit/audit.log*`, one document per audit event | `auditd-<hostname>` | `auditd.log` |
+| `bodyfile2sofelk.py` | bodyfile (UAC `bodyfile/bodyfile.txt`, or `fls -r -m /`) with UAC executable hashes | `bodyfile-<hostname>` | `bodyfile` |
+| `wtmp2sofelk.py` | login records: `wtmp`, `btmp`, `wtmpdb` | `wtmp-<hostname>` | `wtmp` |
+| `packages2sofelk.py` | package history (dpkg, apt, dnf, yum, zypper) and installed packages (dpkg, rpm, apk) | `packages-<hostname>` | `packages.*` |
+| `linuxconfig2sofelk.py` | accounts, groups, sudoers, cron, systemd units, init and profile scripts, autostart, SSH keys, hosts, resolver, `ld.so.preload`, repositories | `linuxconfig-<hostname>` | `linux.*` |
+| `linux2sofelk.py` | runs all of the above on one collection | all of the above | all |
+
+Field references: [`linux-logstash.md`](../docs/schemas/linux-logstash.md), [`linux-auditd.md`](../docs/schemas/linux-auditd.md), [`linux-bodyfile.md`](../docs/schemas/linux-bodyfile.md), [`linux-wtmp.md`](../docs/schemas/linux-wtmp.md), [`linux-packages.md`](../docs/schemas/linux-packages.md), [`linux-linuxconfig.md`](../docs/schemas/linux-linuxconfig.md).
 
 Both importers write to `logstash-<hostname>`, SOF-ELK's own syslog index family, so SOF-ELK's stock `logstash-*` Data View and its syslog field names work unchanged. A host that runs rsyslog on top of journald has most events in both sources: both are loaded, and `event.dataset` tells them apart. Pick one with `WHERE event.dataset == "syslog.journal"` (or `"syslog.file"`) when counting.
 
@@ -76,6 +80,32 @@ Classic syslog timestamps have no year and no time zone, so the importer works t
 
 The journal needs neither: its `__REALTIME_TIMESTAMP` is UTC in microseconds. Neither do auditd, the bodyfile and wtmp, whose times are epoch-based.
 
+## Package history and inventory
+
+`packages2sofelk.py` searches every distro family's locations, whatever the detected distro, and writes one document per package action and one per installed package to `packages-<hostname>`:
+
+| `event.dataset` | Source |
+|---|---|
+| `packages.dpkg` | `/var/log/dpkg.log*`: `install`, `upgrade`, `remove`, `purge` (status, configure and trigger lines are counted as not loaded) |
+| `packages.apt` | `/var/log/apt/history.log*`: each package of each transaction, with `process.command_line` (the apt command) and `user.name` (`Requested-By`) |
+| `packages.dnf` | `/var/log/dnf.rpm.log*` (RHEL 8+, Fedora); `Upgraded:` lines fill `packages.previous_version` |
+| `packages.dnf_history` | `/var/lib/dnf/history.sqlite`: every transaction with command line, user and repository |
+| `packages.yum` | `/var/log/yum.log*` (RHEL/CentOS 7; no year in the file, inferred like syslog, `--year` overrides) |
+| `packages.zypper` | `/var/log/zypp/history*` (SUSE): actions, zypper command lines, repositories added and removed |
+| `packages.inventory` | `/var/lib/dpkg/status`, `rpmdb.sqlite` (RHEL 9+, Fedora, SUSE), `/lib/apk/db/installed` |
+
+Inventory timestamps: rpm stores each package's install time. dpkg does not, but a UAC bodyfile holds the modification time of `/var/lib/dpkg/info/<package>.list`, which dpkg rewrites at every install or upgrade, so that becomes `package.installed`. Without a bodyfile, `@timestamp` is the database file's mtime. The Berkeley DB rpm database of RHEL 8 and older cannot be read with the standard library; dnf history and the dnf/yum logs cover those hosts.
+
+## Accounts and persistence snapshot
+
+`linuxconfig2sofelk.py` writes one document per account, group, sudoers rule, cron entry, systemd unit or link, script line, autostart entry, SSH key, hosts entry, resolver or loader setting and repository to `linuxconfig-<hostname>`, with `@timestamp` set to the source file's modification time. The full list of locations is in [`linux-linuxconfig.md`](../docs/schemas/linux-linuxconfig.md). Points worth knowing:
+
+- **Shadow:** only metadata enters ELK (hash algorithm, locked or empty, last change, ageing, expiry). The hash is reduced to that in memory and dropped; it is never stored, printed or sent. `/etc/gshadow`, private keys and shell history are never read.
+- **Backups:** `/etc/passwd-` and `/etc/group-` hold the files as they were before the last change, so accounts and groups are marked `new_since_backup`, `only_in_backup` or `changed_since_backup` (with `members_added`).
+- **Metadata from the bodyfile:** with UAC's `bodyfile/bodyfile.txt`, `@timestamp`, owner, mode and symlink targets are exact, and links UAC did not copy (masked units pointing at `/dev/null`) are still seen. A systemd link's `@timestamp` is when the unit was enabled. Without a bodyfile the folder's own metadata is used (symlinks are resolved inside the evidence, never on the analyst's machine) or, for a zip, the entry date read in the evidence's time zone.
+- **Flags:** `linuxconfig.flags` marks things worth a look, such as `uid0`, `empty_password`, `nopasswd`, `download_exec`, `reverse_shell`, `dev_tcp`, `ld_preload`, `runs_from_temp`, `root_authorized_key` and `unsigned_repository`. They are triage pointers, not verdicts.
+- **Commented hosts entries** are kept (`linuxconfig.hosts.commented`), as they often name earlier targets.
+
 ## Quick start
 
 ```bash
@@ -97,13 +127,13 @@ Kibana: SOF-ELK's stock `logstash-*` Data View covers the journal and syslog ind
 
 `SOF-ELK_ImportWrapper.py` also finds UAC collections (a folder holding `uac.log`, or a `.zip` with `uac.log` at its top) and runs `linux2sofelk.py` on each one with the wrapper's host name, Elasticsearch and case options. It does not search a UAC collection for Windows exports.
 
-Options shared by every Linux importer: `--hostname`, `--case`, `--local-tz`, `--es`, `--user`, `--password`, `--insecure`, `--batch-size`, `--dry-run`, `--sample-docs`, `--max-retries`, `--retry-backoff`, `--timeout`, `--log-file`. Source-specific: `--journal-json`, `--syslog-file`, `--year`, `--audit-log`, `--bodyfile`, `--wtmp-file`. `linux2sofelk.py` adds `--only journal,syslog,auditd,bodyfile,wtmp`.
+Options shared by every Linux importer: `--hostname`, `--case`, `--local-tz`, `--es`, `--user`, `--password`, `--insecure`, `--batch-size`, `--dry-run`, `--sample-docs`, `--max-retries`, `--retry-backoff`, `--timeout`, `--log-file`. Source-specific: `--journal-json`, `--syslog-file`, `--year`, `--audit-log`, `--bodyfile`, `--wtmp-file`. `linux2sofelk.py` adds `--only` (any of `journal,syslog,auditd,bodyfile,wtmp,packages,linuxconfig`).
 
 Exit status: `0` when everything loaded, `1` when Elasticsearch rejected documents, `3` when the journal was not loaded because the collection has no JSON export.
 
 ## Indexes and mapping
 
-`auditd-*`, `bodyfile-*` and `wtmp-*` are toolkit families (SOF-ELK has no index of those names), so their importers install the index templates `sofelk-toolkit-auditd`, `-bodyfile` and `-wtmp` from `index_templates/`, as the Windows importers do, and `Install-ForensicELK.ps1` loads them too. All three use `dynamic: false`.
+`auditd-*`, `bodyfile-*`, `wtmp-*`, `packages-*` and `linuxconfig-*` are toolkit families (SOF-ELK has no index of those names): their importers install the index templates `sofelk-toolkit-auditd`, `-bodyfile`, `-wtmp`, `-packages` and `-linuxconfig` from `index_templates/`, as the Windows importers do, `Install-ForensicELK.ps1` loads them too, and `SOF-ELK_CreateDataViews.py` creates their Data Views.
 
 `logstash-*` is a native SOF-ELK family, so no toolkit index template is installed for it (one would take over SOF-ELK's own `logstash-YYYY.MM` indexes). The importer installs the component template `sofelk-toolkit-linux-common` and creates `logstash-<hostname>` itself with the mapping in `index_templates/index-logstash.json` (`dynamic: false`; `message` is keyword with a `message.text` subfield for full-text search). An existing index that was not made by the toolkit is refused rather than mixed. Deleting with `SOF-ELK_DeleteIndexes.py` works by host and case as for the other families.
 
@@ -125,8 +155,11 @@ Each recognised message gets `event.category`, `event.type`, `event.action`, `ev
 
 ```bash
 python3 Linux/tests/test_linux_importers.py -v
+python3 Linux/tests/test_linux_packages_config.py -v
 ```
+
+`test_linux_packages_config.py` uses a UAC Debian folder with a bodyfile (and a zip of it, which must give the same documents), a Rocky 9 root to which the test adds absolute symlinks, an `rpmdb.sqlite` and a dnf `history.sqlite`, a SUSE root and an Alpine root. It also checks that no shadow hash, private key or shell history text reaches any document.
 
 The fixtures cover a UAC Ubuntu folder (ISO timestamps, RFC 5424, UFW, a journal export with byte-array and repeated fields), a non-UAC Rocky 9 root (RFC 3164 with a year rollover, rotated and compressed files, firewalld, `America/New_York`), and a UAC folder with binary journal files only. The Rocky root also holds raw and ENRICHED audit logs (interleaved records, hex-encoded and split arguments, a rotated file), the Ubuntu folder a UAC bodyfile with hash lists, and the tests build wtmp, btmp (with a rotation, a shutdown, a crash and an IPv6 source) and a wtmpdb database on the fly. Every test document is checked against its index mapping.
 
-Checked against real data: the Kali UAC sample (`uac-kali-linux-20261031183959.zip`) loads with no rejected documents: 619,334 journal entries, 605,729 bodyfile entries (22,195 with hashes) and 1,367 wtmp/btmp records (173 logins, 171 paired with a logout). The RHEL-family and Ubuntu paths, auditd and wtmpdb are tested with synthetic fixtures only, as no real collection with them has been available yet.
+Checked against real data: the Kali UAC sample (`uac-kali-linux-20261031183959.zip`) loads with no rejected documents: 619,334 journal entries, 605,729 bodyfile entries (22,195 with hashes), 1,367 wtmp/btmp records (173 logins, 171 paired with a logout), 10,654 package documents (dpkg, apt, dpkg inventory with install times from the bodyfile) and 6,158 config documents. The RHEL-family, SUSE, Alpine and Ubuntu paths, auditd and wtmpdb are tested with synthetic fixtures only, as no real collection with them has been available yet.

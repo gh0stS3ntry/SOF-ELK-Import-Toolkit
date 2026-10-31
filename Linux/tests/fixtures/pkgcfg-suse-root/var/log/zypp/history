@@ -1,0 +1,6 @@
+# 2026-10-25 10:00:58 zypper in nginx
+2026-10-25 10:00:58|command|root@sles01|'zypper' 'in' 'nginx'|
+2026-10-25 10:01:02|install|nginx|1.21.5-150600.3.3.1|x86_64|root@sles01|SLE-Module-Server-Applications|8f3c4d|
+2026-10-25 10:01:03|install|libpcre2|10.42-150600.1.1|x86_64||SLE-Module-Basesystem|9a1b|
+2026-10-26 11:00:00|radd  |shady|http://203.0.113.9/sles/|
+2026-10-26 11:05:00|remove |telnet|1.2-150000.3.6.1|x86_64|root@sles01|

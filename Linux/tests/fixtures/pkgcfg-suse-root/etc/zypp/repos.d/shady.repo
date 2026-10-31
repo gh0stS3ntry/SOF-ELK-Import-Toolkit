@@ -1,0 +1,6 @@
+[shady]
+enabled=1
+autorefresh=0
+baseurl=http://203.0.113.9/sles/
+type=rpm-md
+gpgcheck=0
