@@ -1,0 +1,139 @@
+{
+  "index_patterns": [
+    "bodyfile-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-linux-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "bodyfile",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "file": {
+          "properties": {
+            "path": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "name": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "directory": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "extension": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "target_path": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "inode": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "uid": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "gid": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "owner": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "group": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "size": {
+              "type": "long"
+            },
+            "type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "mode": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "accessed": {
+              "type": "date"
+            },
+            "mtime": {
+              "type": "date"
+            },
+            "ctime": {
+              "type": "date"
+            },
+            "created": {
+              "type": "date"
+            },
+            "hash": {
+              "properties": {
+                "md5": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "sha1": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "sha256": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        },
+        "bodyfile": {
+          "properties": {
+            "mode_string": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "setuid": {
+              "type": "boolean"
+            },
+            "setgid": {
+              "type": "boolean"
+            },
+            "sticky": {
+              "type": "boolean"
+            },
+            "world_writable": {
+              "type": "boolean"
+            },
+            "executable": {
+              "type": "boolean"
+            },
+            "hidden": {
+              "type": "boolean"
+            },
+            "deleted": {
+              "type": "boolean"
+            },
+            "regular_file_in_dev": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Linux bodyfile (bodyfile2sofelk.py): one document per file system entry, ECS file.* plus bodyfile.* flags",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}

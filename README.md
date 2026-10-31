@@ -1,6 +1,6 @@
 # SOF-ELK Import Toolkit
 
-This package contains a recursive wrapper and seventeen standalone Python importers for Windows forensic artifacts, four importers for AWS logs (CloudTrail, VPC Flow Logs, ALB/ELB access logs and AWS WAF; see [`AWS/README.md`](AWS/README.md)), a generic CSV importer for any other CSV export ([`Generic-CSV/README.md`](Generic-CSV/README.md)), Linux importers for the systemd journal, text syslog, package history and an accounts and persistence snapshot in UAC collections and collected root filesystems ([`Linux/README.md`](Linux/README.md)), and an ES|QL hunting pack with checklists ([`hunting/`](hunting/README.md)), for loading forensic CSV and JSON exports directly into Elasticsearch indexes used by SOF-ELK without relying on Logstash or Filebeat. The importers do not run KAPE, NirSoft, or Eric Zimmerman tools; they ingest exports that those tools have already produced.
+This package contains a recursive wrapper and seventeen standalone Python importers for Windows forensic artifacts, four importers for AWS logs (CloudTrail, VPC Flow Logs, ALB/ELB access logs and AWS WAF; see [`AWS/README.md`](AWS/README.md)), a generic CSV importer for any other CSV export ([`Generic-CSV/README.md`](Generic-CSV/README.md)), Linux importers for the systemd journal, text syslog, auditd, the bodyfile, login records (wtmp, btmp, wtmpdb), package history and an accounts and persistence snapshot in UAC collections and collected root filesystems ([`Linux/README.md`](Linux/README.md)), and an ES|QL hunting pack with checklists ([`hunting/`](hunting/README.md)), for loading forensic CSV and JSON exports directly into Elasticsearch indexes used by SOF-ELK without relying on Logstash or Filebeat. The importers do not run KAPE, NirSoft, or Eric Zimmerman tools; they ingest exports that those tools have already produced.
 
 ## Contents
 
@@ -64,6 +64,9 @@ sof_elk_all_importers/
 │   ├── linux2sofelk.py      (runs every Linux importer on one collection)
 │   ├── journal2sofelk.py
 │   ├── syslog2sofelk.py
+│   ├── auditd2sofelk.py
+│   ├── bodyfile2sofelk.py
+│   ├── wtmp2sofelk.py
 │   ├── packages2sofelk.py
 │   ├── linuxconfig2sofelk.py
 │   ├── common/
@@ -154,6 +157,9 @@ Hostnames are normalized the same way by every importer: lowercased (Elasticsear
 | `json_importers/pecmd2sofelk.py` | Eric Zimmerman PECmd | JSON / JSON.GZ / CSV | `prefetch-<hostname>` |
 | `Linux/journal2sofelk.py` | systemd journal (`journalctl -o json` export) | JSON lines | `logstash-<hostname>` (`event.dataset` `syslog.journal`) |
 | `Linux/syslog2sofelk.py` | text syslog under `/var/log` (Debian, RHEL, SUSE and Alpine layouts, rotated and compressed) | text | `logstash-<hostname>` (`event.dataset` `syslog.file`) |
+| `Linux/auditd2sofelk.py` | Linux audit log (`/var/log/audit/audit.log*`), one document per audit event | text | `auditd-<hostname>` |
+| `Linux/bodyfile2sofelk.py` | bodyfile (UAC `bodyfile/bodyfile.txt` or TSK `fls -m`), with UAC executable hashes | text | `bodyfile-<hostname>` |
+| `Linux/wtmp2sofelk.py` | login records: `wtmp`, `btmp` (utmp format) and `wtmpdb` (SQLite) | binary / SQLite | `wtmp-<hostname>` |
 | `Linux/packages2sofelk.py` | package history (dpkg, apt, dnf, yum, zypper) and installed packages (dpkg, rpm, apk) | text / SQLite | `packages-<hostname>` (`event.dataset` `packages.*`) |
 | `Linux/linuxconfig2sofelk.py` | accounts (shadow metadata only), groups, sudoers, cron, systemd units, init and profile scripts, autostart, SSH keys, hosts, resolver, `ld.so.preload`, repositories | text | `linuxconfig-<hostname>` (`event.dataset` `linux.*`) |
 
@@ -470,10 +476,13 @@ The script also applies SOF-ELK's Kibana advanced settings from `sof-elk-kibana/
 | `AWS/vpcflow2sofelk.py` | `aws-vpcflow-*` | `aws-vpcflow-<source>` |
 | `AWS/waf2sofelk.py` | `aws-waf-*` | `aws-waf-<source>` |
 | `Generic-CSV/genericcsv2sofelk.py` | `genericcsv-*` | `genericcsv-<hostname>` |
+| `Linux/auditd2sofelk.py` | `auditd-*` | `auditd-<hostname>` |
+| `Linux/bodyfile2sofelk.py` | `bodyfile-*` | `bodyfile-<hostname>` |
+| `Linux/wtmp2sofelk.py` | `wtmp-*` | `wtmp-<hostname>` |
 | `Linux/packages2sofelk.py` | `packages-*` | `packages-<hostname>` |
 | `Linux/linuxconfig2sofelk.py` | `linuxconfig-*` | `linuxconfig-<hostname>` |
 
-The `filesystem-*`, `evtxlogs-*`, `lnkfiles-*` and `prefetch-*` Data Views come from SOF-ELK's set. The AWS importers' indexes get the narrower patterns above, next to SOF-ELK's own `aws-*` Data View (for its Logstash CloudTrail output). `AWS/alb2sofelk.py` writes ALB/ELB access logs to `httpdlog-<source>`, which SOF-ELK's stock `httpdlog-*` Data View already covers. The Linux importers write the journal and text syslog to `logstash-<hostname>`, which SOF-ELK's stock `logstash-*` Data View (Kibana's default) already covers. Package history and the config snapshot get the toolkit Data Views `packages-*` and `linuxconfig-*`.
+The `filesystem-*`, `evtxlogs-*`, `lnkfiles-*` and `prefetch-*` Data Views come from SOF-ELK's set. The AWS importers' indexes get the narrower patterns above, next to SOF-ELK's own `aws-*` Data View (for its Logstash CloudTrail output). `AWS/alb2sofelk.py` writes ALB/ELB access logs to `httpdlog-<source>`, which SOF-ELK's stock `httpdlog-*` Data View already covers. The Linux importers write the journal and text syslog to `logstash-<hostname>`, which SOF-ELK's stock `logstash-*` Data View (Kibana's default) already covers. The other Linux indexes get the toolkit Data Views `auditd-*`, `bodyfile-*`, `wtmp-*`, `packages-*` and `linuxconfig-*`.
 
 The script uses Kibana's Data Views API and is standard-library only. By default it is idempotent: an existing Data View is detected and left unchanged. Use `--overwrite` to delete and recreate the managed views (SOF-ELK's are recreated with the same ids, so its dashboards keep working on a SOF-ELK VM). The Data Views are configured to use `@timestamp` as the time field and `allowNoIndex=true`, so they can be created before the first corresponding Elasticsearch index exists.
 
@@ -548,7 +557,7 @@ python3 SOF-ELK_DeleteIndexes.py --case IR-2026-042 --dry-run --es http://192.16
 
 - Only indexes named `<prefix>-<hostname>` are considered: `rd01` matches `amcache-rd01` and `aws-cloudtrail-rd01`, but not `amcache-rd011` or `amcache-rd01-old`.
 - Each candidate's documents are checked. When they carry `host.name` (Windows, Generic-CSV and Linux importers) or `labels.evidence_source` (AWS importers), the index is selected only if that value is the hostname. This protects `amcache-ws-01` (host `ws-01`) when you delete host `01`.
-- An index whose documents do not say which host they came from (empty, closed, or loaded by an older importer) is selected only when its prefix is one of the toolkit's (`amcache`, `filesystem`, `evtxlogs`, `aws-cloudtrail`, `httpdlog`, `genericcsv`, `logstash`, `packages`, `linuxconfig`, ...) or one given with `--prefix`.
+- An index whose documents do not say which host they came from (empty, closed, or loaded by an older importer) is selected only when its prefix is one of the toolkit's (`amcache`, `filesystem`, `evtxlogs`, `aws-cloudtrail`, `httpdlog`, `genericcsv`, `logstash`, `auditd`, `bodyfile`, `wtmp`, `packages`, `linuxconfig`, ...) or one given with `--prefix`.
 
 **By case.** The case ID is not part of the index name; the importers store it in each document's `case` field (from their `--case` option). The script searches every non-hidden index for documents with that `case` (upper/lower case ignored) and deletes an index only when **all** of its documents belong to the case. An index that also holds documents from another case, or without a case (for example the same host imported twice under different `--case` values), is listed with its counts and kept, so another case's evidence is never removed; delete those documents by hand with `_delete_by_query` if needed. Documents imported without `--case` cannot be found this way; use `--hostname` for them. Closed indexes cannot be searched and are listed as skipped.
 

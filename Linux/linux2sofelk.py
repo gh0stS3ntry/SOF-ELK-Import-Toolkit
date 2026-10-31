@@ -12,6 +12,12 @@ Sources loaded (use --only to pick some):
            (journal2sofelk.py; event.dataset syslog.journal)
   syslog   text syslog files under /var/log (auth.log, secure,   -> logstash-<hostname>
            messages, syslog, ...; syslog2sofelk.py; event.dataset syslog.file)
+  auditd   /var/log/audit/audit.log*, one document per event     -> auditd-<hostname>
+           (auditd2sofelk.py; event.dataset auditd.log)
+  bodyfile UAC bodyfile/bodyfile.txt (or --bodyfile), with       -> bodyfile-<hostname>
+           executable hashes and owner names (bodyfile2sofelk.py)
+  wtmp     wtmp, btmp and wtmpdb login records, logins paired    -> wtmp-<hostname>
+           with logouts (wtmp2sofelk.py)
   packages package history and installed packages: dpkg, apt,     -> packages-<hostname>
            dnf, yum, zypper, rpm, apk (packages2sofelk.py; event.dataset packages.*)
   linuxconfig  accounts (shadow metadata only), groups, sudoers,  -> linuxconfig-<hostname>
@@ -31,13 +37,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "common"))
 
+from auditd2sofelk import AUDITD  # noqa: E402
+from bodyfile2sofelk import BODYFILE  # noqa: E402
 from journal2sofelk import JOURNAL  # noqa: E402
 from linuxconfig2sofelk import LINUXCONFIG  # noqa: E402
 from packages2sofelk import PACKAGES  # noqa: E402
 from sof_elk_linux_common import run_sources  # noqa: E402
 from syslog2sofelk import SYSLOG  # noqa: E402
+from wtmp2sofelk import WTMP  # noqa: E402
 
-SOURCES = [JOURNAL, SYSLOG, PACKAGES, LINUXCONFIG]
+SOURCES = [JOURNAL, SYSLOG, AUDITD, BODYFILE, WTMP, PACKAGES, LINUXCONFIG]
 
 
 def main(argv=None):
