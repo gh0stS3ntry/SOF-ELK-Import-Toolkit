@@ -67,6 +67,63 @@
             "unmapped": {
               "type": "object",
               "dynamic": "true"
+            },
+            "from_visit": {
+              "type": "long"
+            },
+            "transition": {
+              "type": "long"
+            },
+            "transition_qualifiers": {
+              "type": "keyword"
+            },
+            "visit_source": {
+              "type": "keyword"
+            },
+            "hidden": {
+              "type": "boolean"
+            },
+            "download": {
+              "properties": {
+                "guid": {
+                  "type": "keyword"
+                },
+                "state": {
+                  "type": "keyword"
+                },
+                "danger_type": {
+                  "type": "keyword"
+                },
+                "interrupt_reason": {
+                  "type": "keyword"
+                },
+                "mime_type": {
+                  "type": "keyword"
+                },
+                "received_bytes": {
+                  "type": "long"
+                },
+                "total_bytes": {
+                  "type": "long"
+                },
+                "opened": {
+                  "type": "boolean"
+                },
+                "deleted": {
+                  "type": "boolean"
+                },
+                "end_time": {
+                  "type": "date"
+                },
+                "referrer": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "tab_url": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                }
+              }
             }
           }
         },
@@ -90,12 +147,44 @@
               "type": "keyword"
             }
           }
+        },
+        "host": {
+          "properties": {
+            "id": {
+              "type": "keyword"
+            },
+            "os": {
+              "properties": {
+                "type": {
+                  "type": "keyword"
+                },
+                "name": {
+                  "type": "keyword"
+                },
+                "version": {
+                  "type": "keyword"
+                },
+                "full": {
+                  "type": "keyword"
+                },
+                "platform": {
+                  "type": "keyword"
+                },
+                "family": {
+                  "type": "keyword"
+                },
+                "kernel": {
+                  "type": "keyword"
+                }
+              }
+            }
+          }
         }
       }
     }
   },
   "_meta": {
-    "description": "Explicit schema for BrowsingHistoryView CSV output loaded by nirsoft_bhv2sofelk.py",
+    "description": "Explicit schema for browsing history: NirSoft BrowsingHistoryView CSV output (nirsoft_bhv2sofelk.py) and Linux Firefox/Chromium history databases (Linux/browser2sofelk.py)",
     "provider": "SOF-ELK-Import-Toolkit",
     "version": 1
   }

@@ -1,0 +1,12 @@
+Fri Oct 30 23:20:00 2026 [pid 3001] CONNECT: Client "::ffff:198.51.100.7"
+Fri Oct 30 23:20:01 2026 [pid 3001] FTP command: Client "::ffff:198.51.100.7", "USER ftpuser"
+Fri Oct 30 23:20:01 2026 [pid 3001] [ftpuser] FTP response: Client "::ffff:198.51.100.7", "331 Please specify the password."
+Fri Oct 30 23:20:02 2026 [pid 3001] [ftpuser] FTP command: Client "::ffff:198.51.100.7", "PASS S3cr3t!"pass"
+Fri Oct 30 23:20:03 2026 [pid 3000] [ftpuser] FAIL LOGIN: Client "::ffff:198.51.100.7"
+Fri Oct 30 23:20:10 2026 [pid 3000] [ftpuser] OK LOGIN: Client "::ffff:198.51.100.7"
+Fri Oct 30 23:21:00 2026 [pid 3002] [ftpuser] OK UPLOAD: Client "::ffff:198.51.100.7", "/home/ftpuser/upload/tool.tar.gz", 1048576 bytes, 512.00Kbyte/sec
+Fri Oct 30 23:22:00 2026 [pid 3002] [ftpuser] OK DOWNLOAD: Client "::ffff:198.51.100.7", "/home/ftpuser/data/customers.csv", 2048 bytes, 100.50Kbyte/sec
+Fri Oct 30 23:22:30 2026 [pid 3002] [ftpuser] OK RENAME: Client "::ffff:198.51.100.7", "/home/ftpuser/upload/tool.tar.gz /home/ftpuser/upload/.cache"
+Fri Oct 30 23:23:00 2026 [pid 3002] [ftpuser] OK DELETE: Client "::ffff:198.51.100.7", "/home/ftpuser/upload/.cache"
+Fri Oct 30 23:24:00 2026 [pid 3010] [ftp] OK LOGIN: Client "203.0.113.9", anon password "guest@example.com"
+Fri Oct 30 23:25:00 2026 [pid 3011] [ftpuser] OK MKDIR: Client "::ffff:198.51.100.7", "/home/ftpuser/new dir"

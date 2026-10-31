@@ -1,0 +1,9 @@
+203.0.113.50 - - [30/Oct/2026:22:15:01 +0800] "GET /index.php HTTP/1.1" 200 5120 "-" "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/131.0"
+203.0.113.50 - - [30/Oct/2026:22:15:02 +0800] "GET /css/site.css HTTP/1.1" 200 812 "http://ftpweb01/index.php" "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/131.0"
+198.51.100.7 - admin [30/Oct/2026:22:16:40 +0800] "POST /uploads/shell.php?cmd=id HTTP/1.1" 200 37 "-" "python-requests/2.31.0"
+198.51.100.7 - admin [30/Oct/2026:22:16:40 +0800] "POST /uploads/shell.php?cmd=id HTTP/1.1" 200 37 "-" "python-requests/2.31.0"
+198.51.100.7 - - [30/Oct/2026:22:16:41 +0800] "GET /../../etc/passwd HTTP/1.1" 400 301 "-" "curl/8.4.0"
+2001:db8::5 - - [30/Oct/2026:22:17:00 +0800] "GET http://ftpweb01:8080/proxy/test?a=1 HTTP/1.1" 404 0 "-" "-"
+198.51.100.7 - - [30/Oct/2026:22:17:05 +0800] "\x16\x03\x01\x02" 400 0 "-" "-"
+198.51.100.7 - - [30/Oct/2026:22:17:06 +0800] "CONNECT example.com:443 HTTP/1.1" 405 224 "-" "-"
+garbage line that is not a web log

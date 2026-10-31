@@ -1,0 +1,2 @@
+2026/10/30 23:00:00 [error] 812#812: *15 open() "/usr/share/nginx/html/wp-login.php" failed (2: No such file or directory), client: 192.0.2.10, server: ftpweb01, request: "GET /wp-login.php HTTP/1.1", host: "ftpweb01:8080", referrer: "http://ftpweb01/"
+2026/10/30 23:00:05 [notice] 811#811: signal process started

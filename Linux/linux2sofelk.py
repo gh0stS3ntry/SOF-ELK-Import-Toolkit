@@ -23,6 +23,12 @@ Sources loaded (use --only to pick some):
   linuxconfig  accounts (shadow metadata only), groups, sudoers,  -> linuxconfig-<hostname>
            cron, systemd units, init/profile scripts, autostart, SSH keys, hosts, resolver,
            ld.so.preload, repositories (linuxconfig2sofelk.py; event.dataset linux.*)
+  httpd    Apache httpd, nginx and lighttpd access/error logs      -> httpdlog-<hostname>
+           (httpd2sofelk.py; event.dataset apache.access, nginx.error, ...)
+  browser  Firefox and Chromium-family history and downloads       -> browsinghistory-<hostname>
+           (browser2sofelk.py; event.dataset browsinghistory, browsinghistory.download)
+  vsftpd   vsftpd.log and xferlog FTP logs                         -> logstash-<hostname>
+           (vsftpd2sofelk.py; event.dataset ftp.vsftpd, ftp.xferlog)
 
 Exit status: 0 when everything loaded, 1 when Elasticsearch rejected documents, 3 when the
 collection has binary journal files but no JSON export (the journal was not loaded; the
@@ -39,14 +45,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "common"))
 
 from auditd2sofelk import AUDITD  # noqa: E402
 from bodyfile2sofelk import BODYFILE  # noqa: E402
+from browser2sofelk import BROWSER  # noqa: E402
+from httpd2sofelk import HTTPD  # noqa: E402
 from journal2sofelk import JOURNAL  # noqa: E402
 from linuxconfig2sofelk import LINUXCONFIG  # noqa: E402
 from packages2sofelk import PACKAGES  # noqa: E402
 from sof_elk_linux_common import run_sources  # noqa: E402
 from syslog2sofelk import SYSLOG  # noqa: E402
+from vsftpd2sofelk import VSFTPD  # noqa: E402
 from wtmp2sofelk import WTMP  # noqa: E402
 
-SOURCES = [JOURNAL, SYSLOG, AUDITD, BODYFILE, WTMP, PACKAGES, LINUXCONFIG]
+SOURCES = [JOURNAL, SYSLOG, AUDITD, BODYFILE, WTMP, PACKAGES, LINUXCONFIG, HTTPD, BROWSER, VSFTPD]
 
 
 def main(argv=None):

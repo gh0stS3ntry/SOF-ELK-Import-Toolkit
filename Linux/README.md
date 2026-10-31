@@ -9,11 +9,14 @@ Importers that load a Linux evidence collection straight into SOF-ELK's Elastics
 | `auditd2sofelk.py` | `/var/log/audit/audit.log*`, one document per audit event | `auditd-<hostname>` | `auditd.log` |
 | `bodyfile2sofelk.py` | bodyfile (UAC `bodyfile/bodyfile.txt`, or `fls -r -m /`) with UAC executable hashes | `bodyfile-<hostname>` | `bodyfile` |
 | `wtmp2sofelk.py` | login records: `wtmp`, `btmp`, `wtmpdb` | `wtmp-<hostname>` | `wtmp` |
+| `httpd2sofelk.py` | Apache httpd, nginx and lighttpd access and error logs | `httpdlog-<hostname>` | `apache.access`, `apache.error`, `nginx.access`, `nginx.error`, `lighttpd.*` |
+| `browser2sofelk.py` | Firefox and Chromium-family history and downloads (`places.sqlite`, `History`) | `browsinghistory-<hostname>` | `browsinghistory`, `browsinghistory.download` |
+| `vsftpd2sofelk.py` | FTP server logs: `vsftpd.log`, `xferlog` | `logstash-<hostname>` | `ftp.vsftpd`, `ftp.xferlog` |
 | `packages2sofelk.py` | package history (dpkg, apt, dnf, yum, zypper) and installed packages (dpkg, rpm, apk) | `packages-<hostname>` | `packages.*` |
 | `linuxconfig2sofelk.py` | accounts, groups, sudoers, cron, systemd units, init and profile scripts, autostart, SSH keys, hosts, resolver, `ld.so.preload`, repositories | `linuxconfig-<hostname>` | `linux.*` |
-| `linux2sofelk.py` | runs all of the above on one collection | all of the above | all |
+| `linux2sofelk.py` | runs all of the above on one collection | all of the above | all of the above |
 
-Field references: [`linux-logstash.md`](../docs/schemas/linux-logstash.md), [`linux-auditd.md`](../docs/schemas/linux-auditd.md), [`linux-bodyfile.md`](../docs/schemas/linux-bodyfile.md), [`linux-wtmp.md`](../docs/schemas/linux-wtmp.md), [`linux-packages.md`](../docs/schemas/linux-packages.md), [`linux-linuxconfig.md`](../docs/schemas/linux-linuxconfig.md).
+Field references: [`linux-logstash.md`](../docs/schemas/linux-logstash.md) (system and FTP logs), [`linux-httpdlog.md`](../docs/schemas/linux-httpdlog.md) (web logs), [`browsinghistory.md`](../docs/schemas/browsinghistory.md) (browser history, shared with BrowsingHistoryView on Windows), [`linux-auditd.md`](../docs/schemas/linux-auditd.md), [`linux-bodyfile.md`](../docs/schemas/linux-bodyfile.md), [`linux-wtmp.md`](../docs/schemas/linux-wtmp.md), [`linux-packages.md`](../docs/schemas/linux-packages.md), [`linux-linuxconfig.md`](../docs/schemas/linux-linuxconfig.md).
 
 Both importers write to `logstash-<hostname>`, SOF-ELK's own syslog index family, so SOF-ELK's stock `logstash-*` Data View and its syslog field names work unchanged. A host that runs rsyslog on top of journald has most events in both sources: both are loaded, and `event.dataset` tells them apart. Pick one with `WHERE event.dataset == "syslog.journal"` (or `"syslog.file"`) when counting.
 
@@ -24,7 +27,7 @@ The evidence argument can be:
 - A **UAC** output, either the `.zip` as UAC wrote it (read in place, not extracted) or the extracted folder. The collection's `[root]/` holds the host's files, and `journal/` holds the journal export.
 - Any **collected root filesystem**: a folder holding `etc/` and `var/log/`, such as a mounted image, a KAPE-style copy or a tar extract. The root is found up to three folders down.
 
-Shell history, `/etc/shadow` and other credential stores are never loaded, nor is anything under UAC's `live_response/` (only `uname -a` is read for `host.os.kernel`). The bodyfile and auditd importers read `/etc/passwd` and `/etc/group` for names only. Shell history has no reliable order or timestamps per command, so it is better read on its own.
+Shell history, `/etc/shadow` and other credential stores (browser cookies, saved logins, `key4.db`, form history) are never loaded, nor is anything under UAC's `live_response/` (only `uname -a` is read for `host.os.kernel`). The bodyfile and auditd importers read `/etc/passwd` and `/etc/group` for names only. Shell history has no reliable order or timestamps per command, so it is better read on its own. Passwords that FTP logs record (a logged `PASS` command, anonymous passwords) are replaced with `<redacted>` before sending.
 
 ### The journal needs a JSON export
 
@@ -68,6 +71,20 @@ Three line formats are recognised: classic RFC 3164 (`Oct 31 13:30:01 host prog[
 ### Login records
 
 `wtmp2sofelk.py` parses `wtmp` and `btmp` (and their rotations) with `struct`, and `wtmpdb` databases (`/var/lib/wtmpdb/wtmp*.db`) with `sqlite3`. Logins are paired with their logouts like `last` does, so a login document carries `event.end`, `event.duration` and `wtmp.logout_type` (`logout`, `shutdown` or `crash`), and a logout document carries the user and source of its login. Every btmp record is a `failed-login`. `utmp` is skipped (it repeats the open sessions in wtmp), as are `lastlog` and `faillog`.
+
+### Web server logs
+
+`httpd2sofelk.py` reads `/var/log/apache2/` (Debian family, SUSE), `/var/log/httpd/` (RHEL family, including `ssl_access_log`, `ssl_request_log` and `ssl_error_log`), `/var/log/nginx/` and `/var/log/lighttpd/`, with rotated copies. The format is recognised per line: NCSA common and combined (also with a `vhost:port` prefix), mod_ssl's request log, and Apache, nginx and lighttpd error logs. Access log times carry their own offset; error log times are local time on the host. Logs kept elsewhere are added with `--web-log /path/on/host`.
+
+The documents use SOF-ELK's httpd field names (`source.ip`, `url.path`, `http.response.status_code`, `destination.bytes`, ...) and the same types as the AWS ALB importer, so `FROM httpdlog-*` covers on-premises web servers and ALBs together, and the AWS web hunting queries (AIA-04, APE-03, AEXF-03) run on Linux web servers as well. Like `logstash-*`, `httpdlog-*` is SOF-ELK's own family, so no index template is installed for it.
+
+### Browser history
+
+`browser2sofelk.py` finds Firefox-family `places.sqlite` and Chromium-family `History` databases under every `/home/<user>` and `/root`, including snap and flatpak installs. Each database is copied, with its `-wal` file, to a temporary folder and read there, so the evidence is never opened for writing. Visits and downloads go to `browsinghistory-<hostname>` with the schema BrowsingHistoryView uses on Windows, so the browsing hunting queries (IA-02, C2-03, C2-08, C2-09, EXF-05) cover Linux hosts as well. Its index template is `Windows/index_templates/index-browsinghistory.json`.
+
+### FTP server logs
+
+`vsftpd2sofelk.py` reads `vsftpd.log` (vsftpd's own format: logins, failed logins, transfers, deletes, renames and, with `log_ftp_protocol=YES`, every command and response) and `xferlog` (written by vsftpd, ProFTPD and pure-ftpd), with rotated copies and `--ftp-log` files. They go to `logstash-<hostname>` next to the system logs. vsftpd logs GMT unless `use_localtime=YES`: the importer reads that setting from the evidence's `vsftpd.conf`, and `--ftp-time local|utc` overrides it.
 
 ## Host profile and time zone
 
@@ -121,13 +138,15 @@ python3 Linux/syslog2sofelk.py  /mnt/rocky9-image --hostname db01 --local-tz Ame
 python3 Linux/auditd2sofelk.py  /mnt/rocky9-image --hostname db01
 python3 Linux/bodyfile2sofelk.py /mnt/rocky9-image --hostname db01 --bodyfile /cases/db01.body
 python3 Linux/wtmp2sofelk.py    /cases/uac-kali-linux-20261031183959.zip
+python3 Linux/httpd2sofelk.py   /cases/uac-web01.zip --web-log /srv/shop/logs/access.log
+python3 Linux/linux2sofelk.py   /cases/uac-ftp01.zip --only vsftpd --ftp-time local
 ```
 
-Kibana: SOF-ELK's stock `logstash-*` Data View covers the journal and syslog indexes. `SOF-ELK_CreateDataViews.py` creates it on a plain Elasticsearch and Kibana, and adds `auditd-*`, `bodyfile-*` and `wtmp-*`.
+Kibana: SOF-ELK's stock `logstash-*` and `httpdlog-*` Data Views cover the journal, syslog, FTP and web log indexes, and the toolkit's `browsinghistory-*` Data View covers browser history. `SOF-ELK_CreateDataViews.py` creates it on a plain Elasticsearch and Kibana, and adds `auditd-*`, `bodyfile-*` and `wtmp-*`.
 
 `SOF-ELK_ImportWrapper.py` also finds UAC collections (a folder holding `uac.log`, or a `.zip` with `uac.log` at its top) and runs `linux2sofelk.py` on each one with the wrapper's host name, Elasticsearch and case options. It does not search a UAC collection for Windows exports.
 
-Options shared by every Linux importer: `--hostname`, `--case`, `--local-tz`, `--es`, `--user`, `--password`, `--insecure`, `--batch-size`, `--dry-run`, `--sample-docs`, `--max-retries`, `--retry-backoff`, `--timeout`, `--log-file`. Source-specific: `--journal-json`, `--syslog-file`, `--year`, `--audit-log`, `--bodyfile`, `--wtmp-file`. `linux2sofelk.py` adds `--only` (any of `journal,syslog,auditd,bodyfile,wtmp,packages,linuxconfig`).
+Options shared by every Linux importer: `--hostname`, `--case`, `--local-tz`, `--es`, `--user`, `--password`, `--insecure`, `--batch-size`, `--dry-run`, `--sample-docs`, `--max-retries`, `--retry-backoff`, `--timeout`, `--log-file`. Source-specific: `--journal-json`, `--syslog-file`, `--year`, `--audit-log`, `--bodyfile`, `--wtmp-file`, `--web-log`, `--ftp-log`, `--ftp-time`. `linux2sofelk.py` adds `--only` (any of `journal,syslog,auditd,bodyfile,wtmp,packages,linuxconfig,httpd,browser,vsftpd`).
 
 Exit status: `0` when everything loaded, `1` when Elasticsearch rejected documents, `3` when the journal was not loaded because the collection has no JSON export.
 
@@ -135,9 +154,11 @@ Exit status: `0` when everything loaded, `1` when Elasticsearch rejected documen
 
 `auditd-*`, `bodyfile-*`, `wtmp-*`, `packages-*` and `linuxconfig-*` are toolkit families (SOF-ELK has no index of those names): their importers install the index templates `sofelk-toolkit-auditd`, `-bodyfile`, `-wtmp`, `-packages` and `-linuxconfig` from `index_templates/`, as the Windows importers do, `Install-ForensicELK.ps1` loads them too, and `SOF-ELK_CreateDataViews.py` creates their Data Views.
 
-`logstash-*` is a native SOF-ELK family, so no toolkit index template is installed for it (one would take over SOF-ELK's own `logstash-YYYY.MM` indexes). The importer installs the component template `sofelk-toolkit-linux-common` and creates `logstash-<hostname>` itself with the mapping in `index_templates/index-logstash.json` (`dynamic: false`; `message` is keyword with a `message.text` subfield for full-text search). An existing index that was not made by the toolkit is refused rather than mixed. Deleting with `SOF-ELK_DeleteIndexes.py` works by host and case as for the other families.
+`logstash-*` and `httpdlog-*` are native SOF-ELK families, so no toolkit index template is installed for them (one would take over SOF-ELK's own `logstash-YYYY.MM` indexes). The importer installs the component template `sofelk-toolkit-linux-common` and creates `logstash-<hostname>` and `httpdlog-<hostname>` itself with the mappings in `index_templates/index-logstash.json` and `index_templates/index-httpdlog.json` (`dynamic: false`; `message` is keyword with a `message.text` subfield for full-text search). An existing index that was not made by the toolkit is refused rather than mixed. Deleting with `SOF-ELK_DeleteIndexes.py` works by host and case as for the other families.
 
-Documents get deterministic IDs: the journal cursor for the journal, and a hash of the file family, line and occurrence for text syslog. Loading the same collection again overwrites instead of duplicating.
+`browsinghistory-*` uses the Windows importers' template (component `sofelk-toolkit-common` and index template `sofelk-toolkit-browsinghistory`), which the browser importer installs.
+
+Documents get deterministic IDs: the journal cursor for the journal; a hash of the file family, line and occurrence for text syslog, web and FTP logs; and the database path and row id for browser history. Loading the same collection again overwrites instead of duplicating.
 
 ## Message parsing
 
@@ -155,6 +176,7 @@ Each recognised message gets `event.category`, `event.type`, `event.action`, `ev
 
 ```bash
 python3 Linux/tests/test_linux_importers.py -v
+python3 Linux/tests/test_linux_web_ftp_browser.py -v
 python3 Linux/tests/test_linux_packages_config.py -v
 ```
 
@@ -162,4 +184,6 @@ python3 Linux/tests/test_linux_packages_config.py -v
 
 The fixtures cover a UAC Ubuntu folder (ISO timestamps, RFC 5424, UFW, a journal export with byte-array and repeated fields), a non-UAC Rocky 9 root (RFC 3164 with a year rollover, rotated and compressed files, firewalld, `America/New_York`), and a UAC folder with binary journal files only. The Rocky root also holds raw and ENRICHED audit logs (interleaved records, hex-encoded and split arguments, a rotated file), the Ubuntu folder a UAC bodyfile with hash lists, and the tests build wtmp, btmp (with a rotation, a shutdown, a crash and an IPv6 source) and a wtmpdb database on the fly. Every test document is checked against its index mapping.
 
-Checked against real data: the Kali UAC sample (`uac-kali-linux-20261031183959.zip`) loads with no rejected documents: 619,334 journal entries, 605,729 bodyfile entries (22,195 with hashes), 1,367 wtmp/btmp records (173 logins, 171 paired with a logout), 10,654 package documents (dpkg, apt, dpkg inventory with install times from the bodyfile) and 6,158 config documents. The RHEL-family, SUSE, Alpine and Ubuntu paths, auditd and wtmpdb are tested with synthetic fixtures only, as no real collection with them has been available yet.
+`test_linux_web_ftp_browser.py` uses a UAC Debian folder with Apache, nginx, lighttpd, vsftpd and xferlog lines (including a logged `PASS` command and anonymous logins, to check redaction) and a Rocky 9 root with `httpd/` logs; the Firefox and Chrome databases are built by the test, one with its visits only in the `-wal` file, and read from a folder and from a zip.
+
+Checked against real data: the Kali UAC sample (`uac-kali-linux-20261031183959.zip`) loads with no rejected documents: 619,334 journal entries, 605,729 bodyfile entries (22,195 with hashes), 1,367 wtmp/btmp records (173 logins, 171 paired with a logout), 10,654 package documents (dpkg, apt, dpkg inventory with install times from the bodyfile) 6,158 config documents, 1,483 Firefox visits and its Apache logs. It has no Chromium history and no FTP server logs, so those parsers are fixture-tested only. The RHEL-family, SUSE, Alpine and Ubuntu paths, auditd and wtmpdb are tested with synthetic fixtures only, as no real collection with them has been available yet.

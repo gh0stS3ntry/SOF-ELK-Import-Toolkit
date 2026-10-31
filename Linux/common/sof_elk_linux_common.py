@@ -28,6 +28,7 @@ import datetime as dt
 import gzip
 import hashlib
 import io
+import ipaddress
 import json
 import lzma
 import os
@@ -45,6 +46,14 @@ except ImportError:  # Python 3.8
 LINUX_DIR = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = LINUX_DIR / "index_templates"
 COMMON_COMPONENT = "sofelk-toolkit-linux-common"
+# Template sets: (folder, common component file, component name). "windows" is used by
+# indexes the Windows importers already define (browsinghistory-*), so a Linux host and a
+# Windows host land in the same schema.
+TEMPLATE_SETS = {
+    "linux": (TEMPLATE_DIR, "component-toolkit-linux-common.json", COMMON_COMPONENT),
+    "windows": (LINUX_DIR.parent / "Windows" / "index_templates", "component-toolkit-common.json",
+                "sofelk-toolkit-common"),
+}
 
 # The retrying bulk client is shared with the Windows and AWS importers.
 sys.path.insert(0, str(LINUX_DIR.parent / "Windows" / "common"))
@@ -102,6 +111,54 @@ def epoch_us_to_iso(value):
 
 def doc_id(*parts):
     return hashlib.sha1(json.dumps(parts, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+ROTATED_RE = re.compile(r"^(?P<family>.+?)(?:\.(?P<num>\d+)|-(?P<date>\d{8}))?(?:\.(?:gz|bz2|xz))?$")
+
+
+def rotation_family(name):
+    """'access.log.2.gz' -> 'access.log', 'access_log-20261025' -> 'access_log'."""
+    m = ROTATED_RE.match(name)
+    return m.group("family") if m else name
+
+
+def rotation_sort_key(rel):
+    """Oldest first within a folder: per family, numbered copies (.3, .2, .1), dated copies, current."""
+    name = PurePosixPath(rel).name
+    folder = str(PurePosixPath(rel).parent)
+    m = ROTATED_RE.match(name)
+    if not m:
+        return (folder, name, 0, 0, "")
+    if m.group("num"):
+        return (folder, m.group("family"), 0, -int(m.group("num")), "")
+    if m.group("date"):
+        return (folder, m.group("family"), 1, 0, m.group("date"))
+    return (folder, m.group("family"), 2, 0, "")
+
+
+def split_host_port(text):
+    """'1.2.3.4:5678', '[::1]:80', '::1' -> (ip-or-host, port or None)."""
+    text = text.strip()
+    m = re.fullmatch(r"\[([^\]]+)\](?::(\d+))?", text)
+    if m:
+        return m.group(1), int(m.group(2)) if m.group(2) else None
+    if text.count(":") == 1:
+        host, _, port = text.partition(":")
+        if port.isdigit():
+            return host, int(port)
+    if text.count(":") > 1 and not is_ip(text):
+        host, _, port = text.rpartition(":")
+        if port.isdigit() and is_ip(host):
+            return host, int(port)
+    return text, None
+
+
+def is_ip(text):
+    try:
+        ipaddress.ip_address(text)
+        return True
+    except ValueError:
+        return False
 
 
 # --------------------------------------------------------------------------- evidence access
@@ -259,6 +316,45 @@ class Evidence:
                 return fh.read(limit)
         except OSError:
             return None
+
+    def walk(self, rel, max_depth=8):
+        """Every file path under rel (recursively, up to max_depth folders down), sorted."""
+        rel = rel.strip("/")
+        if self.is_zip:
+            prefix = rel + "/" if rel else ""
+            return [n for n in self.names if n.startswith(prefix)
+                    and n[len(prefix):].count("/") <= max_depth]
+        out = []
+        top = self.path / rel
+        if not top.is_dir():
+            return out
+        base_depth = len(top.parts)
+        for dirpath, dirnames, filenames in os.walk(top):
+            depth = len(Path(dirpath).parts) - base_depth
+            if depth >= max_depth:
+                dirnames[:] = []
+            dirnames[:] = [d for d in dirnames if not os.path.islink(os.path.join(dirpath, d))]
+            for name in filenames:
+                out.append((Path(dirpath) / name).relative_to(self.path).as_posix())
+        return sorted(out)
+
+    def copy_out(self, rel, dest):
+        """Copy a member, as stored (no decompression), to the local file dest."""
+        with self.open_binary(rel, decompress=False) as src, open(dest, "wb") as dst:
+            while True:
+                chunk = src.read(1 << 20)
+                if not chunk:
+                    break
+                dst.write(chunk)
+
+    def evidence_path(self, rel):
+        """Container path -> the path it had on the evidence host ("/home/kali/x")."""
+        root = self.root.strip("/")
+        if root and rel.startswith(root + "/"):
+            rel = rel[len(root) + 1:]
+        elif root:
+            return rel
+        return "/" + rel
 
     def readlink(self, rel):
         """Target of a symlink in a folder input (zip inputs store the file content instead)."""
@@ -541,8 +637,8 @@ class EvidenceOrDiskFile:
 
 # --------------------------------------------------------------------------- templates
 
-def _load_json(name):
-    path = TEMPLATE_DIR / name
+def _load_json(name, folder=TEMPLATE_DIR):
+    path = folder / name
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -561,10 +657,11 @@ def _merge(base, extra):
     return out
 
 
-def load_templates(prefix):
+def load_templates(prefix, template_set="linux"):
     """(component, index_template, merged index body) for an index prefix like 'logstash'."""
-    component = _load_json("component-toolkit-linux-common.json")
-    index_tpl = _load_json(f"index-{prefix}.json")
+    folder, component_file, _ = TEMPLATE_SETS[template_set]
+    component = _load_json(component_file, folder)
+    index_tpl = _load_json(f"index-{prefix}.json", folder)
     merged = _merge(component.get("template", {}), index_tpl.get("template", {}))
     return component, index_tpl, merged
 
@@ -612,10 +709,10 @@ class ES(EsClient):
             body = json.dumps(body)
         return self.request(method, path, body, ctype)
 
-    def install_component(self, component):
-        status, resp = self.call("PUT", f"/_component_template/{COMMON_COMPONENT}", component)
+    def install_component(self, component, name=COMMON_COMPONENT):
+        status, resp = self.call("PUT", f"/_component_template/{name}", component)
         if status >= 300:
-            sys.exit(f"Could not install component template {COMMON_COMPONENT} ({status}):"
+            sys.exit(f"Could not install component template {name} ({status}):"
                      f" {json.dumps(resp)[:500]}")
 
     def install_index_template(self, prefix, index_tpl):
@@ -679,18 +776,22 @@ class LogSource:
 
     name        short name used in messages and --only ("journal", "syslog")
     prefix      index prefix ("logstash")
-    dataset     event.dataset of its documents, used for the index check ("syslog.journal");
-                a list when one source writes several datasets ("linux.account", "linux.cron", ...)
+    dataset     event.dataset of its documents, used for the index check ("syslog.journal"); a
+                tuple or list when one source writes several datasets ("linux.account", ...)
+    templates   template set (TEMPLATE_SETS): "linux", or "windows" for an index family the
+                Windows importers already define
     collect     (ev, profile, args) -> list of work items, or None if there is nothing to do
     parse       (ev, profile, args, item, report) -> iterator of (id_parts, doc) or (None, reason)
     missing     optional (ev, profile, args) -> (exit code, message) when collect found nothing
     item_label  item -> text for progress lines
     """
 
-    def __init__(self, name, prefix, dataset, collect, parse, item_label=str, missing=None):
+    def __init__(self, name, prefix, dataset, collect, parse, item_label=str, missing=None, templates="linux"):
         self.name = name
         self.prefix = prefix
         self.dataset = dataset
+        self.datasets = tuple(dataset) if isinstance(dataset, (tuple, list)) else (dataset,)
+        self.templates = templates
         self.collect = collect
         self.parse = parse
         self.item_label = item_label
@@ -798,10 +899,10 @@ def run_source(source, ev, profile, args, es):
         print(f"No {source.name} input found.")
         return 0
     index = resolve_index(source.prefix, profile.hostname)
-    component, index_tpl, body = load_templates(source.prefix)
+    component, index_tpl, body = load_templates(source.prefix, source.templates)
     exact = template_fields(body["mappings"])
     if es is not None:
-        es.install_component(component)
+        es.install_component(component, TEMPLATE_SETS[source.templates][2])
         if source.index_template:
             es.install_index_template(source.prefix, index_tpl)
         print(f"Index '{index}': {es.prepare_index(source.prefix, index, body)}")
@@ -813,7 +914,7 @@ def run_source(source, ev, profile, args, es):
         common["case"] = args.case
     report = Report()
     total = {"records": 0, "ok": 0, "errors": 0, "updated": 0}
-    unmapped, samples, lines = {}, [], []
+    unmapped, samples, lines, seen_datasets = {}, [], [], set()
     for item in items:
         n = 0
         for parts, doc in source.parse(ev, profile, args, item, report):
@@ -827,6 +928,7 @@ def run_source(source, ev, profile, args, es):
                                                        if hk not in doc["host"]})
                 else:
                     doc.setdefault(k, copy.deepcopy(v))
+            seen_datasets.add(get_field(doc, "event.dataset"))
             for name in unknown_fields(doc, exact):
                 unmapped[name] = unmapped.get(name, 0) + 1
             _id = doc_id(source.prefix, profile.hostname, *parts)
@@ -863,13 +965,12 @@ def run_source(source, ev, profile, args, es):
     new = total["ok"] - total["updated"]
     print(f"Done: {total['records']} record(s) read -> {new} new documents, {total['updated']}"
           f" already in index (re-run), {total['errors']} errors.")
-    datasets = source.dataset if isinstance(source.dataset, (list, tuple)) else [source.dataset]
     query = {"bool": {"filter": [{"term": {"host.name": profile.hostname}},
-                                 {"terms": {"event.dataset": list(datasets)}}]}}
+                                 {"terms": {"event.dataset": sorted(source.datasets)}}]}}
     in_index = es.count(index, query)
     if in_index is not None:
         verdict = "matches" if in_index == total["records"] else "DOES NOT MATCH"
-        label = datasets[0] if len(datasets) == 1 else f"{source.name} ({len(datasets)} datasets)"
-        print(f"Index check: '{index}' holds {in_index} {label} documents for host"
+        shown = sorted(d for d in seen_datasets if d) or list(source.datasets)
+        print(f"Index check: '{index}' holds {in_index} {'/'.join(shown)} documents for host"
               f" '{profile.hostname}' ({verdict} the {total['records']} records read).")
     return 1 if total["errors"] else 0

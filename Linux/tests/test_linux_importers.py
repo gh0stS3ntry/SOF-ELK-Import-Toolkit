@@ -516,10 +516,11 @@ class LinuxFrontEndTests(unittest.TestCase):
     def test_sources_registered(self):
         import linux2sofelk
         self.assertEqual([s.name for s in linux2sofelk.SOURCES],
-                         ["journal", "syslog", "auditd", "bodyfile", "wtmp", "packages", "linuxconfig"])
+                         ["journal", "syslog", "auditd", "bodyfile", "wtmp", "packages", "linuxconfig",
+                          "httpd", "browser", "vsftpd"])
         for s in linux2sofelk.SOURCES:
-            common.load_templates(s.prefix)  # every source has its template
-        self.assertEqual([s.index_template for s in linux2sofelk.SOURCES], [False, False, True, True, True, True, True])
+            common.load_templates(s.prefix, s.templates)  # every source has its template
+        self.assertEqual([s.index_template for s in linux2sofelk.SOURCES], [False, False, True, True, True, True, True, False, True, False])
 
 
 class MessageTests(unittest.TestCase):

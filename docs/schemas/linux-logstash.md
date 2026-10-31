@@ -1,6 +1,6 @@
 # Linux system log schema (`logstash-*`)
 
-Loaded by `Linux/journal2sofelk.py` (`event.dataset` `syslog.journal`) and `Linux/syslog2sofelk.py` (`event.dataset` `syslog.file`). Mapping: `Linux/index_templates/component-toolkit-linux-common.json` plus `Linux/index_templates/index-logstash.json`, applied when the importer creates `logstash-<hostname>` (no index template is installed, because `logstash-*` is SOF-ELK's own family). The index uses `dynamic: false`, so a field not listed here is not searchable.
+Loaded by `Linux/journal2sofelk.py` (`event.dataset` `syslog.journal`), `Linux/syslog2sofelk.py` (`event.dataset` `syslog.file`) and `Linux/vsftpd2sofelk.py` (`event.dataset` `ftp.vsftpd` and `ftp.xferlog`, see [FTP logs](#ftp-logs-vsftpd2sofelkpy)). Mapping: `Linux/index_templates/component-toolkit-linux-common.json` plus `Linux/index_templates/index-logstash.json`, applied when the importer creates `logstash-<hostname>` (no index template is installed, because `logstash-*` is SOF-ELK's own family). The index uses `dynamic: false`, so a field not listed here is not searchable.
 
 ## Common fields (every Linux index)
 
@@ -73,6 +73,43 @@ Loaded by `Linux/journal2sofelk.py` (`event.dataset` `syslog.journal`) and `Linu
 | `iptables.label` / `ttl` / `ether_type` | keyword / integer / keyword | iptables, UFW, firewalld (SOF-ELK 6017-iptables.conf names) |
 
 `event.action` values: `ssh-login`, `ssh-invalid-user`, `ssh-max-auth-tries`, `ssh-connection`, `ssh-connection-closed`, `ssh-disconnected`, `ssh-received-disconnect`, `ssh-negotiation-failed`, `ssh-listening`, `session-opened`, `session-closed`, `authentication-failure`, `password-changed`, `sudo-command`, `su`, `pkexec-command`, `user-created`, `user-deleted`, `user-changed`, `user-locked`, `group-created`, `group-deleted`, `group-membership-added`, `group-membership-removed`, `password-aging-changed`, `session-created`, `session-removed`, `cron-command`, `firewall-block`, `firewall-allow`, `firewall-log`, `kernel-module-warning`, `usb-device`.
+
+## FTP logs (`vsftpd2sofelk.py`)
+
+FTP server logs share `logstash-<hostname>` with the system logs. Files: `/var/log/vsftpd.log` (vsftpd's own format, written with `xferlog_std_format=NO` or `dual_log_enable=YES`), `/var/log/xferlog` (wu-ftpd transfer format, written by vsftpd, ProFTPD and pure-ftpd), the same names under `/var/log/vsftpd/`, `/var/log/proftpd/` and `/var/log/pure-ftpd/` (also pure-ftpd's `transfer.log`), rotated copies, and any `--ftp-log` file. vsftpd configured with `syslog_enable=YES` logs to syslog or the journal instead, which the other two importers already load.
+
+**Time zone.** vsftpd writes GMT unless `use_localtime=YES` (Debian and Ubuntu ship `YES`, RHEL leaves the default). The importer reads the setting from the evidence's `/etc/vsftpd.conf` or `/etc/vsftpd/vsftpd.conf`; `--ftp-time local|utc` overrides it, and with no config it reads UTC and warns. ProFTPD's xferlog is local time. The zone used is in `event.timezone`.
+
+**Passwords are removed before sending.** A `PASS` command logged with `log_ftp_protocol=YES`, vsftpd's `anon password "..."`, and xferlog's user name for anonymous sessions (which holds the password the client typed) are replaced with `<redacted>` in `message`, `ftp.command_arg` and `user.name` (`anonymous`).
+
+| Field | Type | vsftpd.log | xferlog |
+|---|---|---|---|
+| `message` | keyword (+ `.text`) | the line (passwords redacted) | the line (anonymous password redacted) |
+| `log.syslog.appname`, `process.name` | keyword | `vsftpd` | `vsftpd`, or `proftpd` under `/var/log/proftpd/` |
+| `process.pid`, `log.syslog.procid` | long / keyword | `[pid N]` | |
+| `user.name` | keyword | `[user]` | user name, or `anonymous` |
+| `source.ip` / `source.address` | ip / keyword | `Client "..."` (IPv4-mapped IPv6 `::ffff:a.b.c.d` becomes `a.b.c.d`) | remote host |
+| `event.action` | keyword | `ftp-connect`, `ftp-login`, `ftp-download`, `ftp-upload`, `ftp-delete`, `ftp-mkdir`, `ftp-rmdir`, `ftp-rename`, `ftp-chmod`, `ftp-command`, `ftp-response` | `ftp-download`, `ftp-upload`, `ftp-delete` (direction `o` / `i` / `d`) |
+| `event.outcome` | keyword | `OK` success, `FAIL` failure | completion `c` success, `i` failure |
+| `event.category` / `event.type` | keyword | `authentication` / `start`, `file` / `access`, `creation`, `deletion`, `change`, `network` / `connection`, `protocol` | `file` / ... |
+| `file.path`, `file.name` | keyword | the quoted path | file name (may contain spaces) |
+| `ftp.action` | keyword | the raw action, e.g. `OK DOWNLOAD`, `FAIL LOGIN`, `FTP command` | |
+| `ftp.command`, `ftp.command_arg` | keyword | `log_ftp_protocol` commands, e.g. `USER` / `ftpuser`, `RETR` / `file` | |
+| `ftp.response.code`, `ftp.response.message` | integer / keyword | `log_ftp_protocol` responses | |
+| `ftp.transfer.bytes` | long | `N bytes` | file size |
+| `ftp.transfer.rate` | keyword | e.g. `512.00Kbyte/sec` | |
+| `ftp.transfer.duration` | long | | seconds |
+| `ftp.transfer.type`, `ftp.transfer.direction` | keyword | | `ascii` / `binary`, `outgoing` / `incoming` / `delete` |
+| `ftp.access_mode`, `ftp.special_action`, `ftp.service`, `ftp.auth_method`, `ftp.auth_user_id`, `ftp.completion` | keyword | | `real` / `guest` / `anonymous`, `none` / `compressed` / ..., `ftp`, `none` / `rfc931`, `*` left out, `complete` / `incomplete` |
+| `ftp.rename_to` | keyword | `RENAME` target (vsftpd writes `"old new"`, so a path with spaces splits at the last space; the line is in `message`) | |
+| `labels.type` | keyword | `ftp` | `ftp` |
+
+```esql
+FROM logstash-* METADATA _index
+| WHERE event.dataset IN ("ftp.vsftpd", "ftp.xferlog") AND event.action IN ("ftp-upload", "ftp-download", "ftp-delete", "ftp-rename")
+| KEEP @timestamp, _index, event.dataset, event.action, event.outcome, user.name, source.ip, file.path, ftp.transfer.bytes, ftp.rename_to
+| SORT @timestamp
+```
 
 ## Example ES|QL
 
