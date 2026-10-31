@@ -1,0 +1,6 @@
+root:x:0:
+sudo:x:27:alice,svc_backup
+adm:x:4:
+www-data:x:33:
+alice:x:1000:
+ops:x:1001:svc_backup

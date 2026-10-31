@@ -1,0 +1,179 @@
+{
+  "index_patterns": [
+    "packages-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-linux-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "packages",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "event": {
+          "properties": {
+            "original": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "start": {
+              "type": "date"
+            },
+            "end": {
+              "type": "date"
+            }
+          }
+        },
+        "error": {
+          "properties": {
+            "message": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            }
+          }
+        },
+        "package": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "version": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "architecture": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "manager": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "description": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "installed": {
+              "type": "date"
+            },
+            "size": {
+              "type": "long"
+            },
+            "build_version": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "reference": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        "packages": {
+          "properties": {
+            "previous_version": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "automatic": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "repository": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "transaction_id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "status": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "source_package": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "maintainer": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "vendor": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "mtime_source": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "user": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "process": {
+          "properties": {
+            "command_line": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            }
+          }
+        },
+        "url": {
+          "properties": {
+            "original": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Linux package history and installed-package inventory (Linux/packages2sofelk.py): one document per package action or installed package; ECS package.*, toolkit packages.*",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}

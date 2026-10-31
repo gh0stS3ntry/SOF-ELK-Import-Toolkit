@@ -1,0 +1,17 @@
+Package: curl
+Status: install ok installed
+Priority: optional
+Installed-Size: 500
+Maintainer: Debian Curl Maintainers <team+curl@tracker.debian.org>
+Architecture: amd64
+Source: curl (8.5.0-2)
+Version: 8.5.0-2
+Description: command line tool for transferring data with URL syntax
+ curl is a command line tool for transferring data with URL syntax.
+
+Package: netcat-openbsd
+Status: deinstall ok config-files
+Architecture: amd64
+Version: 1.219-1
+Description: TCP/IP swiss army knife
+

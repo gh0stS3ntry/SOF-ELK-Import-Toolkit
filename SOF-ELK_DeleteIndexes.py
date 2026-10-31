@@ -62,7 +62,7 @@ TOOLKIT_PREFIXES = frozenset({
     "genericcsv",
     # Linux (journal, text syslog and vsftpd share SOF-ELK's logstash family; web logs go to
     # httpdlog and browser history to browsinghistory, both listed above)
-    "logstash",
+    "logstash", "packages", "linuxconfig",
 })
 
 # Fields that record which evidence host (or AWS evidence source) a document came from.

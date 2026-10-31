@@ -721,7 +721,7 @@ class LogSource:
     name        short name used in messages and --only ("journal", "syslog")
     prefix      index prefix ("logstash")
     dataset     event.dataset of its documents, used for the index check ("syslog.journal"); a
-                tuple when one source writes several datasets
+                tuple or list when one source writes several datasets ("linux.account", ...)
     templates   template set (TEMPLATE_SETS): "linux", or "windows" for an index family the
                 Windows importers already define
     collect     (ev, profile, args) -> list of work items, or None if there is nothing to do

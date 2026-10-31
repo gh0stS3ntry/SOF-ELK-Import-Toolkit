@@ -1,0 +1,8 @@
+[Unit]
+Description=Regular background program processing daemon
+
+[Service]
+ExecStart=/usr/sbin/cron -f $EXTRA_OPTS
+
+[Install]
+WantedBy=multi-user.target

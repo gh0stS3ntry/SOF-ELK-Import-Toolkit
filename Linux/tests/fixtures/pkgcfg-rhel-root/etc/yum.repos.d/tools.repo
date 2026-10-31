@@ -1,0 +1,6 @@
+[tools]
+name=Tools
+baseurl=http://203.0.113.9/el9/
+        http://203.0.113.10/el9/
+enabled=1
+gpgcheck=0

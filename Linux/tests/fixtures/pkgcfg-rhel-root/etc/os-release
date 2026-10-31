@@ -1,0 +1,5 @@
+NAME="Rocky Linux"
+VERSION_ID="9.4"
+ID="rocky"
+ID_LIKE="rhel centos fedora"
+PRETTY_NAME="Rocky Linux 9.4 (Blue Onyx)"

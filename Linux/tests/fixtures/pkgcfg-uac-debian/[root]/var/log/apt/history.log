@@ -1,0 +1,14 @@
+
+
+Start-Date: 2026-10-20  09:24:05
+Commandline: apt install curl
+Requested-By: alice (1000)
+Install: curl:amd64 (8.5.0-2), libcurl4:amd64 (8.5.0-2, automatic)
+Upgrade: openssl:amd64 (3.0.11-1, 3.0.13-1)
+End-Date: 2026-10-20  09:24:12
+
+Start-Date: 2026-10-21  23:59:58
+Commandline: apt purge netcat-openbsd
+Purge: netcat-openbsd:amd64 (1.219-1)
+Error: Sub-process /usr/bin/dpkg returned an error code (1)
+End-Date: 2026-10-21  23:59:59

@@ -1,0 +1,6 @@
+root:x:0:
+sudo:x:27:alice
+adm:x:4:
+www-data:x:33:
+alice:x:1000:
+bob:x:1003:

@@ -1,0 +1,10 @@
+0|/lib -> usr/lib|10|lrwxrwxrwx|0|0|7|1792656000|1702656000|1702656000|1702656000
+0|/etc/passwd|100|-rw-r--r--|0|0|300|1792656000|1792652400|1792652400|1792652400
+0|/etc/systemd/system/multi-user.target.wants/sysupdate.service -> /etc/systemd/system/sysupdate.service|200|lrwxrwxrwx|0|0|38|1792656000|1792654200|1792654200|1792654200
+0|/etc/systemd/system/multi-user.target.wants/cron.service -> /lib/systemd/system/cron.service|201|lrwxrwxrwx|0|0|32|1792656000|1702656000|1702656000|1702656000
+0|/etc/systemd/system/sysupdate.service|202|-rw-r--r--|0|0|180|1792656000|1792654100|1792654100|1792654100
+0|/etc/systemd/system/ctrl-alt-del.target -> /dev/null|203|lrwxrwxrwx|0|0|9|1792656000|1792651000|1792651000|1792651000
+0|/etc/systemd/system/apt-daily.service -> /dev/null|204|lrwxrwxrwx|0|0|9|1792656000|1792651000|1792651000|1792651000
+0|/var/lib/dpkg/info/curl:amd64.list|300|-rw-r--r--|0|0|900|1792656000|1792459450|1792459450|1792459450
+0|/home/alice/.ssh/authorized_keys|400|-rw-------|1000|1000|200|1792656000|1792655400|1792655400|1792655400
+d41d8cd98f00b204e9800998ecf8427e|/etc/hosts|401|-rw-r--r--|0|0|200|1792656000|1792648800|1792648800|1792648800
