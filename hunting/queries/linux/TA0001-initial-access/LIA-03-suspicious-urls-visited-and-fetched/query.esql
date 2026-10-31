@@ -1,0 +1,43 @@
+// LIA-03 | Suspicious URLs visited in browsers or fetched by commands, cron jobs and repositories
+// Tactic: TA0001 Initial Access | ATT&CK: T1566.002, T1189, T1105
+// Indexes: browsinghistory-*, logstash-*, auditd-*, linuxconfig-* | Needs: browsinghistory-*, or command lines in logstash-*, auditd-*, linuxconfig-*
+FROM browsinghistory-*, logstash-*, auditd-*, linuxconfig-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL text = COALESCE(url.original, process.command_line, linuxconfig.line, "")
+| WHERE text LIKE "*http://*" OR text LIKE "*https://*" OR text LIKE "*ftp://*"
+| EVAL u = TO_LOWER(REPLACE(text, "^.*?((https?|ftp)://[^ '\"|;)]+).*$", "$1"))
+| EVAL host_part = REPLACE(u, "^[a-z]+://([^/:?#]+).*$", "$1")
+| EVAL f_ip_host = host_part RLIKE "[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+" OR STARTS_WITH(host_part, "[")
+| EVAL f_port = u RLIKE "[a-z]+://[^/]+:[0-9]+.*" AND NOT u RLIKE "[a-z]+://[^/]+:(80|443)(/.*)?"
+| EVAL f_punycode = host_part LIKE "*xn--*"
+| EVAL f_shortener = host_part RLIKE "(bit[.]ly|tinyurl[.]com|t[.]co|is[.]gd|cutt[.]ly|rb[.]gy|shorturl[.]at|t[.]ly|ow[.]ly)"
+| EVAL f_paste_raw = host_part RLIKE "(.*[.])?(pastebin[.]com|paste[.]ee|ghostbin[.]com|hastebin[.]com|rentry[.]co|raw[.]githubusercontent[.]com|gist[.]githubusercontent[.]com|transfer[.]sh|temp[.]sh|0x0[.]st|termbin[.]com|file[.]io|bashupload[.]com|oshi[.]at)"
+| EVAL f_tunnel_dyn = host_part RLIKE ".*[.](ngrok[.]io|ngrok-free[.]app|ngrok[.]app|trycloudflare[.]com|serveo[.]net|loca[.]lt|localhost[.]run|duckdns[.]org|no-ip[.]com|ddns[.]net|hopto[.]org|zapto[.]org|sytes[.]net|serveftp[.]com|portmap[.]io|pinggy[.]link|onion)"
+| EVAL f_payload = u RLIKE ".*[.](sh|py|pl|elf|bin|so|deb|rpm|run|appimage|tar|tgz|gz|zip|7z|exe|ps1)([?#].*)?"
+| EVAL score = CASE(f_ip_host, 2, 0) + CASE(f_port, 1, 0) + CASE(f_punycode, 2, 0) + CASE(f_shortener, 1, 0)
+    + CASE(f_paste_raw, 2, 0) + CASE(f_tunnel_dyn, 3, 0) + CASE(f_payload, 2, 0)
+| WHERE score > 0
+| EVAL artifact = CASE(STARTS_WITH(event.dataset, "browsinghistory"), event.dataset, STARTS_WITH(event.dataset, "linux."), event.dataset, event.action)
+| STATS
+    seen = COUNT(*),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    users = VALUES(user.name),
+    artifacts = VALUES(artifact),
+    examples = VALUES(text),
+    indexes = VALUES(_index)
+  BY host.name, score, u
+| EVAL examples = MV_SLICE(examples, 0, 2)
+| KEEP
+    host.name,
+    score,
+    u,
+    seen,
+    first_seen,
+    last_seen,
+    users,
+    artifacts,
+    examples,
+    indexes
+| SORT score DESC, first_seen ASC
+| LIMIT 2000

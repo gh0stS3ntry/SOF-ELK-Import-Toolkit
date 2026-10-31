@@ -1,0 +1,51 @@
+// LCO-02 | Bursts of files created in one folder within ten minutes (mass copy, unpacking, collection)
+// Tactic: TA0009 Collection | ATT&CK: T1074.001, T1119
+// Indexes: bodyfile-*, auditd-* | Needs: bodyfile-* with birth or inode-change times
+FROM bodyfile-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| WHERE COALESCE(file.type, "file") == "file"
+| EVAL lp = TO_LOWER(COALESCE(file.path, ""))
+// package-managed and system folders change in bursts on every upgrade
+| WHERE NOT STARTS_WITH(lp, "/usr/") AND NOT STARTS_WITH(lp, "/var/lib/") AND NOT STARTS_WITH(lp, "/var/cache/")
+  AND NOT STARTS_WITH(lp, "/lib/") AND NOT STARTS_WITH(lp, "/boot/") AND NOT STARTS_WITH(lp, "/snap/") AND NOT STARTS_WITH(lp, "/proc/")
+  AND NOT STARTS_WITH(lp, "/sys/") AND NOT STARTS_WITH(lp, "/run/") AND NOT STARTS_WITH(lp, "/var/log/journal/")
+  AND NOT lp LIKE "*/.cache/*" AND NOT lp LIKE "*/.git/*" AND NOT lp LIKE "*/node_modules/*" AND NOT lp LIKE "*/site-packages/*"
+| EVAL t = CASE(event.dataset == "bodyfile", COALESCE(file.created, file.ctime), @timestamp)
+| EVAL dir = COALESCE(file.directory, REPLACE(file.path, "/[^/]*$", ""))
+| EVAL window = DATE_TRUNC(10 minutes, t)
+| EVAL is_doc = file.extension IN ("doc", "docx", "xls", "xlsx", "ppt", "pptx", "pdf", "csv", "txt", "odt", "ods", "rtf", "msg", "eml", "pst",
+    "sql", "db", "sqlite", "mdb", "kdbx", "pem", "key", "pfx", "p12", "json", "xml", "yaml", "yml", "conf", "env")
+| STATS
+    files = COUNT(*),
+    documents = COUNT(*) WHERE is_doc,
+    total_mb = ROUND(SUM(TO_DOUBLE(file.size)) / 1048576.0, 1),
+    extensions = VALUES(file.extension),
+    owners = VALUES(file.owner),
+    sample = VALUES(file.name),
+    first_time = MIN(t),
+    last_time = MAX(t),
+    artifacts = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, dir, window
+| WHERE files >= 50
+| EVAL score = CASE(documents >= 20, 3, 0) + CASE(total_mb >= 100, 2, 0)
+    + CASE(STARTS_WITH(dir, "/tmp") OR STARTS_WITH(dir, "/var/tmp") OR STARTS_WITH(dir, "/dev/shm") OR STARTS_WITH(dir, "/var/www"), 2, 0)
+    + CASE(dir LIKE "*/.*", 1, 0)
+| EVAL sample = MV_SLICE(sample, 0, 9), extensions = MV_SLICE(extensions, 0, 14)
+| KEEP
+    host.name,
+    score,
+    window,
+    dir,
+    files,
+    documents,
+    total_mb,
+    extensions,
+    owners,
+    first_time,
+    last_time,
+    sample,
+    artifacts,
+    indexes
+| SORT score DESC, files DESC
+| LIMIT 2000

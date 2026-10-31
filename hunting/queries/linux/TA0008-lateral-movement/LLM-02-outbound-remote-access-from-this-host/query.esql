@@ -1,0 +1,49 @@
+// LLM-02 | Outbound remote access from this host: SSH, RDP, SMB and WinRM clients, known_hosts and SSH client files
+// Tactic: TA0008 Lateral Movement | ATT&CK: T1021.004, T1021.001, T1021.002, T1021.006
+// Indexes: logstash-*, auditd-*, linuxconfig-*, bodyfile-* | Needs: any of logstash-*, auditd-*, linuxconfig-*, bodyfile-*
+FROM logstash-*, auditd-*, linuxconfig-*, bodyfile-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL cmd = TO_LOWER(COALESCE(process.command_line, linuxconfig.line, ""))
+| EVAL p = COALESCE(file.path, "")
+| EVAL dport = TO_INTEGER(destination.port)
+| EVAL is_cmd = (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") OR event.dataset IN ("linux.cron", "linux.systemd_unit", "linux.autostart", "linux.ssh_key")
+        OR (event.dataset == "linux.init_script" AND linuxconfig.init.kind != "init.d"))
+    AND cmd RLIKE "(.*[ /;|(])?(ssh|scp|sftp|rsync|sshpass|autossh|xfreerdp|xfreerdp3|rdesktop|remmina|evil-winrm|psexec[.]py|wmiexec[.]py|smbexec[.]py|atexec[.]py|dcomexec[.]py|impacket-psexec|impacket-wmiexec|impacket-smbexec|impacket-atexec|impacket-dcomexec|smbclient|smbclient[.]py|crackmapexec|netexec|nxc|winrm|pwsh|kubectl|telnet|vncviewer|xtightvncviewer|ansible|ansible-playbook|pssh|parallel-ssh|clush)( .*)?" AND NOT cmd RLIKE "(.*/)?(apt|apt-get|apt-mark|apt-cache|aptitude|dpkg|dnf|yum|zypper|apk|snap|pip|pip3|pipx|gem|npm)( .*)?"
+| EVAL is_known_hosts = event.dataset == "linux.ssh_key" AND event.action == "known_hosts"
+| EVAL is_client_file = event.dataset == "bodyfile" AND COALESCE(file.type, "file") == "file"
+    AND p RLIKE "/(home/[^/]+|root)/[.]ssh/(known_hosts|known_hosts[.]old|config|id_[a-z0-9]+|id_[a-z0-9]+[.]pub)|/(home/[^/]+|root)/[.]config/(remmina|freerdp)/.*"
+| EVAL is_net = event.action IN ("connect", "firewall-allow", "firewall-log", "firewall-block")
+    AND dport IN (22, 23, 135, 445, 3389, 5900, 5985, 5986, 2222)
+| WHERE is_cmd OR is_known_hosts OR is_client_file OR is_net
+| EVAL kind = CASE(is_cmd, "command", is_known_hosts, "known_hosts entries", is_client_file, "SSH/RDP client file", "network record")
+| EVAL what = CASE(is_cmd, COALESCE(process.command_line, linuxconfig.line), is_known_hosts, p, is_client_file, p,
+    CONCAT(TO_STRING(destination.ip), ":", TO_STRING(dport)))
+| STATS
+    records = COUNT(*),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    users = VALUES(user.name),
+    unhashed_hosts = VALUES(linuxconfig.ssh.hosts),
+    hashed_entries = COUNT(*) WHERE linuxconfig.ssh.hashed == true,
+    file_mtime = MAX(file.mtime),
+    programs = VALUES(process.executable),
+    directories = VALUES(process.working_directory),
+    indexes = VALUES(_index)
+  BY host.name, kind, what
+| EVAL unhashed_hosts = MV_SLICE(unhashed_hosts, 0, 29)
+| KEEP
+    host.name,
+    kind,
+    what,
+    records,
+    first_seen,
+    last_seen,
+    users,
+    unhashed_hosts,
+    hashed_entries,
+    file_mtime,
+    programs,
+    directories,
+    indexes
+| SORT kind ASC, last_seen DESC
+| LIMIT 5000

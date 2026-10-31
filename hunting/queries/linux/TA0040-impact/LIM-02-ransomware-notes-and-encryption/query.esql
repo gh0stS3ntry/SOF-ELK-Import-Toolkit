@@ -1,0 +1,54 @@
+// LIM-02 | Ransomware: ransom notes, bursts of files with a new extension, and encryption commands
+// Tactic: TA0040 Impact | ATT&CK: T1486, T1490
+// Indexes: bodyfile-*, logstash-*, auditd-*, linuxconfig-* | Needs: bodyfile-*; logstash-*, auditd-*, linuxconfig-* for commands
+FROM bodyfile-*, logstash-*, auditd-*, linuxconfig-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL lp = TO_LOWER(COALESCE(file.path, ""))
+| EVAL n = TO_LOWER(COALESCE(file.name, ""))
+| EVAL text = TO_LOWER(COALESCE(process.command_line, linuxconfig.line, ""))
+| EVAL is_file = event.dataset == "bodyfile" AND COALESCE(file.type, "file") == "file" AND n RLIKE "(.*(readme|read_me|read-me|how_to|how-to|howto|decrypt|recover|restore|ransom|unlock|!!!|_help_|help_decrypt|files_encrypted|your_files|instructions).*[.](txt|html|hta|htm)|.*[.](locked|encrypted|crypt|crypted|enc|lockbit|babyk|akira|royal|blackcat|alphv|play|conti|hive|rhysida|esxiargs|cl0p|clop|rnsmwr|crypto|kraken|onion|ransom|pay|wncry|wcry|locky|zepto|cerber|xtbl|zzzzz))"
+    AND NOT STARTS_WITH(lp, "/usr/") AND NOT STARTS_WITH(lp, "/var/lib/") AND NOT lp LIKE "*/site-packages/*" AND NOT lp LIKE "*/node_modules/*"
+    AND NOT lp LIKE "*/.cache/*" AND NOT lp LIKE "*/.git/*" AND NOT lp LIKE "*/go/pkg/*" AND NOT lp LIKE "*/.cargo/*"
+| EVAL is_cmd = (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") OR (STARTS_WITH(event.dataset, "linux.") AND COALESCE(linuxconfig.init.kind, "") != "init.d"))
+    AND text RLIKE ".*(openssl +(enc|aes|rsautl|pkeyutl) +.*(-e|-encrypt|-in)|gpg +.*(-c|--symmetric|--encrypt|-e )|ccrypt|aescrypt|7z +a +.*-p|zip +.*(-p|-e|--encrypt)|for +.* in .*(openssl|gpg)|find +.*-exec +.*(openssl|gpg)|vim-cmd +vmsvc/getallvms|esxcli +vm +process +list|chattr +-i|encrypt|ransom|lockbit|babuk|gonnacry).*"
+| WHERE is_file OR is_cmd
+| EVAL born = COALESCE(file.created, file.ctime)
+| EVAL is_note = is_file AND n RLIKE ".*[.](txt|html|hta|htm)"
+| EVAL ext = file.extension
+| EVAL what = CASE(is_note, CONCAT("note: ", n), is_file, CONCAT("extension .", COALESCE(ext, "")),
+    COALESCE(process.command_line, linuxconfig.line))
+| EVAL hour = DATE_TRUNC(1 hour, COALESCE(born, @timestamp))
+| STATS
+    files = COUNT(*) WHERE is_file,
+    folders = COUNT_DISTINCT(file.directory),
+    sample_paths = VALUES(file.path),
+    owners = VALUES(file.owner),
+    runs = COUNT(*) WHERE is_cmd,
+    users = VALUES(user.name),
+    first_time = MIN(COALESCE(born, @timestamp)),
+    last_time = MAX(COALESCE(born, @timestamp)),
+    artifacts = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, what, hour
+| EVAL kind = CASE(what LIKE "note: *", "ransom note", what LIKE "extension .*", "encrypted-file extension", "command")
+| WHERE kind == "command" OR (kind == "ransom note" AND folders >= 3) OR (kind == "encrypted-file extension" AND files >= 20)
+| EVAL score = CASE(kind == "encrypted-file extension" AND files >= 100, 5, kind == "ransom note", 4, kind == "encrypted-file extension", 3, 2)
+| EVAL sample_paths = MV_SLICE(sample_paths, 0, 9)
+| KEEP
+    host.name,
+    score,
+    kind,
+    what,
+    hour,
+    files,
+    folders,
+    first_time,
+    last_time,
+    owners,
+    runs,
+    users,
+    sample_paths,
+    artifacts,
+    indexes
+| SORT score DESC, first_time ASC
+| LIMIT 2000

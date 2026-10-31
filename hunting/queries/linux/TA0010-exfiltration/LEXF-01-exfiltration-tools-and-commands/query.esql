@@ -1,0 +1,32 @@
+// LEXF-01 | Exfiltration commands and tools: uploads with rclone, curl, scp, cloud CLIs, netcat; tools installed and their config files
+// Tactic: TA0010 Exfiltration | ATT&CK: T1048, T1567.002, T1041
+// Indexes: logstash-*, auditd-*, linuxconfig-*, packages-*, bodyfile-* | Needs: any of logstash-*, auditd-*, linuxconfig-*, packages-*, bodyfile-*
+FROM logstash-*, auditd-*, linuxconfig-*, packages-*, bodyfile-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL text = TO_LOWER(COALESCE(process.command_line, linuxconfig.line, ""))
+| EVAL lp = TO_LOWER(COALESCE(file.path, ""))
+| EVAL is_cmd = (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") OR STARTS_WITH(event.dataset, "linux.") OR event.dataset IN ("packages.apt", "packages.dnf_history"))
+    AND text RLIKE ".*(([ /;|(]|)rclone +(copy|sync|move|copyto|moveto)|curl .*(-t |--upload-file|-f |--form|--data-binary +[@]|-d +[@]|--data +[@])|wget .*--post-(file|data)|(scp|rsync|sftp) .*[^ ]+:[^ ]*|(nc|ncat|netcat) .*[<]|/dev/tcp/.*[<]|aws +s3 +(cp|sync|mv)|gsutil +(-m +)?(cp|rsync)|gcloud +storage +cp|az +storage +(blob|file) +upload|azcopy +(copy|cp|sync)|mega-?put|megacmd|megatools|transfer[.]sh|dropbox_uploader|gdrive +upload|lftp .*(put|mirror +-r)|smbclient .*put|s3cmd +(put|sync)|restic .*backup|rsync .*--remove-source-files|openssl +s_client .*[<]).*" AND NOT text RLIKE "(.*/)?(apt|apt-get|apt-mark|apt-cache|aptitude|dpkg|dnf|yum|zypper|apk|snap|pip|pip3|pipx|gem|npm)( .*)?"
+| EVAL is_pkg = STARTS_WITH(event.dataset, "packages.") AND event.action IN ("install", "installed", "reinstall")
+    AND package.name RLIKE "(rclone|megatools|megacmd|s3cmd|awscli|aws-cli|azure-cli|google-cloud-cli|google-cloud-sdk|lftp|restic|rclone-browser|croc|magic-wormhole)"
+| EVAL is_file = event.dataset == "bodyfile" AND COALESCE(file.type, "file") == "file"
+    AND (lp LIKE "*/rclone/rclone.conf" OR lp LIKE "*/.config/rclone/*" OR lp LIKE "*/.megarc" OR lp LIKE "*/.s3cfg"
+         OR lp LIKE "*/.config/gcloud/credentials.db" OR lp LIKE "*/.azure/*token*"
+         OR (TO_LOWER(file.name) IN ("rclone", "croc", "mega-put", "megaput", "azcopy", "gdrive", "transfer") AND NOT STARTS_WITH(lp, "/usr/")))
+| WHERE is_cmd OR is_pkg OR is_file
+| EVAL ts = CASE(event.dataset == "bodyfile", COALESCE(file.created, file.ctime), @timestamp)
+| EVAL artifact = CASE(is_cmd, COALESCE(event.action, event.dataset), is_pkg, event.dataset, "file on disk")
+| EVAL detail = CASE(is_cmd, COALESCE(process.command_line, linuxconfig.line), is_pkg, CONCAT(package.name, " ", COALESCE(package.version, "")),
+    CONCAT(file.path, " size=", COALESCE(TO_STRING(file.size), ""), " owner=", COALESCE(file.owner, ""), " mtime=", COALESCE(TO_STRING(file.mtime), "")))
+| EVAL score = CASE(is_cmd, 3, 0) + CASE(is_file, 2, 0) + CASE(is_pkg AND event.action != "installed", 1, 0)
+| KEEP
+    ts,
+    host.name,
+    score,
+    artifact,
+    user.name,
+    process.working_directory,
+    detail,
+    _index
+| SORT ts DESC
+| LIMIT 5000

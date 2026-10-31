@@ -1,0 +1,44 @@
+// LEXF-02 | File-sharing, paste, cloud-storage and request-capture sites in browser history and command lines
+// Tactic: TA0010 Exfiltration | ATT&CK: T1567.002, T1567.003, T1102
+// Indexes: browsinghistory-*, logstash-*, auditd-*, linuxconfig-* | Needs: browsinghistory-*, or command lines in logstash-*, auditd-*, linuxconfig-*
+FROM browsinghistory-*, logstash-*, auditd-*, linuxconfig-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL text = COALESCE(url.original, process.command_line, linuxconfig.line, "")
+| WHERE text LIKE "*://*" OR text LIKE "*.*"
+| EVAL u = TO_LOWER(CASE(url.original IS NOT NULL, url.original, REPLACE(text, "^.*?((https?|ftp)://[^ '\"|;)]+).*$", "$1")))
+| EVAL domain = TO_LOWER(COALESCE(url.domain, REPLACE(u, "^[a-z]+://([^/:?#]+).*$", "$1")))
+| WHERE domain RLIKE "(.*[.])?(mega[.]nz|mega[.]io|dropbox[.]com|dropboxusercontent[.]com|drive[.]google[.]com|drive[.]usercontent[.]google[.]com|onedrive[.]live[.]com|1drv[.]ms|box[.]com|wetransfer[.]com|we[.]tl|sendspace[.]com|mediafire[.]com|gofile[.]io|file[.]io|transfer[.]sh|temp[.]sh|0x0[.]st|catbox[.]moe|litterbox[.]catbox[.]moe|pixeldrain[.]com|filebin[.]net|tmpfiles[.]org|bashupload[.]com|oshi[.]at|uguu[.]se|krakenfiles[.]com|filetransfer[.]io|swisstransfer[.]com|icedrive[.]net|pcloud[.]com|sync[.]com|disk[.]yandex[.](com|ru)|anonfiles[.]com|qu[.]ax|pastebin[.]com|paste[.]ee|ghostbin[.]com|hastebin[.]com|privatebin[.]net|rentry[.]co|controlc[.]com|dpaste[.]org|termbin[.]com|webhook[.]site|requestbin[.]net|pipedream[.]net|ngrok[.]io|ngrok-free[.]app|trycloudflare[.]com)"
+| EVAL is_browser = STARTS_WITH(event.dataset, "browsinghistory")
+| EVAL is_upload_page = u RLIKE ".*(upload|/send|/share|/new|/paste|/transfer|/api/).*"
+| STATS
+    visits = COUNT(*) WHERE is_browser AND event.dataset == "browsinghistory",
+    downloads = COUNT(*) WHERE event.dataset == "browsinghistory.download",
+    commands = COUNT(*) WHERE NOT is_browser,
+    upload_pages = COUNT(*) WHERE is_upload_page,
+    users = VALUES(user.name),
+    sample_urls = VALUES(u),
+    sample_commands = VALUES(process.command_line),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    artifacts = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, domain
+| EVAL score = CASE(commands > 0, 3, 0) + CASE(upload_pages > 0, 2, 0) + CASE(downloads > 0, 1, 0) + CASE(visits > 0, 1, 0)
+| EVAL sample_urls = MV_SLICE(sample_urls, 0, 9), sample_commands = MV_SLICE(sample_commands, 0, 4)
+| KEEP
+    host.name,
+    score,
+    domain,
+    visits,
+    downloads,
+    commands,
+    upload_pages,
+    first_seen,
+    last_seen,
+    users,
+    sample_urls,
+    sample_commands,
+    artifacts,
+    indexes
+| SORT score DESC, last_seen DESC
+| LIMIT 2000

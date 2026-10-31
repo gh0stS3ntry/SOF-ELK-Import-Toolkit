@@ -1,0 +1,68 @@
+// LPE-09 | Package repositories added or unsigned, and packages installed from local files rather than a repository
+// Tactic: TA0003 Persistence | ATT&CK: T1195.002, T1072
+// Indexes: linuxconfig-*, packages-*, bodyfile-*, logstash-*, auditd-* | Needs: linuxconfig-* (repositories) and packages-*
+FROM linuxconfig-*, packages-*, bodyfile-*, logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL p = COALESCE(file.path, "")
+| EVAL cmd = TO_LOWER(COALESCE(process.command_line, ""))
+| EVAL is_repo = event.dataset == "linux.repository"
+| EVAL is_repo_change = event.action IN ("repository-added", "repository-removed")
+| EVAL is_repo_file = event.dataset == "bodyfile" AND (STARTS_WITH(p, "/etc/apt/sources.list") OR STARTS_WITH(p, "/etc/apt/trusted.gpg")
+    OR STARTS_WITH(p, "/etc/apt/keyrings/") OR STARTS_WITH(p, "/usr/share/keyrings/") OR STARTS_WITH(p, "/etc/yum.repos.d/")
+    OR STARTS_WITH(p, "/etc/zypp/repos.d/") OR p == "/etc/apk/repositories" OR STARTS_WITH(p, "/etc/pki/rpm-gpg/"))
+    AND COALESCE(file.type, "file") != "dir"
+| EVAL is_local_install = event.action IN ("sudo-command", "pkexec-command", "executed", "ran-command")
+    AND cmd RLIKE ".*(dpkg +(-i|--install)|rpm +(-i|-u|--install|--upgrade)|apt(-get)? +install +[.]?/|dnf +install +[.]?/|yum +(local)?install +[.]?/|zypper +in(stall)? +[.]?/|apk +add +--allow-untrusted|add-apt-repository|apt-key +add|rpm +--import).*"
+| EVAL is_pkg = event.dataset IN ("packages.dpkg", "packages.apt", "packages.dnf", "packages.dnf_history", "packages.yum", "packages.zypper")
+    AND event.action IN ("install", "reinstall", "upgrade", "downgrade")
+| WHERE is_repo OR is_repo_change OR is_repo_file OR is_local_install OR is_pkg
+// one row per repository (by URL), per repository file, per command, or per package name
+| EVAL what = CASE(is_repo, COALESCE(MV_CONCAT(linuxconfig.repository.urls, " "), url.original, linuxconfig.line),
+    is_repo_change, COALESCE(url.original, package.name), is_repo_file, p, is_local_install, process.command_line, package.name)
+| EVAL kind = CASE(is_repo, "repository", is_repo_change, "repository change", is_repo_file, "repository or key file",
+    is_local_install, "command", "package")
+| STATS
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    from_dpkg = COUNT(*) WHERE event.dataset == "packages.dpkg",
+    from_frontend = COUNT(*) WHERE event.dataset IN ("packages.apt", "packages.dnf", "packages.dnf_history", "packages.yum", "packages.zypper"),
+    repo_enabled = VALUES(linuxconfig.repository.enabled),
+    repo_gpgcheck = VALUES(linuxconfig.repository.gpgcheck),
+    repo_trusted = VALUES(linuxconfig.repository.trusted),
+    repo_files = VALUES(file.path),
+    file_ctime = MAX(file.ctime),
+    versions = VALUES(package.version),
+    users = VALUES(user.name),
+    flags = VALUES(linuxconfig.flags),
+    kinds = VALUES(kind),
+    indexes = VALUES(_index)
+  BY host.name, what
+// EDIT: the start of the incident window; changes after it score higher
+| EVAL since = TO_DATETIME("2026-01-01T00:00:00Z")
+| EVAL k = MV_CONCAT(kinds, ",")
+| EVAL f_unsigned = COALESCE(MV_CONCAT(flags, ","), "") LIKE "*unsigned_repository*"
+| EVAL f_dpkg_only = k == "package" AND from_dpkg > 0 AND from_frontend == 0
+| EVAL f_recent = COALESCE(file_ctime, first_seen) >= since AND k != "package"
+| EVAL score = CASE(f_unsigned, 3, 0) + CASE(f_dpkg_only, 2, 0) + CASE(k LIKE "*command*", 2, 0) + CASE(f_recent, 2, 0)
+    + CASE(k LIKE "*repository change*", 1, 0)
+| WHERE score > 0 OR k LIKE "*repository*"
+| KEEP
+    host.name,
+    score,
+    kinds,
+    what,
+    first_seen,
+    last_seen,
+    from_dpkg,
+    from_frontend,
+    versions,
+    users,
+    repo_enabled,
+    repo_gpgcheck,
+    repo_trusted,
+    repo_files,
+    file_ctime,
+    flags,
+    indexes
+| SORT score DESC, first_seen DESC
+| LIMIT 2000

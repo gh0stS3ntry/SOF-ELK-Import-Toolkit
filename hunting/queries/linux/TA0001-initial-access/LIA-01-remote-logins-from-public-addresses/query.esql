@@ -1,0 +1,43 @@
+// LIA-01 | Remote logins from public addresses (SSH, login records, audit, FTP)
+// Tactic: TA0001 Initial Access | ATT&CK: T1133, T1078
+// Indexes: logstash-*, wtmp-*, auditd-* | Needs: sshd or PAM logs in logstash-*, or wtmp-*
+FROM logstash-*, wtmp-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| WHERE source.ip IS NOT NULL
+  AND event.action IN ("ssh-login", "ssh-invalid-user", "authentication-failure", "session-opened", "login", "failed-login",
+                       "logged-in", "authenticated", "ftp-login")
+| EVAL public = NOT CIDR_MATCH(source.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10", "::1/128", "fe80::/10", "fc00::/7")
+// EDIT: delete the next line to see logins from private addresses as well (VPN pools, jump hosts)
+| WHERE public == true
+| EVAL ok = event.outcome == "success" AND event.action IN ("ssh-login", "login", "logged-in", "ftp-login", "session-opened")
+| STATS
+    successes = COUNT(*) WHERE ok,
+    failures = COUNT(*) WHERE event.outcome == "failure",
+    users_ok = VALUES(user.name) WHERE ok,
+    users_tried = COUNT_DISTINCT(user.name),
+    methods = VALUES(ssh.login_method),
+    first_success = MIN(@timestamp) WHERE ok,
+    last_success = MAX(@timestamp) WHERE ok,
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    datasets = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, source.ip
+| EVAL score = CASE(successes > 0, 3, 0) + CASE(successes > 0 AND failures >= 10, 3, 0) + CASE(users_tried >= 5, 1, 0)
+| KEEP
+    host.name,
+    score,
+    source.ip,
+    successes,
+    failures,
+    users_ok,
+    users_tried,
+    methods,
+    first_success,
+    last_success,
+    first_seen,
+    last_seen,
+    datasets,
+    indexes
+| SORT score DESC, successes DESC, failures DESC
+| LIMIT 1000

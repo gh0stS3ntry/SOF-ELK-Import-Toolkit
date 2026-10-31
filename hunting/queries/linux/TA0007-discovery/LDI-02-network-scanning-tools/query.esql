@@ -1,0 +1,54 @@
+// LDI-02 | Network and service scanning tools: commands run, packages installed, binaries and scan output on disk
+// Tactic: TA0007 Discovery | ATT&CK: T1046, T1595, T1018
+// Indexes: logstash-*, auditd-*, packages-*, bodyfile-*, linuxconfig-* | Needs: any of logstash-*, auditd-*, packages-*, bodyfile-*
+FROM logstash-*, auditd-*, packages-*, bodyfile-*, linuxconfig-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL text = TO_LOWER(COALESCE(process.command_line, linuxconfig.line, ""))
+| EVAL p = TO_LOWER(COALESCE(file.path, ""))
+| EVAL is_cmd = (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") OR (STARTS_WITH(event.dataset, "linux.") AND COALESCE(linuxconfig.init.kind, "") != "init.d")) AND text RLIKE "(.*[ /;|(])?(nmap|masscan|rustscan|zmap|naabu|autorecon|netdiscover|arp-scan|fping|nbtscan|nikto|gobuster|feroxbuster|ffuf|dirb|dirsearch|wfuzz|wpscan|whatweb|enum4linux|enum4linux-ng|smbmap|crackmapexec|netexec|nxc|ldapsearch|ldapdomaindump|bloodhound-python|kerbrute|snmpwalk|onesixtyone|dnsrecon|dnsenum|amass|sublist3r|subfinder|nuclei|sqlmap|unicornscan|hping3|zgrab2?)( .*)?"
+    AND NOT text RLIKE "(.*/)?(apt|apt-get|apt-mark|apt-cache|aptitude|dpkg|dnf|yum|zypper|apk|snap|pip|pip3|pipx|gem|npm)( .*)?"
+| EVAL is_pkg = STARTS_WITH(event.dataset, "packages.") AND event.action IN ("install", "installed", "reinstall")
+    AND package.name RLIKE "(nmap|masscan|rustscan|zmap|naabu|autorecon|netdiscover|arp-scan|fping|nbtscan|nikto|gobuster|feroxbuster|ffuf|dirb|dirsearch|wfuzz|wpscan|whatweb|enum4linux|enum4linux-ng|smbmap|crackmapexec|netexec|nxc|ldapsearch|ldapdomaindump|bloodhound-python|kerbrute|snmpwalk|onesixtyone|dnsrecon|dnsenum|amass|sublist3r|subfinder|nuclei|sqlmap|unicornscan|hping3|zgrab2?|python3-impacket|seclists)"
+| EVAL is_file = event.dataset == "bodyfile" AND COALESCE(file.type, "file") == "file" AND (
+       (TO_LOWER(file.name) RLIKE "(nmap|masscan|rustscan|zmap|naabu|autorecon|netdiscover|arp-scan|fping|nbtscan|nikto|gobuster|feroxbuster|ffuf|dirb|dirsearch|wfuzz|wpscan|whatweb|enum4linux|enum4linux-ng|smbmap|crackmapexec|netexec|nxc|ldapsearch|ldapdomaindump|bloodhound-python|kerbrute|snmpwalk|onesixtyone|dnsrecon|dnsenum|amass|sublist3r|subfinder|nuclei|sqlmap|unicornscan|hping3|zgrab2?)" AND NOT STARTS_WITH(p, "/usr/") AND NOT STARTS_WITH(p, "/etc/"))
+    OR p RLIKE ".*[.](nmap|gnmap)" OR (p RLIKE ".*[.]xml" AND p LIKE "*nmap*" AND NOT STARTS_WITH(p, "/usr/")))
+| WHERE is_cmd OR is_pkg OR is_file
+| EVAL tool = CASE(is_pkg, package.name,
+    is_cmd, REPLACE(text, "^(.*[ /;|(])?(nmap|masscan|rustscan|zmap|naabu|autorecon|netdiscover|arp-scan|fping|nbtscan|nikto|gobuster|feroxbuster|ffuf|dirb|dirsearch|wfuzz|wpscan|whatweb|enum4linux|enum4linux-ng|smbmap|crackmapexec|netexec|nxc|ldapsearch|ldapdomaindump|bloodhound-python|kerbrute|snmpwalk|onesixtyone|dnsrecon|dnsenum|amass|sublist3r|subfinder|nuclei|sqlmap|unicornscan|hping3|zgrab2?)( .*)?$", "$2"),
+    p RLIKE ".*[.](nmap|gnmap|xml)", "scan output",
+    TO_LOWER(file.name))
+| EVAL artifact = CASE(is_cmd, COALESCE(event.action, event.dataset), is_pkg, event.dataset, "bodyfile")
+| STATS
+    runs = COUNT(*) WHERE is_cmd,
+    first_run = MIN(@timestamp) WHERE is_cmd,
+    last_run = MAX(@timestamp) WHERE is_cmd,
+    users = VALUES(user.name),
+    sample_commands = VALUES(process.command_line),
+    installed = VALUES(package.version),
+    install_time = MIN(@timestamp) WHERE is_pkg,
+    files = COUNT(*) WHERE is_file,
+    sample_files = VALUES(file.path),
+    newest_file = MAX(COALESCE(file.created, file.ctime)),
+    artifacts = VALUES(artifact),
+    indexes = VALUES(_index)
+  BY host.name, tool
+| EVAL score = CASE(runs > 0, 3, 0) + CASE(files > 0, 2, 0) + CASE(installed IS NOT NULL, 1, 0)
+| EVAL sample_commands = MV_SLICE(sample_commands, 0, 9), sample_files = MV_SLICE(sample_files, 0, 9)
+| KEEP
+    host.name,
+    score,
+    tool,
+    runs,
+    first_run,
+    last_run,
+    users,
+    sample_commands,
+    installed,
+    install_time,
+    files,
+    newest_file,
+    sample_files,
+    artifacts,
+    indexes
+| SORT score DESC, last_run DESC
+| LIMIT 2000

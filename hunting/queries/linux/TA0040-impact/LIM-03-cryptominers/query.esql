@@ -1,0 +1,33 @@
+// LIM-03 | Cryptominers: miner binaries and configurations, mining pool connections in command lines, persistence and logs
+// Tactic: TA0040 Impact | ATT&CK: T1496
+// Indexes: logstash-*, auditd-*, linuxconfig-*, bodyfile-*, packages-* | Needs: any of logstash-*, auditd-*, linuxconfig-*, bodyfile-*, packages-*
+FROM logstash-*, auditd-*, linuxconfig-*, bodyfile-*, packages-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL text = TO_LOWER(COALESCE(process.command_line, linuxconfig.line, message, ""))
+| EVAL lp = TO_LOWER(COALESCE(file.path, ""))
+| EVAL n = TO_LOWER(COALESCE(file.name, ""))
+| EVAL is_text = event.dataset != "bodyfile" AND text RLIKE ".*(xmrig|xmr-stak|xmrstak|minerd|cpuminer|ccminer|nbminer|t-rex|lolminer|phoenixminer|kinsing|kdevtmpfsi|kthreaddi|watchbog|skidmap|teamtnt|stratum[+](tcp|ssl|tls)|--donate-level|--coin[ =]|nicehash|monero|minexmr|supportxmr|nanopool|moneroocean|c3pool|hashvault|f2pool|2miners|herominers|unmineable|-o +pool[.]|randomx).*" AND NOT text RLIKE "(.*/)?(apt|apt-get|apt-mark|apt-cache|aptitude|dpkg|dnf|yum|zypper|apk|snap|pip|pip3|pipx|gem|npm)( .*)?"
+| EVAL is_file = event.dataset == "bodyfile" AND COALESCE(file.type, "file") == "file"
+    AND (n RLIKE "(xmrig.*|xmr-stak.*|minerd|cpuminer.*|ccminer|nbminer|t-rex|lolminer|phoenixminer|kinsing|kdevtmpfsi|kthreaddi|[.]?xmr.*|config[.]json)"
+         AND NOT STARTS_WITH(lp, "/usr/") AND NOT lp LIKE "*/node_modules/*" AND NOT lp LIKE "*/site-packages/*"
+         AND NOT (n == "config.json" AND NOT (lp LIKE "*/.*/*" OR STARTS_WITH(lp, "/tmp/") OR STARTS_WITH(lp, "/var/tmp/") OR STARTS_WITH(lp, "/dev/shm/")))
+         AND NOT lp LIKE "*/.config/*" AND NOT lp LIKE "*/.vscode*" AND NOT lp LIKE "*/.mozilla/*")
+| EVAL is_oom = event.dataset IN ("syslog.journal", "syslog.file") AND text LIKE "*out of memory: kill*"
+| WHERE is_text OR is_file OR is_oom
+| EVAL ts = CASE(event.dataset == "bodyfile", COALESCE(file.created, file.ctime), @timestamp)
+| EVAL artifact = CASE(is_oom, "out-of-memory kill", is_file, "file on disk", STARTS_WITH(event.dataset, "linux."), CONCAT(event.dataset, " (persistence)"),
+    COALESCE(event.action, event.dataset))
+| EVAL detail = CASE(is_file, CONCAT(file.path, " size=", COALESCE(TO_STRING(file.size), ""), " owner=", COALESCE(file.owner, ""), " sha1=", COALESCE(file.hash.sha1, "")),
+    COALESCE(process.command_line, linuxconfig.line, message))
+| EVAL score = CASE(is_text AND NOT is_oom, 4, 0) + CASE(is_file AND n != "config.json", 3, 0) + CASE(is_file AND n == "config.json", 1, 0) + CASE(is_oom, 1, 0)
+| KEEP
+    ts,
+    host.name,
+    score,
+    artifact,
+    user.name,
+    process.executable,
+    detail,
+    _index
+| SORT score DESC, ts DESC
+| LIMIT 2000

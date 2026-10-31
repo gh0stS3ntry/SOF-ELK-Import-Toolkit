@@ -1,0 +1,43 @@
+// LDI-03 | Port and host scans in firewall logs and audited connections: one source reaching many ports or hosts
+// Tactic: TA0007 Discovery | ATT&CK: T1046
+// Indexes: logstash-*, auditd-* | Needs: iptables/UFW/firewalld logs in logstash-*, or auditd-* connect records
+FROM logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| WHERE event.action IN ("firewall-block", "firewall-allow", "firewall-log", "connect")
+| EVAL dport = TO_INTEGER(destination.port)
+| EVAL direction = CASE(event.action == "connect", "outbound (audited connect)", observer.ingress.interface.name IS NOT NULL, "inbound or forwarded", "outbound")
+| EVAL actor = CASE(event.action == "connect", CONCAT(COALESCE(process.executable, "?"), " as ", COALESCE(user.name, "?")), TO_STRING(source.ip))
+| EVAL window = DATE_TRUNC(10 minutes, @timestamp)
+| STATS
+    events = COUNT(*),
+    blocked = COUNT(*) WHERE event.action == "firewall-block",
+    ports = COUNT_DISTINCT(dport),
+    targets = COUNT_DISTINCT(destination.ip),
+    sample_ports = VALUES(dport),
+    sample_targets = VALUES(destination.ip),
+    protocols = VALUES(network.transport),
+    first_time = MIN(@timestamp),
+    last_time = MAX(@timestamp),
+    indexes = VALUES(_index)
+  BY host.name, direction, actor, window
+| WHERE ports >= 15 OR targets >= 15
+| EVAL pattern = CASE(ports >= 15 AND targets >= 15, "sweep (many hosts and ports)", ports >= 15, "port scan (one host, many ports)", "host sweep (many hosts, few ports)")
+| EVAL sample_ports = MV_SLICE(MV_SORT(sample_ports), 0, 29), sample_targets = MV_SLICE(sample_targets, 0, 19)
+| KEEP
+    host.name,
+    window,
+    direction,
+    actor,
+    pattern,
+    events,
+    blocked,
+    ports,
+    targets,
+    sample_ports,
+    sample_targets,
+    protocols,
+    first_time,
+    last_time,
+    indexes
+| SORT ports DESC, targets DESC
+| LIMIT 2000

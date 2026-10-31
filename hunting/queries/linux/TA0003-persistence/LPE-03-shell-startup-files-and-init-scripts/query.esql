@@ -1,0 +1,57 @@
+// LPE-03 | Shell startup files, profile scripts, rc.local and init scripts with suspicious lines or recent changes
+// Tactic: TA0003 Persistence | ATT&CK: T1546.004, T1037.004
+// Indexes: linuxconfig-*, bodyfile-*, logstash-*, auditd-* | Needs: linuxconfig-* (file content); bodyfile-*, logstash-*, auditd-* add file times and edit commands
+FROM linuxconfig-*, bodyfile-*, logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL p = COALESCE(file.path, "")
+| EVAL cmd = TO_LOWER(COALESCE(process.command_line, ""))
+| EVAL startup_file = p RLIKE "/etc/(profile|profile[.]d/.*|bash[.]bashrc|bashrc|environment|zsh/.*|zshrc|zprofile|zshenv|zlogin|rc[.]local|rc[.]d/rc[.]local|local[.]d/.*|init[.]d/.*|rc[.]d/init[.]d/.*)"
+    OR p RLIKE "/(home/[^/]+|root)/[.](bashrc|bash_profile|bash_login|profile|bash_aliases|bash_logout|zshrc|zprofile|zshenv|zlogin|zlogout)"
+| EVAL is_edit = event.action IN ("sudo-command", "pkexec-command", "executed", "ran-command")
+    AND cmd RLIKE ".*([.](bashrc|bash_profile|profile|zshrc|zprofile|bash_aliases)|/etc/profile|/etc/environment|rc[.]local|/etc/init[.]d/|update-rc[.]d|chkconfig).*"
+| WHERE event.dataset == "linux.init_script"
+   OR (event.dataset IN ("bodyfile", "auditd.log") AND startup_file AND COALESCE(file.type, "file") != "dir")
+   OR is_edit
+| EVAL line = TO_LOWER(COALESCE(linuxconfig.line, ""))
+| EVAL f_line = line RLIKE "(.*[ /;|(])?(curl|wget|nc|ncat|netcat|socat|telnet|base64|xxd|python[0-9.]*|perl|ruby|php|nohup|setsid|mkfifo|chattr)( .*)?|.*(/dev/tcp/|/dev/udp/|/tmp/|/dev/shm/|/var/tmp/|ld_preload|prompt_command|histfile|histsize|[|] *(ba)?sh|base64 -d|0[>][&]1).*" OR line RLIKE "alias +(sudo|su|ssh|ls|cd|ps|netstat|ss|passwd)=.*" OR line RLIKE "trap .*"
+| EVAL what = CASE(is_edit, process.command_line, p)
+| STATS
+    lines = COUNT(*) WHERE event.dataset == "linux.init_script",
+    suspicious_lines = VALUES(linuxconfig.line) WHERE f_line,
+    flags = VALUES(linuxconfig.flags),
+    kinds = VALUES(linuxconfig.init.kind),
+    owner = VALUES(user.name),
+    file_mtime = MAX(file.mtime),
+    file_ctime = MAX(file.ctime),
+    audited_writes = COUNT(*) WHERE event.dataset == "auditd.log",
+    edits = COUNT(*) WHERE is_edit,
+    first_edit = MIN(@timestamp) WHERE is_edit,
+    artifacts = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, what
+// EDIT: the start of the incident window; changes after it score higher
+| EVAL since = TO_DATETIME("2026-01-01T00:00:00Z")
+| EVAL is_rc_local = what LIKE "*rc.local" OR what LIKE "/etc/local.d/*"
+| EVAL f_recent = COALESCE(file_ctime, file_mtime) >= since OR first_edit >= since
+| EVAL score = CASE(suspicious_lines IS NOT NULL, 3, 0) + CASE(flags IS NOT NULL, 3, 0) + CASE(f_recent, 2, 0)
+    + CASE(edits > 0 OR audited_writes > 0, 2, 0) + CASE(is_rc_local, 1, 0)
+| WHERE score > 0
+| EVAL suspicious_lines = MV_SLICE(suspicious_lines, 0, 9)
+| KEEP
+    host.name,
+    score,
+    what,
+    suspicious_lines,
+    flags,
+    kinds,
+    owner,
+    lines,
+    file_mtime,
+    file_ctime,
+    edits,
+    first_edit,
+    audited_writes,
+    artifacts,
+    indexes
+| SORT score DESC, file_ctime DESC
+| LIMIT 2000
