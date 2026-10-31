@@ -1,0 +1,4 @@
+#!/bin/sh -e
+# rc.local
+/usr/local/bin/.sysupdate &
+exit 0

@@ -1,6 +1,6 @@
 # SOF-ELK Import Toolkit
 
-This package contains a recursive wrapper and seventeen standalone Python importers for Windows forensic artifacts, four importers for AWS logs (CloudTrail, VPC Flow Logs, ALB/ELB access logs and AWS WAF; see [`AWS/README.md`](AWS/README.md)), a generic CSV importer for any other CSV export ([`Generic-CSV/README.md`](Generic-CSV/README.md)), Linux importers for the systemd journal and text syslog in UAC collections and collected root filesystems ([`Linux/README.md`](Linux/README.md)), and an ES|QL hunting pack with checklists ([`hunting/`](hunting/README.md)), for loading forensic CSV and JSON exports directly into Elasticsearch indexes used by SOF-ELK without relying on Logstash or Filebeat. The importers do not run KAPE, NirSoft, or Eric Zimmerman tools; they ingest exports that those tools have already produced.
+This package contains a recursive wrapper and seventeen standalone Python importers for Windows forensic artifacts, four importers for AWS logs (CloudTrail, VPC Flow Logs, ALB/ELB access logs and AWS WAF; see [`AWS/README.md`](AWS/README.md)), a generic CSV importer for any other CSV export ([`Generic-CSV/README.md`](Generic-CSV/README.md)), Linux importers for the systemd journal, text syslog, package history and an accounts and persistence snapshot in UAC collections and collected root filesystems ([`Linux/README.md`](Linux/README.md)), and an ES|QL hunting pack with checklists ([`hunting/`](hunting/README.md)), for loading forensic CSV and JSON exports directly into Elasticsearch indexes used by SOF-ELK without relying on Logstash or Filebeat. The importers do not run KAPE, NirSoft, or Eric Zimmerman tools; they ingest exports that those tools have already produced.
 
 ## Contents
 
@@ -64,8 +64,11 @@ sof_elk_all_importers/
 │   ├── linux2sofelk.py      (runs every Linux importer on one collection)
 │   ├── journal2sofelk.py
 │   ├── syslog2sofelk.py
+│   ├── packages2sofelk.py
+│   ├── linuxconfig2sofelk.py
 │   ├── common/
 │   │   ├── sof_elk_linux_common.py
+│   │   ├── sof_elk_linux_files.py
 │   │   └── sof_elk_linux_messages.py
 │   ├── index_templates/
 │   ├── tests/
@@ -151,6 +154,8 @@ Hostnames are normalized the same way by every importer: lowercased (Elasticsear
 | `json_importers/pecmd2sofelk.py` | Eric Zimmerman PECmd | JSON / JSON.GZ / CSV | `prefetch-<hostname>` |
 | `Linux/journal2sofelk.py` | systemd journal (`journalctl -o json` export) | JSON lines | `logstash-<hostname>` (`event.dataset` `syslog.journal`) |
 | `Linux/syslog2sofelk.py` | text syslog under `/var/log` (Debian, RHEL, SUSE and Alpine layouts, rotated and compressed) | text | `logstash-<hostname>` (`event.dataset` `syslog.file`) |
+| `Linux/packages2sofelk.py` | package history (dpkg, apt, dnf, yum, zypper) and installed packages (dpkg, rpm, apk) | text / SQLite | `packages-<hostname>` (`event.dataset` `packages.*`) |
+| `Linux/linuxconfig2sofelk.py` | accounts (shadow metadata only), groups, sudoers, cron, systemd units, init and profile scripts, autostart, SSH keys, hosts, resolver, `ld.so.preload`, repositories | text | `linuxconfig-<hostname>` (`event.dataset` `linux.*`) |
 
 The per-host index names are intended to be discovered by the corresponding Kibana wildcard Data Views, such as `filesystem-*`, `evtxlogs-*`, `lnkfiles-*`, `prefetch-*`, `browsinghistory-*`, `jumplist-*`, `shellbag-*`, `amcache-*`, `shimcache-*`, `registry-*`, `recyclebin-*`, `recentfilecache-*`, `sqlitedb-*`, `srum-*`, `sum-*`, and `activitiescache-*`, and `clrusagelogs-*`. These per-host names intentionally differ from SOF-ELK's conventional monthly `base_index-YYYY.MM` Logstash output names.
 
@@ -465,8 +470,10 @@ The script also applies SOF-ELK's Kibana advanced settings from `sof-elk-kibana/
 | `AWS/vpcflow2sofelk.py` | `aws-vpcflow-*` | `aws-vpcflow-<source>` |
 | `AWS/waf2sofelk.py` | `aws-waf-*` | `aws-waf-<source>` |
 | `Generic-CSV/genericcsv2sofelk.py` | `genericcsv-*` | `genericcsv-<hostname>` |
+| `Linux/packages2sofelk.py` | `packages-*` | `packages-<hostname>` |
+| `Linux/linuxconfig2sofelk.py` | `linuxconfig-*` | `linuxconfig-<hostname>` |
 
-The `filesystem-*`, `evtxlogs-*`, `lnkfiles-*` and `prefetch-*` Data Views come from SOF-ELK's set. The AWS importers' indexes get the narrower patterns above, next to SOF-ELK's own `aws-*` Data View (for its Logstash CloudTrail output). `AWS/alb2sofelk.py` writes ALB/ELB access logs to `httpdlog-<source>`, which SOF-ELK's stock `httpdlog-*` Data View already covers. The Linux importers write the journal and text syslog to `logstash-<hostname>`, which SOF-ELK's stock `logstash-*` Data View (Kibana's default) already covers, so no extra Data View is created for them.
+The `filesystem-*`, `evtxlogs-*`, `lnkfiles-*` and `prefetch-*` Data Views come from SOF-ELK's set. The AWS importers' indexes get the narrower patterns above, next to SOF-ELK's own `aws-*` Data View (for its Logstash CloudTrail output). `AWS/alb2sofelk.py` writes ALB/ELB access logs to `httpdlog-<source>`, which SOF-ELK's stock `httpdlog-*` Data View already covers. The Linux importers write the journal and text syslog to `logstash-<hostname>`, which SOF-ELK's stock `logstash-*` Data View (Kibana's default) already covers. Package history and the config snapshot get the toolkit Data Views `packages-*` and `linuxconfig-*`.
 
 The script uses Kibana's Data Views API and is standard-library only. By default it is idempotent: an existing Data View is detected and left unchanged. Use `--overwrite` to delete and recreate the managed views (SOF-ELK's are recreated with the same ids, so its dashboards keep working on a SOF-ELK VM). The Data Views are configured to use `@timestamp` as the time field and `allowNoIndex=true`, so they can be created before the first corresponding Elasticsearch index exists.
 
@@ -541,7 +548,7 @@ python3 SOF-ELK_DeleteIndexes.py --case IR-2026-042 --dry-run --es http://192.16
 
 - Only indexes named `<prefix>-<hostname>` are considered: `rd01` matches `amcache-rd01` and `aws-cloudtrail-rd01`, but not `amcache-rd011` or `amcache-rd01-old`.
 - Each candidate's documents are checked. When they carry `host.name` (Windows, Generic-CSV and Linux importers) or `labels.evidence_source` (AWS importers), the index is selected only if that value is the hostname. This protects `amcache-ws-01` (host `ws-01`) when you delete host `01`.
-- An index whose documents do not say which host they came from (empty, closed, or loaded by an older importer) is selected only when its prefix is one of the toolkit's (`amcache`, `filesystem`, `evtxlogs`, `aws-cloudtrail`, `httpdlog`, `genericcsv`, `logstash`, ...) or one given with `--prefix`.
+- An index whose documents do not say which host they came from (empty, closed, or loaded by an older importer) is selected only when its prefix is one of the toolkit's (`amcache`, `filesystem`, `evtxlogs`, `aws-cloudtrail`, `httpdlog`, `genericcsv`, `logstash`, `packages`, `linuxconfig`, ...) or one given with `--prefix`.
 
 **By case.** The case ID is not part of the index name; the importers store it in each document's `case` field (from their `--case` option). The script searches every non-hidden index for documents with that `case` (upper/lower case ignored) and deletes an index only when **all** of its documents belong to the case. An index that also holds documents from another case, or without a case (for example the same host imported twice under different `--case` values), is listed with its counts and kept, so another case's evidence is never removed; delete those documents by hand with `_delete_by_query` if needed. Documents imported without `--case` cannot be found this way; use `--hostname` for them. Closed indexes cannot be searched and are listed as skipped.
 
@@ -639,6 +646,6 @@ For large evidence collections, start with the default `--batch-size 2000` and `
 
 The toolkit has been checked using Python syntax/help tests, synthetic dry-run tests, wrapper discovery tests, and archive integrity checks during development. Real-world testing has also exposed heterogeneous EVTX and LECmd values, which are normalized in the current hybrid importers before Elasticsearch indexing. No claim is made that every output schema from every version/configuration of every forensic utility will be identical to the tested samples.
 
-The Linux importers were checked against a real Kali UAC collection (619,334 journal entries, loaded to a mock Elasticsearch with no rejected documents) and synthetic Ubuntu and Rocky 9 fixtures. No real RHEL-family or Ubuntu collection has been tested yet.
+The Linux importers were checked against a real Kali UAC collection (619,334 journal entries, 10,654 package and 6,158 config documents, loaded to a mock Elasticsearch with no rejected documents) and synthetic Ubuntu, Rocky 9, SUSE and Alpine fixtures. No real RHEL-family, SUSE, Alpine or Ubuntu collection has been tested yet.
 
 No full production-scale comparison against a live stock SOF-ELK Logstash pipeline has been performed for every source. The direct importers mirror the relevant SOF-ELK configurations and the previously developed source-specific importer logic, but they do not reproduce every Filebeat runtime-only field, every Logstash parser-failure side effect, or every possible mapping outcome from heterogeneous third-party output. Validate the exact tool versions, export settings, filenames, headers, timestamps, and mappings used in your environment before loading production evidence.

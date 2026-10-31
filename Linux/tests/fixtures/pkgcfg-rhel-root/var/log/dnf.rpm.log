@@ -1,0 +1,5 @@
+2026-10-25T10:01:02+0000 SUBDEBUG Upgrade: openssl-libs-1:3.0.7-27.el9.x86_64
+2026-10-25T10:01:03+0000 SUBDEBUG Installed: nmap-3:7.92-1.el9.x86_64
+2026-10-25T10:01:04+0000 SUBDEBUG Upgraded: openssl-libs-1:3.0.7-25.el9.x86_64
+2026-10-25T10:01:05+0000 INFO --- logging initialized ---
+2026-10-25T10:05:00Z SUBDEBUG Erase: telnet-1:0.17-85.el9.x86_64

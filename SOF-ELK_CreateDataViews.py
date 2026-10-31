@@ -32,6 +32,8 @@ Create the Kibana Data Views used with the SOF-ELK direct-import toolkit.
   aws-vpcflow-*       AWS/vpcflow2sofelk.py (VPC Flow Logs)
   aws-waf-*           AWS/waf2sofelk.py (AWS WAF)
   genericcsv-*        Generic-CSV/genericcsv2sofelk.py (any CSV, fields from its header)
+  packages-*          Linux/packages2sofelk.py (package history and installed packages)
+  linuxconfig-*       Linux/linuxconfig2sofelk.py (accounts and persistence snapshot)
 
 filesystem-*, evtxlogs-*, lnkfiles-* and prefetch-* come from SOF-ELK's set in
 step 1. The toolkit's AWS indexes get their own, narrower patterns so they do not
@@ -74,6 +76,8 @@ DATA_VIEWS = [
     ("aws-vpcflow", "aws-vpcflow-*"),
     ("aws-waf", "aws-waf-*"),
     ("genericcsv", "genericcsv-*"),
+    ("packages", "packages-*"),
+    ("linuxconfig", "linuxconfig-*"),
 ]
 
 DATE_FORMAT = "YYYY-MM-DD HH:mm:ss.SSS\\Z"
