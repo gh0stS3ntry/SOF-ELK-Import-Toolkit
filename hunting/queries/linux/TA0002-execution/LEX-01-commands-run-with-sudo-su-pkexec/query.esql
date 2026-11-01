@@ -1,0 +1,33 @@
+// LEX-01 | Commands run with sudo, su, pkexec and other elevation, per account (stacked)
+// Tactic: TA0002 Execution | ATT&CK: T1548.003, T1059.004
+// Indexes: logstash-*, auditd-* | Needs: sudo/su/pkexec messages in logstash-*, or auditd-*
+FROM logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| WHERE event.action IN ("sudo-command", "su", "pkexec-command", "ran-command")
+| EVAL cmd = COALESCE(process.command_line, CONCAT("(", event.action, ")"))
+| STATS
+    runs = COUNT(*),
+    failures = COUNT(*) WHERE event.outcome == "failure",
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    as_users = VALUES(user.effective.name),
+    directories = VALUES(process.working_directory),
+    ttys = VALUES(sudo.tty),
+    indexes = VALUES(_index)
+  BY host.name, user.name, event.action, cmd
+| EVAL directories = MV_SLICE(directories, 0, 4)
+| KEEP
+    host.name,
+    user.name,
+    event.action,
+    cmd,
+    runs,
+    failures,
+    first_seen,
+    last_seen,
+    as_users,
+    directories,
+    ttys,
+    indexes
+| SORT first_seen DESC
+| LIMIT 5000

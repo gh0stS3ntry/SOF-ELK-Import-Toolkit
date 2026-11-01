@@ -1,0 +1,42 @@
+// LPR-03 | Privileged group members and sudoers rules, with group changes and sudoers file edits
+// Tactic: TA0004 Privilege Escalation | ATT&CK: T1098, T1548.003
+// Indexes: linuxconfig-*, logstash-*, auditd-*, bodyfile-* | Needs: linuxconfig-*; logstash-*, auditd-*, bodyfile-* add changes and file times
+FROM linuxconfig-*, logstash-*, auditd-*, bodyfile-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL p = COALESCE(file.path, "")
+| EVAL cmd = TO_LOWER(COALESCE(process.command_line, ""))
+| WHERE (event.dataset == "linux.group" AND linuxconfig.group.privileged == true)
+   OR (event.dataset == "linux.sudoers" AND event.action IN ("rule", "defaults", "include"))
+   OR event.action IN ("group-membership-added", "group-membership-removed", "added-group-account-to", "deleted-group-account-from", "modified-group-account")
+   OR (event.dataset IN ("bodyfile", "auditd.log") AND (p == "/etc/sudoers" OR STARTS_WITH(p, "/etc/sudoers.d/") OR p == "/etc/group" OR p == "/etc/gshadow")
+       AND COALESCE(file.type, "file") != "dir")
+   OR (event.action IN ("sudo-command", "pkexec-command", "executed", "ran-command")
+       AND cmd RLIKE ".*(visudo|/etc/sudoers|usermod +-[a-z]*g|gpasswd +-a|adduser +[^ ]+ +(sudo|wheel|adm|docker|lxd|root)).*")
+| EVAL ts = CASE(event.dataset == "bodyfile", file.ctime, @timestamp)
+| EVAL artifact = CASE(STARTS_WITH(event.dataset, "linux."), CONCAT(event.dataset, " (snapshot, file mtime)"),
+    event.dataset == "bodyfile", "bodyfile (inode change time)", COALESCE(event.action, event.dataset))
+| EVAL detail = CASE(
+    event.dataset == "linux.group", CONCAT(COALESCE(group.name, ""), ": members=", COALESCE(MV_CONCAT(linuxconfig.group.members, ","), ""),
+        " primary=", COALESCE(MV_CONCAT(linuxconfig.group.primary_members, ","), ""), " added=", COALESCE(MV_CONCAT(linuxconfig.group.members_added, ","), ""),
+        " state=", COALESCE(linuxconfig.group.state, "")),
+    event.dataset == "linux.sudoers", CONCAT(p, ":", COALESCE(TO_STRING(linuxconfig.line_number), ""), " ", COALESCE(linuxconfig.line, "")),
+    event.dataset == "bodyfile", CONCAT(p, " mtime=", COALESCE(TO_STRING(file.mtime), ""), " mode=", COALESCE(file.mode, "")),
+    COALESCE(process.command_line, message, ""))
+| EVAL flags = COALESCE(MV_CONCAT(linuxconfig.flags, ","), "")
+| EVAL score = CASE(flags LIKE "*nopasswd*", 2, 0) + CASE(flags LIKE "*all_commands*", 1, 0) + CASE(flags LIKE "*env_preserved*", 2, 0)
+    + CASE(COALESCE(linuxconfig.group.state, "present") != "present", 3, 0)
+    + CASE(event.action IN ("group-membership-added", "added-group-account-to"), 3, 0)
+    + CASE(event.action IN ("sudo-command", "pkexec-command", "executed", "ran-command"), 2, 0)
+| KEEP
+    ts,
+    host.name,
+    score,
+    artifact,
+    user.name,
+    user.target.name,
+    group.name,
+    detail,
+    flags,
+    _index
+| SORT ts DESC
+| LIMIT 2000

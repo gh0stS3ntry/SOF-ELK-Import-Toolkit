@@ -1,0 +1,77 @@
+// LPE-01 | systemd services, timers and other units: definition, unit-file times, starts and audited writes, scored
+// Tactic: TA0003 Persistence | ATT&CK: T1543.002, T1053.006
+// Indexes: linuxconfig-*, bodyfile-*, logstash-*, auditd-* | Needs: linuxconfig-* (unit definitions); bodyfile-*, logstash-*, auditd-* add file times, starts and writes
+FROM linuxconfig-*, bodyfile-*, logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL p = COALESCE(file.path, "")
+| EVAL d = REPLACE(p, "/[^/]*$", "")
+| EVAL in_unit_dir = d RLIKE "(/etc|/run|/usr/lib|/lib|/usr/local/lib)/systemd/(system|user)(/.*)?"
+    OR d RLIKE "/(home/[^/]+|root)/[.](config|local/share)/systemd/user(/.*)?"
+| WHERE event.dataset == "linux.systemd_unit"
+   OR (event.dataset IN ("syslog.journal", "syslog.file") AND process.name == "systemd" AND STARTS_WITH(message, "Started "))
+   OR (event.dataset IN ("bodyfile", "auditd.log") AND in_unit_dir AND COALESCE(file.type, "file") != "dir")
+| EVAL is_def = event.dataset == "linux.systemd_unit"
+| EVAL is_start = event.dataset IN ("syslog.journal", "syslog.file")
+| EVAL unit = CASE(
+    is_def, linuxconfig.systemd.unit,
+    is_start, REPLACE(message, "^Started ([^ ]+?)[.]?( .*)?$", "$1"),
+    d LIKE "*.d", REPLACE(d, "^.*/([^/]+)[.]d$", "$1"),
+    REPLACE(p, "^.*/", ""))
+// journal lines of older systemd versions name the description, not the unit: keep unit names only
+| WHERE NOT is_start OR unit RLIKE ".+[.](service|timer|socket|path|mount|scope|target)"
+| STATS
+    definitions = COUNT(*) WHERE is_def,
+    origin = VALUES(linuxconfig.systemd.origin),
+    scope = VALUES(linuxconfig.systemd.scope),
+    enabled = MV_MAX(VALUES(linuxconfig.systemd.enabled)),
+    masked = MV_MAX(VALUES(linuxconfig.systemd.masked)),
+    exec_start = VALUES(linuxconfig.systemd.exec_start),
+    run_as = VALUES(linuxconfig.systemd.run_as_user),
+    timer = VALUES(linuxconfig.systemd.timer_schedule),
+    flags = VALUES(linuxconfig.flags),
+    unit_files = VALUES(file.path),
+    newest_mtime = MAX(file.mtime),
+    newest_ctime = MAX(file.ctime),
+    starts = COUNT(*) WHERE is_start,
+    first_start = MIN(@timestamp) WHERE is_start,
+    last_start = MAX(@timestamp) WHERE is_start,
+    audited_writes = COUNT(*) WHERE event.dataset == "auditd.log",
+    artifacts = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, unit
+// EDIT: the start of the incident window; changes after it score higher
+| EVAL since = TO_DATETIME("2026-01-01T00:00:00Z")
+| EVAL origins = COALESCE(MV_CONCAT(origin, ","), "")
+| EVAL exec = TO_LOWER(COALESCE(MV_CONCAT(exec_start, " "), ""))
+| EVAL f_not_vendor = definitions > 0 AND origins != "vendor"
+| EVAL f_exec_odd = exec RLIKE ".*(/tmp/|/dev/shm/|/var/tmp/|/home/|/root/|/opt/|/[.]|curl|wget|bash -c|sh -c|python|perl|nc |socat|base64).*"
+| EVAL f_recent = COALESCE(newest_ctime, newest_mtime) >= since OR first_start >= since
+| EVAL f_transient = unit LIKE "run-*"
+| EVAL f_no_file = definitions == 0 AND starts > 0 AND unit LIKE "*.service" AND NOT unit LIKE "*@*" AND unit_files IS NULL
+| EVAL score = CASE(f_not_vendor, 2, 0) + CASE(flags IS NOT NULL, 3, 0) + CASE(f_exec_odd, 3, 0) + CASE(f_recent, 2, 0)
+    + CASE(f_transient, 2, 0) + CASE(f_no_file, 1, 0) + CASE(audited_writes > 0, 2, 0)
+| WHERE score > 0
+| EVAL unit_files = MV_SLICE(unit_files, 0, 4)
+| KEEP
+    host.name,
+    score,
+    unit,
+    origin,
+    scope,
+    enabled,
+    masked,
+    exec_start,
+    run_as,
+    timer,
+    flags,
+    newest_mtime,
+    newest_ctime,
+    starts,
+    first_start,
+    last_start,
+    audited_writes,
+    unit_files,
+    artifacts,
+    indexes
+| SORT score DESC, newest_ctime DESC
+| LIMIT 2000

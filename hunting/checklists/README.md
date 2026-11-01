@@ -10,15 +10,27 @@ A first cut for each kind of host: what to establish about the host, and which q
 |---|---|
 | [Baseline: all Windows hosts](00-baseline-all-windows-hosts.md) | every host |
 | [End-user workstation](end-user-workstation.md) | laptops, desktops, VDI, RDP/jump hosts used interactively |
-| [Web server](web-server.md) | IIS, Exchange front end, Tomcat/Apache/PHP, other internet-facing applications |
+| [Web server](web-server.md) | IIS, Tomcat/Apache/PHP, other internet-facing applications |
+| [Exchange server](exchange-server.md) | on-premises Exchange (Mailbox and Edge roles, OWA/ECP/EWS) |
 | [Database server](database-server.md) | SQL Server and other database hosts |
 | [Domain controller](domain-controller.md) | AD DS, plus DNS/ADCS/ADFS on tier-0 servers |
 | [File server](file-server.md) | file shares, DFS, backup targets, NAS front ends |
 | [AWS account (CloudTrail)](aws-account-control-plane.md) | every AWS account in scope, from its CloudTrail logs |
 | [AWS web application (ALB and WAF)](aws-web-application.md) | internet-facing applications behind an ALB/ELB and AWS WAF |
 | [AWS network (VPC Flow Logs)](aws-vpc-network.md) | VPCs, subnets and interfaces with flow logs |
+| [Baseline: all Linux hosts](linux-baseline-all-hosts.md) | every Linux host |
+| [Linux web server](linux-web-server.md) | Apache, nginx and lighttpd servers and their applications |
+| [Linux database server](linux-database-server.md) | MySQL/MariaDB, PostgreSQL, MongoDB, Redis and Elasticsearch servers |
+| [Linux backup server](linux-backup-server.md) | backup servers, repositories and snapshot hosts |
+| [Linux file server](linux-file-server.md) | Samba and NFS servers and shared data folders |
+| [Linux SSH jump host](linux-ssh-jump-host.md) | bastions, jump boxes, admin and automation servers |
+| [Linux mail server](linux-mail-server.md) | Postfix, Exim, Dovecot and webmail servers |
+| [Linux container host](linux-container-host.md) | Docker and Podman hosts, Kubernetes nodes |
+| [Linux VPN gateway](linux-vpn-gateway.md) | OpenVPN, WireGuard, IPsec and SSH remote-access gateways |
 
 **AWS.** The three AWS checklists work per account and per application rather than per host, and do not need the Windows baseline. Run the account checklist for every account in scope, then the web and network checklists where those logs exist. The IR checklist is written for hosts, so their `IR ref` column points to the closest item (for example 2.4.1/2.4.2 for brute force, 2.4.7 for outbound transfers, 2.4.21 for logging stopped) and is blank where nothing fits.
+
+**Linux.** Run the Linux baseline on every Linux host, then the checklist for each role the host has (a host can have several, such as a web server that also runs its database). Their `IR ref` column is approximate for the same reason as the AWS checklists.
 
 **Format.** Each checklist is Markdown with numbered sections (`## 1. ...`) holding one table each, with the columns `#`, `Check`, `Queries`, `IR ref` and `What to look for`. [`build_checklist_xlsx.py`](../tools/build_checklist_xlsx.py) reads that layout, so keep it when editing, then rebuild the workbook:
 

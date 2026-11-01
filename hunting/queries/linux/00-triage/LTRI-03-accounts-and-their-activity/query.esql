@@ -1,0 +1,55 @@
+// LTRI-03 | Accounts, their login rights and password state, and their activity in the logs
+// Tactic: Triage (first cut) | ATT&CK: T1078.003, T1087.001
+// Indexes: linuxconfig-*, wtmp-*, logstash-*, auditd-* | Needs: linuxconfig-* (accounts); wtmp-*, logstash-*, auditd-* for activity
+FROM linuxconfig-*, wtmp-*, logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| WHERE event.dataset == "linux.account"
+   OR (event.dataset == "wtmp" AND event.action IN ("login", "failed-login"))
+   OR (event.dataset IN ("syslog.journal", "syslog.file", "auditd.log")
+       AND event.action IN ("ssh-login", "ssh-invalid-user", "session-opened", "sudo-command", "su", "pkexec-command",
+                            "authentication-failure", "logged-in", "authenticated", "ran-command"))
+   OR (event.dataset IN ("ftp.vsftpd", "ftp.xferlog") AND event.action == "ftp-login")
+| EVAL is_account = event.dataset == "linux.account"
+| EVAL is_login = event.action IN ("login", "ssh-login", "logged-in", "ftp-login", "session-opened")
+| EVAL is_elevation = event.action IN ("sudo-command", "su", "pkexec-command", "ran-command")
+| STATS
+    uid = VALUES(user.id) WHERE is_account,
+    shell = VALUES(linuxconfig.account.shell),
+    can_log_in = MV_MAX(VALUES(linuxconfig.account.login_shell)),
+    account_state = VALUES(linuxconfig.account.state),
+    password_state = VALUES(linuxconfig.account.password_state),
+    password_changed = MAX(linuxconfig.account.password_last_changed),
+    flags = VALUES(linuxconfig.flags),
+    logins = COUNT(*) WHERE is_login AND event.outcome == "success",
+    failures = COUNT(*) WHERE event.outcome == "failure",
+    elevations = COUNT(*) WHERE is_elevation AND event.outcome == "success",
+    remote_sources = VALUES(source.ip),
+    first_activity = MIN(@timestamp) WHERE NOT is_account,
+    last_activity = MAX(@timestamp) WHERE NOT is_account,
+    seen_in = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, user.name
+| WHERE user.name IS NOT NULL
+| EVAL in_passwd = uid IS NOT NULL
+| EVAL remote_sources = MV_SLICE(remote_sources, 0, 19)
+| KEEP
+    host.name,
+    user.name,
+    uid,
+    in_passwd,
+    can_log_in,
+    shell,
+    account_state,
+    password_state,
+    password_changed,
+    flags,
+    logins,
+    failures,
+    elevations,
+    remote_sources,
+    first_activity,
+    last_activity,
+    seen_in,
+    indexes
+| SORT host.name ASC, can_log_in DESC, last_activity DESC
+| LIMIT 5000

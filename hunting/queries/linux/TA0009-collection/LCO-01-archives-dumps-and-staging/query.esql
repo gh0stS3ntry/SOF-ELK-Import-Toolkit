@@ -1,0 +1,66 @@
+// LCO-01 | Archives and database dumps in staging folders, and the archive and dump commands that made them
+// Tactic: TA0009 Collection | ATT&CK: T1560.001, T1074.001, T1005
+// Indexes: bodyfile-*, logstash-*, auditd-*, linuxconfig-* | Needs: bodyfile-* (files); logstash-*, auditd-*, linuxconfig-* for commands
+FROM bodyfile-*, logstash-*, auditd-*, linuxconfig-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL lp = TO_LOWER(COALESCE(file.path, ""))
+| EVAL cmd = TO_LOWER(COALESCE(process.command_line, linuxconfig.line, ""))
+| EVAL is_archive = event.dataset == "bodyfile" AND COALESCE(file.type, "file") == "file"
+    AND lp RLIKE ".*[.](tar|tgz|tar[.]gz|tbz2|tar[.]bz2|txz|tar[.]xz|tar[.]zst|zip|7z|rar|cpio|sql|sql[.]gz|dump|bak|backup|zst|lz4)"
+    AND (STARTS_WITH(lp, "/tmp/") OR STARTS_WITH(lp, "/var/tmp/") OR STARTS_WITH(lp, "/dev/shm/") OR STARTS_WITH(lp, "/var/www/")
+    OR STARTS_WITH(lp, "/srv/") OR STARTS_WITH(lp, "/home/") OR STARTS_WITH(lp, "/root/") OR STARTS_WITH(lp, "/opt/")
+    OR STARTS_WITH(lp, "/mnt/") OR STARTS_WITH(lp, "/media/") OR STARTS_WITH(lp, "/run/user/"))
+    AND NOT lp LIKE "*/.cache/*" AND NOT lp LIKE "*/.npm/*" AND NOT lp LIKE "*/.cargo/*" AND NOT lp LIKE "*/.rustup/*"
+    AND NOT lp LIKE "*/.local/lib/*" AND NOT lp LIKE "*/site-packages/*" AND NOT lp LIKE "*/node_modules/*" AND NOT lp LIKE "*/.git/*"
+    AND NOT lp LIKE "*/.mozilla/*" AND NOT lp LIKE "*/.vscode*"
+| EVAL is_cmd = (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") OR event.dataset IN ("linux.cron", "linux.systemd_unit"))
+    AND cmd RLIKE "(.*[ /;|(])?(tar|zip|7z|7za|7zz|rar|gzip|pigz|bzip2|xz|zstd|split|mysqldump|mariadb-dump|pg_dump|pg_dumpall|mongodump|mongoexport|redis-cli|sqlite3|tar[.]exe)( .*)?"
+    AND NOT cmd LIKE "*--version*"
+| WHERE is_archive OR is_cmd
+// EDIT: the start of the incident window; changes after it score higher
+| EVAL since = TO_DATETIME("2026-01-01T00:00:00Z")
+| EVAL what = CASE(is_archive, file.directory, COALESCE(process.command_line, linuxconfig.line))
+| EVAL born = COALESCE(file.created, file.ctime)
+| STATS
+    archives = COUNT(*) WHERE is_archive,
+    total_mb = ROUND(SUM(TO_DOUBLE(file.size)) / 1048576.0, 1),
+    largest_mb = ROUND(MAX(TO_DOUBLE(file.size)) / 1048576.0, 1),
+    newest_file = MAX(born),
+    names = VALUES(file.name),
+    owners = VALUES(file.owner),
+    runs = COUNT(*) WHERE is_cmd,
+    first_run = MIN(@timestamp) WHERE is_cmd,
+    last_run = MAX(@timestamp) WHERE is_cmd,
+    users = VALUES(user.name),
+    directories = VALUES(process.working_directory),
+    artifacts = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, what
+| EVAL w = TO_LOWER(COALESCE(what, ""))
+| EVAL f_temp = STARTS_WITH(w, "/tmp") OR STARTS_WITH(w, "/var/tmp") OR STARTS_WITH(w, "/dev/shm")
+| EVAL f_web = STARTS_WITH(w, "/var/www") OR STARTS_WITH(w, "/srv")
+| EVAL f_hidden = w LIKE "*/.*"
+| EVAL f_dump = w RLIKE ".*(dump|mongoexport|sqlite3 .*[.]dump|redis-cli .*(save|--rdb)).*"
+| EVAL f_recent = newest_file >= since OR first_run >= since
+| EVAL score = CASE(f_temp, 2, 0) + CASE(f_web, 3, 0) + CASE(f_hidden, 1, 0) + CASE(total_mb >= 100, 2, 0) + CASE(f_dump, 2, 0)
+    + CASE(f_recent, 2, 0) + CASE(runs > 0, 1, 0)
+| EVAL names = MV_SLICE(names, 0, 14)
+| KEEP
+    host.name,
+    score,
+    what,
+    archives,
+    total_mb,
+    largest_mb,
+    newest_file,
+    names,
+    owners,
+    runs,
+    first_run,
+    last_run,
+    users,
+    directories,
+    artifacts,
+    indexes
+| SORT score DESC, newest_file DESC
+| LIMIT 2000

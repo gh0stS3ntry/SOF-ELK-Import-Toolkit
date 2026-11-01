@@ -1,0 +1,42 @@
+// LDE-03 | Timestomping and clock changes: file times that contradict each other, touch commands, and system clock changes
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1070.006, T1070
+// Indexes: bodyfile-*, logstash-*, auditd-* | Needs: bodyfile-* (file times); logstash-*, auditd-* for commands and clock changes
+FROM bodyfile-*, logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL lp = TO_LOWER(COALESCE(file.path, ""))
+| EVAL text = TO_LOWER(COALESCE(process.command_line, ""))
+| EVAL m = TO_LOWER(COALESCE(message, ""))
+// the places attackers drop and backdate files; package-managed folders keep the package's mtimes by design
+| EVAL watched = STARTS_WITH(lp, "/tmp/") OR STARTS_WITH(lp, "/var/tmp/") OR STARTS_WITH(lp, "/dev/shm/") OR STARTS_WITH(lp, "/var/www/")
+    OR STARTS_WITH(lp, "/srv/") OR STARTS_WITH(lp, "/etc/cron") OR STARTS_WITH(lp, "/etc/systemd/") OR STARTS_WITH(lp, "/etc/init.d/")
+    OR STARTS_WITH(lp, "/etc/profile.d/") OR STARTS_WITH(lp, "/usr/local/bin/") OR STARTS_WITH(lp, "/usr/local/sbin/") OR STARTS_WITH(lp, "/usr/local/lib/")
+    OR STARTS_WITH(lp, "/var/spool/cron/") OR lp RLIKE "/(home/[^/]+|root)/[.](ssh|config/autostart|config/systemd)/.*"
+    OR lp RLIKE "/(home/[^/]+|root)/[.](bashrc|profile|bash_profile|zshrc)" OR lp == "/etc/ld.so.preload" OR STARTS_WITH(lp, "/etc/pam.d/")
+    OR STARTS_WITH(lp, "/etc/ssh/") OR STARTS_WITH(lp, "/etc/sudoers")
+| EVAL is_file = event.dataset == "bodyfile" AND COALESCE(file.type, "file") == "file" AND watched
+| EVAL f_ctime_before_mtime = is_file AND file.ctime < file.mtime
+| EVAL f_born_after_mtime = is_file AND file.created IS NOT NULL AND DATE_DIFF("hour", file.mtime, file.created) >= 24
+| EVAL f_future = is_file AND (file.mtime > NOW() OR file.created > NOW())
+| EVAL is_touch = event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") AND text RLIKE "(.*[ /;|(])?touch +.*(-d|-t|-r|--date|--reference|-m +-d|-a +-d).*|.*(debugfs +.*set_inode_field|setfattr).*"
+| EVAL is_clock = (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") AND text RLIKE ".*(timedatectl +set-time|date +(-s|--set)|hwclock +(--set|-w|--systohc)|timedatectl +set-ntp +(false|0|no)).*")
+    OR (event.dataset IN ("syslog.journal", "syslog.file") AND (m LIKE "*time has been changed*" OR m LIKE "*clock change detected*" OR m LIKE "*system clock time unset or jumped backwards*"))
+    OR event.action IN ("settimeofday", "clock_settime", "adjtimex", "clock_adjtime", "time-injoffset", "time-adjntpval")
+| WHERE f_ctime_before_mtime OR f_born_after_mtime OR f_future OR is_touch OR is_clock
+| EVAL ts = CASE(event.dataset == "bodyfile", COALESCE(file.created, file.ctime), @timestamp)
+| EVAL artifact = CASE(f_ctime_before_mtime, "inode changed before content (ctime < mtime)", f_future, "time in the future",
+    f_born_after_mtime, "modified a day or more before it was created (mtime < crtime)", is_touch, "touch or debugfs command", "clock change")
+| EVAL detail = CASE(event.dataset == "bodyfile", CONCAT(file.path, " mtime=", COALESCE(TO_STRING(file.mtime), ""), " ctime=", COALESCE(TO_STRING(file.ctime), ""),
+        " crtime=", COALESCE(TO_STRING(file.created), ""), " owner=", COALESCE(file.owner, ""), " sha1=", COALESCE(file.hash.sha1, "")),
+    COALESCE(process.command_line, message, event.action))
+| EVAL score = CASE(f_ctime_before_mtime, 4, 0) + CASE(f_future, 3, 0) + CASE(f_born_after_mtime, 2, 0) + CASE(is_file AND bodyfile.executable == true, 1, 0)
+    + CASE(is_touch, 3, 0) + CASE(is_clock, 2, 0)
+| KEEP
+    ts,
+    host.name,
+    score,
+    artifact,
+    user.name,
+    detail,
+    _index
+| SORT score DESC, ts DESC
+| LIMIT 2000

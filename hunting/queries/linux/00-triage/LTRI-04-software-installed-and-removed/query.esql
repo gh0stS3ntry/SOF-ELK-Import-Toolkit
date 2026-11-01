@@ -1,0 +1,36 @@
+// LTRI-04 | Software installed, upgraded and removed, by hour, with the command and user
+// Tactic: Triage (first cut) | ATT&CK: T1072, T1105
+// Indexes: packages-*, logstash-*, auditd-* | Needs: packages-*; sudo and audit commands in logstash-*, auditd-*
+FROM packages-*, logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL cmd = TO_LOWER(COALESCE(process.command_line, ""))
+| WHERE (event.dataset IN ("packages.dpkg", "packages.apt", "packages.dnf", "packages.dnf_history", "packages.yum", "packages.zypper")
+         AND event.action IN ("install", "upgrade", "downgrade", "reinstall", "remove", "purge", "obsoleted"))
+   OR (event.action IN ("sudo-command", "pkexec-command", "ran-command", "executed")
+       AND cmd RLIKE ".*(apt|apt-get|aptitude|dpkg|dnf|yum|rpm|zypper|apk|snap|flatpak|pip|pip3|pipx|gem|npm|cpan|go) .*(install|-i|remove|purge|erase|del|add|get) .*")
+| EVAL hour = DATE_TRUNC(1 hour, @timestamp)
+| EVAL is_package_log = STARTS_WITH(event.dataset, "packages.")
+| STATS
+    installs = COUNT(*) WHERE is_package_log AND event.action IN ("install", "reinstall"),
+    upgrades = COUNT(*) WHERE is_package_log AND event.action IN ("upgrade", "downgrade"),
+    removals = COUNT(*) WHERE is_package_log AND event.action IN ("remove", "purge", "obsoleted"),
+    packages = VALUES(package.name),
+    commands = VALUES(process.command_line),
+    users = VALUES(user.name),
+    datasets = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, hour
+| EVAL packages = MV_SLICE(packages, 0, 29), commands = MV_SLICE(commands, 0, 9)
+| KEEP
+    host.name,
+    hour,
+    installs,
+    upgrades,
+    removals,
+    commands,
+    users,
+    packages,
+    datasets,
+    indexes
+| SORT host.name ASC, hour DESC
+| LIMIT 5000

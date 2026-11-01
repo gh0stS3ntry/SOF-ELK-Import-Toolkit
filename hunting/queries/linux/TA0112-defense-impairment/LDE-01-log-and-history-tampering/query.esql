@@ -1,0 +1,36 @@
+// LDE-01 | Log and shell-history tampering: clearing commands, history disabled, empty or redirected logs, journald and syslog stops
+// Tactic: TA0112 Defense Impairment | ATT&CK: T1070.002, T1070.003, T1562.003
+// Indexes: logstash-*, auditd-*, linuxconfig-*, bodyfile-* | Needs: any of logstash-*, auditd-*, linuxconfig-*, bodyfile-*
+FROM logstash-*, auditd-*, linuxconfig-*, bodyfile-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL text = TO_LOWER(COALESCE(process.command_line, linuxconfig.line, ""))
+| EVAL m = TO_LOWER(COALESCE(message, ""))
+| EVAL lp = TO_LOWER(COALESCE(file.path, ""))
+| EVAL n = TO_LOWER(COALESCE(file.name, ""))
+| EVAL is_cmd = (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") OR (STARTS_WITH(event.dataset, "linux.") AND COALESCE(linuxconfig.init.kind, "") != "init.d")) AND text RLIKE ".*(history +-[cw]|history +-d|unset +histfile|histfile=/dev/null|histsize=0|histfilesize=0|set +[+]o +history|ln +-[a-z]*s[a-z]* +/dev/null +.*history|(rm|shred|truncate|srm|wipe|unlink) .*/var/log/|[>] */var/log/|cat +/dev/null +[>] *.*(/var/log/|history)|sed +-i .*/var/log/|journalctl +.*--(vacuum|rotate)|/var/log/journal|utmpdump|logrotate +-f|systemctl +(stop|disable|mask|kill) +(rsyslog|syslog-ng|systemd-journald|auditd|syslog)|service +(rsyslog|auditd|syslog) +stop|auditctl +(-d|-e +0)|chattr +[+]a +/var/log|wtmp|btmp|lastlog).*"
+| EVAL is_msg = event.dataset IN ("syslog.journal", "syslog.file")
+    AND (m LIKE "*journal stopped*" OR m LIKE "*vacuuming done*" OR m LIKE "*deleted archived journal*" OR m LIKE "*exiting on signal*"
+         OR (process.name IN ("rsyslogd", "syslog-ng", "auditd") AND (m LIKE "*exiting*" OR m LIKE "*stopped*" OR m LIKE "*shutdown*")))
+| EVAL is_history_file = event.dataset == "bodyfile" AND n RLIKE "[.](bash|zsh|sh|ash|python|mysql|psql|sqlite|lesshst|node_repl|rediscli)_?history"
+    AND (file.target_path IS NOT NULL OR file.size == 0)
+| EVAL is_log_file = event.dataset == "bodyfile" AND STARTS_WITH(lp, "/var/log/") AND COALESCE(file.type, "file") == "file"
+    AND (file.size == 0 OR file.target_path == "/dev/null") AND n RLIKE "(auth[.]log|secure|syslog|messages|wtmp|btmp|lastlog|audit[.]log|kern[.]log|cron|access[.]log|access_log|error[.]log|error_log)"
+| WHERE is_cmd OR is_msg OR is_history_file OR is_log_file
+| EVAL ts = CASE(event.dataset == "bodyfile", file.ctime, @timestamp)
+| EVAL artifact = CASE(is_cmd, COALESCE(event.action, event.dataset), is_msg, "log daemon message",
+    is_history_file, "history file emptied or redirected", "log file empty or redirected")
+| EVAL detail = CASE(is_cmd, COALESCE(process.command_line, linuxconfig.line), is_msg, message,
+    CONCAT(file.path, " size=", COALESCE(TO_STRING(file.size), ""), CASE(file.target_path IS NOT NULL, CONCAT(" -> ", file.target_path), ""),
+        " mtime=", COALESCE(TO_STRING(file.mtime), "")))
+| EVAL score = CASE(is_cmd, 4, 0) + CASE(is_history_file AND file.target_path IS NOT NULL, 4, 0) + CASE(is_history_file AND file.target_path IS NULL, 1, 0)
+    + CASE(is_log_file, 2, 0) + CASE(is_msg, 1, 0)
+| KEEP
+    ts,
+    host.name,
+    score,
+    artifact,
+    user.name,
+    detail,
+    _index
+| SORT score DESC, ts DESC
+| LIMIT 2000

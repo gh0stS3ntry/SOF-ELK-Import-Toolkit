@@ -1,0 +1,57 @@
+// LPE-10 | Desktop autostart entries and per-user systemd units
+// Tactic: TA0003 Persistence | ATT&CK: T1547.013, T1543.002
+// Indexes: linuxconfig-*, bodyfile-*, logstash-*, auditd-* | Needs: linuxconfig-* or bodyfile-*
+FROM linuxconfig-*, bodyfile-*, logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL p = COALESCE(file.path, "")
+| EVAL cmd = TO_LOWER(COALESCE(process.command_line, ""))
+| EVAL autostart_path = p RLIKE "/etc/xdg/autostart/.*|/(home/[^/]+|root)/[.]config/autostart/.*"
+| EVAL user_unit_path = p RLIKE "/(home/[^/]+|root)/[.](config|local/share)/systemd/user/.*"
+| EVAL is_edit = event.action IN ("sudo-command", "pkexec-command", "executed", "ran-command")
+    AND cmd RLIKE ".*(/autostart/|systemctl +--user +(enable|start)|[.]config/systemd/user).*"
+| WHERE event.dataset == "linux.autostart"
+   OR (event.dataset == "linux.systemd_unit" AND linuxconfig.systemd.scope == "user" AND linuxconfig.systemd.origin == "user_home")
+   OR (event.dataset IN ("bodyfile", "auditd.log") AND (autostart_path OR user_unit_path) AND COALESCE(file.type, "file") != "dir")
+   OR is_edit
+| EVAL what = CASE(is_edit, process.command_line, p)
+| STATS
+    entry = VALUES(linuxconfig.autostart.name),
+    exec = VALUES(process.command_line),
+    unit_exec = VALUES(linuxconfig.systemd.exec_start),
+    hidden = VALUES(linuxconfig.autostart.hidden),
+    enabled = VALUES(linuxconfig.autostart.enabled),
+    only_show_in = VALUES(linuxconfig.autostart.only_show_in),
+    user = VALUES(user.name),
+    file_mtime = MAX(file.mtime),
+    file_ctime = MAX(file.ctime),
+    flags = VALUES(linuxconfig.flags),
+    edits = COUNT(*) WHERE is_edit,
+    artifacts = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, what
+// EDIT: the start of the incident window; changes after it score higher
+| EVAL since = TO_DATETIME("2026-01-01T00:00:00Z")
+| EVAL x = TO_LOWER(CONCAT(COALESCE(MV_CONCAT(exec, " "), ""), " ", COALESCE(MV_CONCAT(unit_exec, " "), "")))
+| EVAL f_user_level = what LIKE "/home/*" OR what LIKE "/root/*"
+| EVAL f_odd = x RLIKE "(.*[ /;|(])?(curl|wget|nc|ncat|netcat|socat|telnet|base64|xxd|python[0-9.]*|perl|ruby|php|nohup|setsid|mkfifo|chattr)( .*)?|.*(/dev/tcp/|/dev/udp/|/tmp/|/dev/shm/|/var/tmp/|ld_preload|prompt_command|histfile|histsize|[|] *(ba)?sh|base64 -d|0[>][&]1).*" OR x LIKE "*/home/*" OR x LIKE "*/.*"
+| EVAL f_recent = COALESCE(file_ctime, file_mtime) >= since
+| EVAL score = CASE(f_user_level, 2, 0) + CASE(f_odd, 3, 0) + CASE(flags IS NOT NULL, 3, 0) + CASE(f_recent, 2, 0) + CASE(edits > 0, 1, 0)
+| KEEP
+    host.name,
+    score,
+    what,
+    entry,
+    exec,
+    unit_exec,
+    user,
+    hidden,
+    enabled,
+    only_show_in,
+    file_mtime,
+    file_ctime,
+    flags,
+    edits,
+    artifacts,
+    indexes
+| SORT score DESC, file_ctime DESC
+| LIMIT 2000

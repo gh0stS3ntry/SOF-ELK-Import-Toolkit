@@ -1,0 +1,34 @@
+// LC2-03 | Tool and payload downloads: download commands, browser downloads, new executables and scripts in download and temp folders, files served to download tools
+// Tactic: TA0011 Command and Control | ATT&CK: T1105, T1204.002
+// Indexes: logstash-*, auditd-*, linuxconfig-*, browsinghistory-*, bodyfile-*, httpdlog-* | Needs: any of logstash-*, auditd-*, linuxconfig-*, browsinghistory-*, bodyfile-*
+FROM logstash-*, auditd-*, linuxconfig-*, browsinghistory-*, bodyfile-*, httpdlog-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL text = TO_LOWER(COALESCE(process.command_line, linuxconfig.line, ""))
+| EVAL lp = TO_LOWER(COALESCE(file.path, ""))
+| EVAL is_cmd = (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") OR (STARTS_WITH(event.dataset, "linux.") AND COALESCE(linuxconfig.init.kind, "") != "init.d")) AND text RLIKE "(.*[ /;|(])?(curl|wget|aria2c|axel|fetch|tftp|git +clone|pip3? +install +(git[+]|https?://)|go +install|scp)( .*)?" AND text LIKE "*://*"
+| EVAL is_browser_dl = event.dataset == "browsinghistory.download"
+// EDIT: the start of the incident window; changes after it score higher
+| EVAL since = TO_DATETIME("2026-01-01T00:00:00Z")
+| EVAL is_new_file = event.dataset == "bodyfile" AND COALESCE(file.type, "file") == "file" AND COALESCE(file.created, file.ctime) >= since
+    AND (lp LIKE "*/downloads/*" OR STARTS_WITH(lp, "/tmp/") OR STARTS_WITH(lp, "/var/tmp/") OR STARTS_WITH(lp, "/dev/shm/"))
+    AND (bodyfile.executable == true OR lp RLIKE ".*[.](sh|py|pl|elf|bin|so|deb|rpm|run|appimage|jar|tar|tgz|gz|zip|7z|ps1|exe|dll)")
+| EVAL is_served = event.dataset LIKE "*.access" AND event.outcome == "success"
+    AND TO_LOWER(COALESCE(url.original, "")) RLIKE ".*[.](sh|py|pl|elf|bin|so|ps1|exe|dll|jar|war)([?].*)?"
+| WHERE is_cmd OR is_browser_dl OR is_new_file OR is_served
+| EVAL ts = CASE(event.dataset == "bodyfile", COALESCE(file.created, file.ctime), @timestamp)
+| EVAL artifact = CASE(is_cmd, COALESCE(event.action, event.dataset), is_browser_dl, "browser download", is_new_file, "new file (bodyfile)", "served by this web server")
+| EVAL url = CASE(is_cmd, REPLACE(text, "^.*?((https?|ftp|tftp)://[^ '\"|;)]+).*$", "$1"), url.original)
+| EVAL detail = CASE(is_cmd, COALESCE(process.command_line, linuxconfig.line),
+    is_browser_dl, CONCAT(COALESCE(file.path, ""), " (", COALESCE(event.outcome, ""), ")"),
+    is_new_file, CONCAT(file.path, " size=", COALESCE(TO_STRING(file.size), ""), " owner=", COALESCE(file.owner, ""), " sha1=", COALESCE(file.hash.sha1, "")),
+    CONCAT("to ", COALESCE(TO_STRING(source.ip), ""), " ", COALESCE(url.original, "")))
+| KEEP
+    ts,
+    host.name,
+    artifact,
+    user.name,
+    url,
+    detail,
+    _index
+| SORT ts DESC
+| LIMIT 5000

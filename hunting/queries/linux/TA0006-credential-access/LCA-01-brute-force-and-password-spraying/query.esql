@@ -1,0 +1,52 @@
+// LCA-01 | Brute force and password spraying per source address, and whether a login then succeeded
+// Tactic: TA0006 Credential Access | ATT&CK: T1110.001, T1110.003
+// Indexes: logstash-*, wtmp-*, auditd-* | Needs: sshd/PAM/FTP logs in logstash-*, or wtmp-* (btmp), or auditd-*
+FROM logstash-*, wtmp-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| WHERE source.ip IS NOT NULL
+  AND event.action IN ("ssh-login", "ssh-invalid-user", "ssh-max-auth-tries", "authentication-failure", "login", "failed-login",
+                       "logged-in", "authenticated", "ftp-login")
+| EVAL ok = event.outcome == "success" AND event.action IN ("ssh-login", "login", "logged-in", "ftp-login")
+| EVAL fail = event.outcome == "failure" OR event.action IN ("ssh-invalid-user", "ssh-max-auth-tries", "failed-login")
+| STATS
+    failures = COUNT(*) WHERE fail,
+    accounts_failed = COUNT_DISTINCT(user.name) WHERE fail,
+    sample_accounts = VALUES(user.name) WHERE fail,
+    successes = COUNT(*) WHERE ok,
+    accounts_ok = VALUES(user.name) WHERE ok,
+    first_failure = MIN(@timestamp) WHERE fail,
+    last_failure = MAX(@timestamp) WHERE fail,
+    first_success = MIN(@timestamp) WHERE ok,
+    last_success = MAX(@timestamp) WHERE ok,
+    active_hours = COUNT_DISTINCT(DATE_TRUNC(1 hour, @timestamp)) WHERE fail,
+    datasets = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, source.ip
+| WHERE failures > 0
+| EVAL pattern = CASE(accounts_failed >= 10 AND failures <= accounts_failed * 3, "spraying (many accounts, few tries each)",
+    failures >= 20, "brute force (many tries)", "a few failures")
+| EVAL success_after_failures = successes > 0 AND last_success >= first_failure
+| EVAL internal = CIDR_MATCH(source.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10", "::1/128", "fe80::/10", "fc00::/7")
+| EVAL score = CASE(success_after_failures, 4, 0) + CASE(pattern LIKE "spraying*", 2, 0) + CASE(pattern LIKE "brute*", 2, 0)
+    + CASE(internal, 1, 0)
+| EVAL sample_accounts = MV_SLICE(sample_accounts, 0, 19)
+| KEEP
+    host.name,
+    score,
+    source.ip,
+    internal,
+    pattern,
+    failures,
+    accounts_failed,
+    successes,
+    accounts_ok,
+    first_failure,
+    last_failure,
+    first_success,
+    last_success,
+    active_hours,
+    sample_accounts,
+    datasets,
+    indexes
+| SORT score DESC, failures DESC
+| LIMIT 2000

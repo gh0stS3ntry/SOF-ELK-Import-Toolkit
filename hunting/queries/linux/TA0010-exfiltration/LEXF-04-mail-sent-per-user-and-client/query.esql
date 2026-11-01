@@ -1,0 +1,74 @@
+// LEXF-04 | Mail sent through Postfix per authenticated user and client: messages, size, recipient domains and relay rejections
+// Tactic: TA0010 Exfiltration | ATT&CK: T1048.003, T1114.003, T1566
+// Indexes: logstash-* | Needs: Postfix lines in logstash-* (mail.log/maillog or the journal)
+FROM logstash-* METADATA _index
+| WHERE host.os.type == "linux"
+| WHERE STARTS_WITH(process.name, "postfix")
+| EVAL m = COALESCE(message, "")
+| EVAL qid = REPLACE(m, "^([0-9A-Za-z]{8,20}): .*", "$1")
+| EVAL is_noqueue = STARTS_WITH(m, "NOQUEUE: reject")
+| EVAL bip = REPLACE(m, ".*?\\[([0-9a-fA-F.:]+)\\].*", "$1")
+| EVAL ip = CASE(bip != m, bip, null)
+| WHERE (qid != m AND qid != "NOQUEUE") OR is_noqueue
+| EVAL is_client = m LIKE "*: client=*"
+| EVAL u = REPLACE(m, ".*sasl_username=([^, ]+).*", "$1")
+| EVAL sasl_user = CASE(u != m, u, null)
+| EVAL f = REPLACE(m, ".*: from=<([^>]*)>.*", "$1")
+| EVAL sender = CASE(f != m, f, null)
+| EVAL sz = REPLACE(m, ".*, size=([0-9]+),.*", "$1")
+| EVAL size = CASE(sz != m, TO_LONG(sz), null)
+| EVAL is_sent = m LIKE "*: to=<*" AND m LIKE "*status=sent*"
+| EVAL d = REPLACE(m, ".*: to=<[^>]*@([^>]+)>.*", "$1")
+| EVAL rcpt_domain = CASE(is_sent AND d != m, TO_LOWER(d), null)
+| EVAL is_relay_denied = is_noqueue AND m LIKE "*Relay access denied*"
+| EVAL key = CASE(is_noqueue, CONCAT("NOQUEUE ", COALESCE(ip, "?")), qid)
+| STATS
+    t = MIN(@timestamp),
+    sasl_user = MAX(sasl_user),
+    client_ip = MAX(ip) WHERE is_client OR is_noqueue,
+    sender = MAX(sender),
+    size = MAX(size),
+    sent_to = COUNT(*) WHERE is_sent,
+    rcpt_domains = VALUES(rcpt_domain),
+    relay_denied = COUNT(*) WHERE is_relay_denied,
+    indexes = VALUES(_index)
+  BY host.name, key
+| WHERE sent_to > 0 OR relay_denied > 0
+| STATS
+    messages = COUNT(*) WHERE sent_to > 0,
+    recipients = SUM(sent_to),
+    mb = ROUND(SUM(size) / 1048576.0, 2),
+    largest_mb = ROUND(MAX(size) / 1048576.0, 2),
+    distinct_domains = COUNT_DISTINCT(rcpt_domains),
+    sample_domains = VALUES(rcpt_domains),
+    senders = VALUES(sender),
+    relay_denied = SUM(relay_denied),
+    first_seen = MIN(t),
+    last_seen = MAX(t),
+    indexes = VALUES(indexes)
+  BY host.name, sasl_user, client_ip
+| EVAL ipv = TO_IP(client_ip)
+| EVAL internal = CIDR_MATCH(ipv, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10", "::1/128", "fe80::/10", "fc00::/7")
+| EVAL score = CASE(sasl_user IS NOT NULL AND NOT internal, 2, 0) + CASE(recipients >= 500, 2, 0) + CASE(distinct_domains >= 50, 2, 0)
+    + CASE(mb >= 100, 2, 0) + CASE(relay_denied >= 20, 1, 0)
+| EVAL sample_domains = MV_SLICE(sample_domains, 0, 19)
+| EVAL senders = MV_SLICE(senders, 0, 9)
+| KEEP
+    host.name,
+    score,
+    sasl_user,
+    client_ip,
+    internal,
+    messages,
+    recipients,
+    distinct_domains,
+    sample_domains,
+    senders,
+    mb,
+    largest_mb,
+    relay_denied,
+    first_seen,
+    last_seen,
+    indexes
+| SORT score DESC, recipients DESC
+| LIMIT 2000

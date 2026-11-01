@@ -1,0 +1,67 @@
+// LPE-04 | SSH authorized keys: who can log in with which key, file changes, and the logins that used each key
+// Tactic: TA0003 Persistence | ATT&CK: T1098.004
+// Indexes: linuxconfig-*, bodyfile-*, logstash-*, auditd-* | Needs: linuxconfig-* or bodyfile-*; sshd logins in logstash-*
+FROM linuxconfig-*, bodyfile-*, logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL p = COALESCE(file.path, "")
+| EVAL is_edit = event.action IN ("sudo-command", "pkexec-command", "executed", "ran-command")
+    AND COALESCE(process.command_line, "") LIKE "*authorized_keys*"
+| WHERE (event.dataset == "linux.ssh_key" AND event.action == "authorized_keys")
+   OR (event.dataset IN ("bodyfile", "auditd.log") AND (p LIKE "*/authorized_keys" OR p LIKE "*/authorized_keys2" OR p LIKE "/etc/ssh/authorized_keys*"))
+   OR (event.action == "ssh-login" AND ssh.login_method == "publickey")
+   OR is_edit
+| EVAL kind = CASE(event.dataset == "linux.ssh_key", "key", event.action == "ssh-login", "login", is_edit, "edit command", "key file")
+| EVAL id = CASE(kind == "key", linuxconfig.ssh.fingerprint, kind == "login", ssh.key_id, kind == "edit command", process.command_line, p)
+| STATS
+    key_lines = COUNT(*) WHERE kind == "key",
+    key_type = VALUES(linuxconfig.ssh.key_type),
+    comment = VALUES(linuxconfig.ssh.comment),
+    options = VALUES(linuxconfig.ssh.options),
+    forced_command = VALUES(linuxconfig.ssh.forced_command),
+    allowed_from = VALUES(linuxconfig.ssh.from),
+    key_files = VALUES(file.path) WHERE kind IN ("key", "key file"),
+    file_mtime = MAX(file.mtime),
+    file_ctime = MAX(file.ctime),
+    logins = COUNT(*) WHERE kind == "login",
+    login_users = VALUES(user.name) WHERE kind == "login",
+    login_sources = VALUES(source.ip),
+    first_login = MIN(@timestamp) WHERE kind == "login",
+    last_login = MAX(@timestamp) WHERE kind == "login",
+    edits = COUNT(*) WHERE kind IN ("edit command") OR event.dataset == "auditd.log",
+    first_edit = MIN(@timestamp) WHERE kind == "edit command",
+    flags = VALUES(linuxconfig.flags),
+    kinds = VALUES(kind),
+    indexes = VALUES(_index)
+  BY host.name, id
+// EDIT: the start of the incident window; changes after it score higher
+| EVAL since = TO_DATETIME("2026-01-01T00:00:00Z")
+| EVAL f_recent = COALESCE(file_ctime, file_mtime) >= since OR first_login >= since OR first_edit >= since
+| EVAL f_unknown_key = logins > 0 AND key_lines == 0
+| EVAL f_root = COALESCE(MV_CONCAT(flags, ","), "") LIKE "*root_authorized_key*"
+| EVAL score = CASE(f_recent, 2, 0) + CASE(f_unknown_key, 3, 0) + CASE(f_root, 2, 0) + CASE(edits > 0, 2, 0)
+    + CASE(forced_command IS NOT NULL, 1, 0)
+| EVAL login_sources = MV_SLICE(login_sources, 0, 19)
+| KEEP
+    host.name,
+    score,
+    id,
+    kinds,
+    key_type,
+    comment,
+    key_files,
+    file_mtime,
+    file_ctime,
+    logins,
+    login_users,
+    login_sources,
+    first_login,
+    last_login,
+    options,
+    forced_command,
+    allowed_from,
+    edits,
+    first_edit,
+    flags,
+    indexes
+| SORT score DESC, last_login DESC
+| LIMIT 2000

@@ -1,0 +1,66 @@
+// LPE-02 | Cron, anacron and at jobs: what is configured, what ran, and changes to the cron files
+// Tactic: TA0003 Persistence | ATT&CK: T1053.003, T1053.002
+// Indexes: linuxconfig-*, logstash-*, bodyfile-*, auditd-* | Needs: linuxconfig-* (configured jobs) or cron messages in logstash-*; bodyfile-*, auditd-* add file times and edits
+FROM linuxconfig-*, logstash-*, bodyfile-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL p = COALESCE(file.path, "")
+| EVAL cmd = TO_LOWER(COALESCE(process.command_line, ""))
+| EVAL in_cron_path = p RLIKE "/etc/(crontab|anacrontab|cron[.](d|hourly|daily|weekly|monthly|yearly)(/.*)?|periodic/.*|crontabs/.*)"
+    OR p RLIKE "/var/spool/(cron|at|atjobs)(/.*)?"
+| EVAL is_edit = event.action IN ("sudo-command", "pkexec-command", "executed", "ran-command")
+    AND cmd RLIKE "(.*/)?(crontab|at|batch)( .*)?|.*(/etc/cron|/etc/anacrontab|/var/spool/cron|/var/spool/at).*"
+| WHERE (event.dataset == "linux.cron" AND event.action IN ("entry", "script_line"))
+   OR event.action == "cron-command"
+   OR (event.dataset IN ("bodyfile", "auditd.log") AND in_cron_path AND COALESCE(file.type, "file") != "dir")
+   OR is_edit
+| EVAL kind = CASE(event.dataset == "linux.cron", "configured", event.action == "cron-command", "ran",
+    is_edit, "edit command", "cron file")
+| EVAL what = CASE(kind IN ("configured", "ran", "edit command"), COALESCE(process.command_line, linuxconfig.line), p)
+| STATS
+    configured = COUNT(*) WHERE kind == "configured",
+    executions = COUNT(*) WHERE kind == "ran",
+    edits = COUNT(*) WHERE kind == "edit command",
+    schedule = VALUES(linuxconfig.cron.schedule),
+    cron_source = VALUES(linuxconfig.cron.source),
+    run_as = VALUES(user.name),
+    cron_files = VALUES(file.path),
+    file_mtime = MAX(file.mtime),
+    file_ctime = MAX(file.ctime),
+    first_run = MIN(@timestamp) WHERE kind == "ran",
+    last_run = MAX(@timestamp) WHERE kind == "ran",
+    first_edit = MIN(@timestamp) WHERE kind == "edit command",
+    flags = VALUES(linuxconfig.flags),
+    kinds = VALUES(kind),
+    indexes = VALUES(_index)
+  BY host.name, what
+// EDIT: the start of the incident window; changes after it score higher
+| EVAL since = TO_DATETIME("2026-01-01T00:00:00Z")
+| EVAL w = TO_LOWER(COALESCE(what, ""))
+| EVAL sources = COALESCE(MV_CONCAT(cron_source, ","), "")
+| EVAL f_gone = configured == 0 AND executions > 0
+| EVAL f_user_or_at = sources LIKE "*user*" OR sources LIKE "*at*" OR w LIKE "/var/spool/*"
+| EVAL f_odd = w RLIKE "(.*[ /;|(])?(curl|wget|nc|ncat|netcat|socat|telnet|base64|xxd|python[0-9.]*|perl|ruby|php|nohup|setsid|mkfifo|chattr)( .*)?|.*(/dev/tcp/|/dev/udp/|/tmp/|/dev/shm/|/var/tmp/|ld_preload|prompt_command|histfile|histsize|[|] *(ba)?sh|base64 -d|0[>][&]1).*"
+| EVAL f_recent = COALESCE(file_ctime, file_mtime) >= since OR first_run >= since OR first_edit >= since
+| EVAL score = CASE(f_gone, 2, 0) + CASE(f_user_or_at, 2, 0) + CASE(f_odd, 3, 0) + CASE(flags IS NOT NULL, 3, 0)
+    + CASE(f_recent, 2, 0) + CASE(edits > 0, 1, 0)
+| KEEP
+    host.name,
+    score,
+    what,
+    kinds,
+    schedule,
+    cron_source,
+    run_as,
+    configured,
+    executions,
+    first_run,
+    last_run,
+    edits,
+    first_edit,
+    file_mtime,
+    file_ctime,
+    cron_files,
+    flags,
+    indexes
+| SORT score DESC, last_run DESC
+| LIMIT 2000

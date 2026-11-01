@@ -1,0 +1,29 @@
+// LTRI-01 | Linux data coverage per index and dataset
+// Tactic: Triage (first cut) | ATT&CK: n/a
+// Indexes: logstash-*, auditd-*, bodyfile-*, wtmp-*, packages-*, linuxconfig-*, httpdlog-*, browsinghistory-* | Needs: nothing
+FROM logstash-*, auditd-*, bodyfile-*, wtmp-*, packages-*, linuxconfig-*, httpdlog-*, browsinghistory-* METADATA _index
+| WHERE host.os.type == "linux"
+| STATS
+    docs = COUNT(*),
+    first_event = MIN(@timestamp),
+    last_event = MAX(@timestamp),
+    hosts = VALUES(host.name),
+    os = VALUES(host.os.full),
+    kernels = VALUES(host.os.kernel),
+    log_files = COUNT_DISTINCT(log.file.path)
+  BY _index, event.dataset
+// family is the index prefix (logstash, auditd, bodyfile, ...)
+| EVAL family = REPLACE(_index, "-.*$", "")
+| KEEP
+    hosts,
+    family,
+    _index,
+    event.dataset,
+    docs,
+    log_files,
+    first_event,
+    last_event,
+    os,
+    kernels
+| SORT _index ASC, event.dataset ASC
+| LIMIT 1000

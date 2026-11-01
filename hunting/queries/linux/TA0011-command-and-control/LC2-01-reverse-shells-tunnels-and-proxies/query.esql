@@ -1,0 +1,60 @@
+// LC2-01 | Reverse shells, tunnels, proxies and VPNs: commands, persistence lines, tool packages and binaries
+// Tactic: TA0011 Command and Control | ATT&CK: T1059.004, T1572, T1090, T1095
+// Indexes: logstash-*, auditd-*, linuxconfig-*, packages-*, bodyfile-* | Needs: any of logstash-*, auditd-*, linuxconfig-*, packages-*, bodyfile-*
+FROM logstash-*, auditd-*, linuxconfig-*, packages-*, bodyfile-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL text = TO_LOWER(COALESCE(process.command_line, linuxconfig.line, ""))
+| EVAL flags = COALESCE(MV_CONCAT(linuxconfig.flags, ","), "")
+| EVAL lp = TO_LOWER(COALESCE(file.path, ""))
+| EVAL n = TO_LOWER(COALESCE(file.name, ""))
+// journal rows: the command line of every process that logged (openvpn, ssh, socat...) as well as sudo and cron
+| EVAL is_cmd = (event.dataset IN ("syslog.journal", "syslog.file", "auditd.log") OR (STARTS_WITH(event.dataset, "linux.") AND COALESCE(linuxconfig.init.kind, "") != "init.d"))
+    AND (text RLIKE ".*(/dev/tcp/|/dev/udp/|([ /;|(]|)(nc|ncat|netcat|nc[.]traditional|nc[.]openbsd) .*(-e|-c|--exec|--sh-exec|-l)|(ba|z|da)?sh +-i|socat .*(exec|pty|system|tcp)|mkfifo|telnet .*[|]|python[0-9.]* .*(socket|pty[.]spawn)|perl .*socket|php .*fsockopen|ruby .*(socket|tcpsocket)|ssh .*(-r |-l |-d |-w |-n |-r[0-9]|-l[0-9]|-d[0-9])|autossh|sshuttle|chisel|ligolo|gost |frpc|frps|ngrok|cloudflared +tunnel|iodine|dnscat|ptunnel|stunnel|proxychains|revsocks|rpivot|pivotnacci|meterpreter|msfconsole|msfvenom|sliver|havoc|mythic|pwncat|villain|openvpn|wg-quick|[ /]tor( .*)?|torsocks|xmrig).*" OR flags LIKE "*reverse_shell*" OR flags LIKE "*dev_tcp*")
+    AND NOT text RLIKE "(.*/)?(apt|apt-get|apt-mark|apt-cache|aptitude|dpkg|dnf|yum|zypper|apk|snap|pip|pip3|pipx|gem|npm)( .*)?"
+| EVAL is_pkg = STARTS_WITH(event.dataset, "packages.") AND event.action IN ("install", "reinstall")
+    AND package.name RLIKE "(socat|ncat|netcat.*|proxychains.*|chisel|ligolo.*|sshuttle|autossh|iodine|dnscat2|ptunnel.*|stunnel.*|tor|torsocks|ngrok|cloudflared|frp|gost|openvpn|wireguard.*|pwncat.*|metasploit-framework|sliver|havoc)"
+| EVAL is_file = event.dataset == "bodyfile" AND COALESCE(file.type, "file") == "file" AND NOT STARTS_WITH(lp, "/usr/") AND NOT lp LIKE "*/site-packages/*"
+    AND (n RLIKE "(chisel|chisel_.*|ligolo.*|agent|proxy|gost|frpc|frps|ngrok|cloudflared|revsocks|rpivot|iodine|dnscat.*|pwncat|socat|ncat|nc|meterpreter.*|beacon.*|sliver.*|implant.*)" AND bodyfile.executable == true
+         OR n RLIKE ".*[.](ovpn|conf)" AND (lp LIKE "*/openvpn/*" OR lp LIKE "*/wireguard/*" OR n LIKE "*.ovpn"))
+| WHERE is_cmd OR is_pkg OR is_file
+| EVAL kind = CASE(
+    text RLIKE ".*(/dev/tcp/|/dev/udp/|sh +-i|mkfifo|socat .*(exec|pty|system)|(nc|ncat|netcat)[^ ]* .*(-e|-c|--exec|--sh-exec)|socket|fsockopen|pwncat|villain|meterpreter).*" OR flags LIKE "*reverse_shell*" OR flags LIKE "*dev_tcp*", "reverse shell",
+    text RLIKE ".*(ssh .*(-r |-l |-d |-w |-n |-r[0-9]|-l[0-9]|-d[0-9])|autossh|sshuttle).*", "ssh tunnel or port forward",
+    text RLIKE ".*(chisel|ligolo|gost |frpc|frps|revsocks|rpivot|pivotnacci|proxychains|stunnel).*" OR n RLIKE "(chisel.*|ligolo.*|agent|proxy|gost|frpc|frps|revsocks|rpivot)", "tunnel or proxy tool",
+    text RLIKE ".*(ngrok|cloudflared|iodine|dnscat|ptunnel|[ /]tor( .*)?|torsocks).*" OR n RLIKE "(ngrok|cloudflared|iodine|dnscat.*)", "tunnelling service, DNS or ICMP tunnel, Tor",
+    text RLIKE ".*(openvpn|wg-quick).*" OR n LIKE "*.ovpn" OR lp LIKE "*/wireguard/*" OR lp LIKE "*/openvpn/*", "VPN",
+    text RLIKE ".*(msfconsole|msfvenom|sliver|havoc|mythic).*" OR n RLIKE "(sliver.*|implant.*|beacon.*)", "C2 framework",
+    is_pkg, "tool package",
+    "listener or other")
+| EVAL what = CASE(is_cmd, COALESCE(process.command_line, linuxconfig.line), is_pkg, package.name, file.path)
+| STATS
+    records = COUNT(*),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    users = VALUES(user.name),
+    directories = VALUES(process.working_directory),
+    executables = VALUES(process.executable),
+    file_created = MAX(COALESCE(file.created, file.ctime)),
+    sha1 = VALUES(file.hash.sha1),
+    artifacts = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, kind, what
+| EVAL score = CASE(kind == "reverse shell", 5, kind == "C2 framework", 4, kind IN ("tunnel or proxy tool", "tunnelling service, DNS or ICMP tunnel, Tor"), 3,
+    kind == "ssh tunnel or port forward", 2, 1)
+| KEEP
+    host.name,
+    score,
+    kind,
+    what,
+    records,
+    first_seen,
+    last_seen,
+    users,
+    directories,
+    executables,
+    file_created,
+    sha1,
+    artifacts,
+    indexes
+| SORT score DESC, last_seen DESC
+| LIMIT 2000

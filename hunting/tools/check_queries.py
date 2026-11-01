@@ -7,6 +7,11 @@ It cannot run a query, but it catches the mistakes that cost the most time on a 
     reference (renamed columns, typos, raw parser column names from the old importers);
   * the pack's conventions: FROM ... METADATA _index, _index kept in the output, no wildcards
     in KEEP, winlog.event_id cast with TO_STRING before IN (...);
+  * Linux queries (queries/linux/) are checked against the Linux importers' mappings only. A
+    query reading several index families must not depend on a field that only an optional
+    family (auditd-*, httpdlog-*, browsinghistory-*) has, unless its "Needs:" header names that
+    family, so it still runs on a host without auditd, a web server or a browser; and every
+    Linux query filters host.os.type == "linux";
   * RLIKE patterns that Lucene regex rejects or reads differently than intended
     (\\d / \\s / \\w, unescaped & @ ~ # < >, ^ / $ anchors, bounded repetition after .*);
   * LIKE patterns with a lone backslash (ES|QL LIKE uses backslash as its escape character);
@@ -35,6 +40,12 @@ QUERIES = PACK / "queries"
 CHECKLISTS = PACK / "checklists"
 TEMPLATES = REPO / "Windows" / "index_templates"
 AWS_TEMPLATES = REPO / "AWS" / "index_templates"
+LINUX_TEMPLATES = REPO / "Linux" / "index_templates"
+LINUX_QUERIES = QUERIES / "linux"
+# Linux families that many hosts do not have: no auditd installed (Debian, Ubuntu and Kali by
+# default), no web server, no browser. A query reading several families must still run
+# without them, so it may not reference a field that only these families define.
+LINUX_OPTIONAL_FAMILIES = ("auditd", "httpdlog", "browsinghistory")
 NATIVE_CSV = REPO / "docs" / "sofelk-native-fields.csv"
 
 NATIVE_FAMILIES = ("filesystem", "evtxlogs", "lnkfiles", "prefetch")
@@ -59,6 +70,8 @@ class Fields:
     def __init__(self):
         self.exact: dict[str, set[str]] = {}
         self.prefixes: dict[str, set[str]] = {}
+        self.linux: dict[str, tuple[set[str], set[str]]] = {}
+        self.linux_types: dict[str, dict[str, str]] = {}
 
     def add(self, family, name):
         self.exact.setdefault(family, set()).add(name)
@@ -73,6 +86,24 @@ class Fields:
             return True
         # object sub-fields of a keyword/date leaf are never valid, but a parent object is
         return any(f.startswith(name + ".") for f in self.exact.get(family, ()))
+
+    def known_linux(self, family, name):
+        """Like known(), but only against the Linux importers' mapping of the family."""
+        exact, prefixes = self.linux.get(family, ((), ()))
+        return (name in exact or any(name.startswith(p) for p in prefixes)
+                or any(f.startswith(name + ".") for f in exact))
+
+
+def leaf_types(props, prefix=""):
+    """{dotted field: mapping type} for the leaves of a mapping."""
+    out = {}
+    for key, spec in (props or {}).items():
+        name = f"{prefix}{key}"
+        if "properties" in spec:
+            out.update(leaf_types(spec["properties"], name + "."))
+        else:
+            out[name] = spec.get("type", "object")
+    return out
 
 
 def walk_mapping(props, prefix, out_exact, out_prefix):
@@ -119,6 +150,24 @@ def load_fields() -> Fields:
         for p in prefix:
             fields.add_prefix(family, p)
 
+    # Linux indexes: <family>-<hostname>, composed of the Linux common component. httpdlog
+    # also has the AWS (ALB/ELB) mapping above; both use SOF-ELK's web field names.
+    linux_exact, linux_prefix = set(), set()
+    linux_common = json.loads((LINUX_TEMPLATES / "component-toolkit-linux-common.json").read_text(encoding="utf-8"))
+    walk_mapping(linux_common["template"]["mappings"]["properties"], "", linux_exact, linux_prefix)
+    for path in sorted(LINUX_TEMPLATES.glob("index-*.json")):
+        family = path.stem[len("index-"):]
+        spec = json.loads(path.read_text(encoding="utf-8"))
+        exact, prefix = set(linux_exact), set(linux_prefix)
+        walk_mapping(spec["template"]["mappings"].get("properties"), "", exact, prefix)
+        fields.linux[family] = (exact, prefix)
+        fields.linux_types[family] = {**leaf_types(linux_common["template"]["mappings"]["properties"]),
+                                      **leaf_types(spec["template"]["mappings"].get("properties"))}
+        for name in exact:
+            fields.add(family, name)
+        for p in prefix:
+            fields.add_prefix(family, p)
+
     with NATIVE_CSV.open(encoding="utf-8", newline="") as fh:
         for row in csv.DictReader(fh):
             index, raw = row["index"].strip(), row["field"].strip()
@@ -141,6 +190,13 @@ def load_fields() -> Fields:
     for fam in ("lnkfiles", "prefetch"):
         fields.add(fam, "file.name")
         fields.add(fam, "file.directory")
+    # Linux/browser2sofelk.py writes the Windows browsinghistory schema for Linux hosts
+    fields.linux["browsinghistory"] = (set(fields.exact.get("browsinghistory", ())),
+                                       set(fields.prefixes.get("browsinghistory", ())))
+    fields.linux_types["browsinghistory"] = {
+        **leaf_types(common["template"]["mappings"]["properties"]),
+        **leaf_types(json.loads((TEMPLATES / "index-browsinghistory.json").read_text(encoding="utf-8"))
+                     ["template"]["mappings"].get("properties"))}
     return fields
 
 
@@ -281,6 +337,16 @@ def check_query(path: Path, fields: Fields, problems):
     if re.search(r"winlog\.event_id`?\s*\)?\s+(NOT\s+)?IN\s*\(", body_nostr):
         problems.append(("error", f"{path}: winlog.event_id is a long; TO_STRING it before IN (...)"))
 
+    is_linux = LINUX_QUERIES in path.parents
+    if is_linux:
+        for fam in fams:
+            if fam not in fields.linux:
+                problems.append(("error", f"{path}: {fam}-* is not a Linux index family"))
+        # httpdlog-* and browsinghistory-* also hold Windows and AWS documents, and SOF-ELK's own
+        # pipeline writes logstash-YYYY.MM; every Linux importer sets host.os.type "linux".
+        if not re.search(r'host\.os\.type\s*==\s*""', body_nostr):
+            problems.append(("error", f"{path}: Linux queries must filter WHERE host.os.type == \"linux\""))
+
     # field names
     checkable = [f for f in fams if f not in INFERRED_FAMILIES]
     if fams and len(checkable) == len(fams):
@@ -291,7 +357,23 @@ def check_query(path: Path, fields: Fields, problems):
                 continue
             if re.match(r"^\d", name):
                 continue
-            if not any(fields.known(f, name) for f in checkable):
+            if is_linux:
+                if not any(fields.known_linux(f, name) for f in checkable):
+                    problems.append(("error", f"{path}: unknown field '{name}' for Linux {', '.join(fams)}"))
+                elif len(set(fams)) > 1 and not any(fields.known_linux(f, name) for f in checkable
+                                                    if f not in LINUX_OPTIONAL_FAMILIES
+                                                    or f"{f}-*" in meta.get("needs", "")):
+                    optional = ", ".join(f for f in fams if f in LINUX_OPTIONAL_FAMILIES)
+                    problems.append(("error", f"{path}: '{name}' exists only in optional families "
+                                              f"({optional}); the query fails on hosts without them"))
+                types = {fields.linux_types.get(f, {}).get(name) for f in checkable} - {None}
+                if len(types) > 1:
+                    bare_uses = re.findall(r"(?<![\w.])(TO_[A-Z_]+\(\s*)?`?" + re.escape(name) + r"`?(?![\w.])",
+                                           body_nostr)
+                    if any(not conv for conv in bare_uses):
+                        problems.append(("error", f"{path}: '{name}' is {' / '.join(sorted(types))} in "
+                                                  f"{', '.join(fams)}; wrap every use in a TO_ conversion"))
+            elif not any(fields.known(f, name) for f in checkable):
                 problems.append(("error", f"{path}: unknown field '{name}' for {', '.join(fams)}"))
         # Raw parser column names (FullPath, KeyPath, Visit_Time, ...) are mixed-case and undotted.
         # ES|QL keywords and functions are upper case and EVAL names in this pack are lower case.

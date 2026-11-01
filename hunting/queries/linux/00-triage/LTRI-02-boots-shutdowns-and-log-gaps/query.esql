@@ -1,0 +1,37 @@
+// LTRI-02 | Boots, shutdowns and crashes, with the log coverage of each boot
+// Tactic: Triage (first cut) | ATT&CK: T1070.002
+// Indexes: logstash-*, wtmp-* | Needs: journal or text syslog in logstash-*, wtmp-*
+FROM logstash-*, wtmp-* METADATA _index
+| WHERE host.os.type == "linux"
+| WHERE event.dataset == "syslog.journal"
+   OR (event.dataset == "syslog.file" AND message LIKE "*Linux version *")
+   OR (event.dataset == "wtmp" AND (event.action IN ("boot", "shutdown") OR wtmp.logout_type == "crash"))
+| EVAL record = CASE(
+    event.dataset == "syslog.journal", "journal boot",
+    event.dataset == "syslog.file", "syslog kernel start",
+    wtmp.logout_type == "crash", "wtmp crash (session never closed)",
+    CONCAT("wtmp ", event.action))
+// one row per journal boot id; every other record is its own row
+| EVAL boot_key = CASE(event.dataset == "syslog.journal", journald.boot_id, CONCAT(record, " ", TO_STRING(@timestamp)))
+| STATS
+    start = MIN(@timestamp),
+    end = MAX(@timestamp),
+    entries = COUNT(*),
+    kernel = VALUES(wtmp.host),
+    users = VALUES(user.name)
+  BY _index, host.name, record, boot_key
+| EVAL hours_covered = ROUND(TO_DOUBLE(DATE_DIFF("second", start, end)) / 3600.0, 1)
+| EVAL boot_id = CASE(record == "journal boot", boot_key, null)
+| KEEP
+    host.name,
+    start,
+    end,
+    hours_covered,
+    record,
+    entries,
+    boot_id,
+    kernel,
+    users,
+    _index
+| SORT host.name ASC, start ASC
+| LIMIT 5000

@@ -1,0 +1,38 @@
+// LCA-02 | Credential files read or copied, credential theft and cracking tools: commands, files on disk and installed packages
+// Tactic: TA0006 Credential Access | ATT&CK: T1003.008, T1552.001, T1552.004, T1110.002, T1040, T1557.001
+// Indexes: logstash-*, auditd-*, bodyfile-*, packages-* | Needs: any of logstash-*, auditd-*, bodyfile-*, packages-*
+FROM logstash-*, auditd-*, bodyfile-*, packages-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL p = TO_LOWER(COALESCE(file.path, ""))
+| EVAL n = TO_LOWER(COALESCE(file.name, ""))
+| EVAL cmd = TO_LOWER(COALESCE(process.command_line, ""))
+| EVAL is_cmd = event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") AND cmd RLIKE "(.*[ /;|(])?(john|hashcat|hydra|medusa|ncrack|unshadow|mimipenguin|lazagne|pypykatz|secretsdump[.]py|impacket-secretsdump|responder|ntlmrelayx[.]py|impacket-ntlmrelayx|getuserspns[.]py|impacket-getuserspns|kerbrute|trufflehog|gitleaks|gcore|tcpdump|tshark|dumpcap|bettercap|keytabextract|firefox_decrypt[.]py)( .*)?|.*(/etc/shadow|/etc/gshadow|/etc/security/opasswd|/etc/krb5[.]keytab|krb5cc_|id_rsa|id_ecdsa|id_ed25519|[.]aws/credentials|[.]git-credentials|[.]docker/config[.]json|[.]kube/config|[.]pgpass|[.]my[.]cnf|[.]netrc|wp-config[.]php|[.]env|[.]bash_history|[.]zsh_history|/proc/[0-9]+/mem|/proc/[0-9]+/maps|gdb +-p|gdb +--pid|grep +-[a-z]*r[a-z]* +-?[a-z]* *(pass|pwd|secret|token)|secret-tool|gnome-keyring|kwallet|login[.]keyring|key[0-9][.]db|logins[.]json).*"
+    AND NOT cmd RLIKE "(.*/)?(apt|apt-get|apt-mark|apt-cache|aptitude|dpkg|dnf|yum|zypper|apk|snap|pip|pip3|pipx|gem|npm)( .*)?"
+| EVAL is_audit_read = event.dataset == "auditd.log" AND p RLIKE "/etc/(shadow|gshadow|security/opasswd|krb5[.]keytab)|.*/[.]ssh/id_[a-z0-9]+|.*[.]bash_history"
+// copies of credential material outside their normal place, and cracking and capture output
+| EVAL is_file = event.dataset == "bodyfile" AND COALESCE(file.type, "file") == "file" AND (
+       (n IN ("shadow", "gshadow", "shadow-", "opasswd") AND NOT STARTS_WITH(p, "/etc/"))
+    OR (n RLIKE "id_(rsa|dsa|ecdsa|ed25519)" AND NOT p LIKE "*/.ssh/*")
+    OR n RLIKE ".*[.](kirbi|ccache|keytab|kdbx|kdb|pcap|pcapng|cap|hccapx|22000|potfile|pot|hash|hashes|ntds|dit|dmp)"
+    OR n RLIKE "(krb5cc_.*|hashes[.].*|.*[.]kerberoast|.*[.]asreproast|john[.]pot|hashcat[.]potfile|lsass.*|ntds[.]dit|responder-session[.]log|.*-ntlmv2-.*[.]txt)")
+    AND NOT STARTS_WITH(p, "/usr/") AND NOT STARTS_WITH(p, "/proc/") AND NOT STARTS_WITH(p, "/sys/") AND NOT p LIKE "*/site-packages/*"
+| EVAL is_pkg = STARTS_WITH(event.dataset, "packages.") AND event.action IN ("install", "installed", "reinstall")
+    AND package.name RLIKE "(john|john-data|hashcat|hydra|medusa|ncrack|responder|mimikatz|pypykatz|python3-impacket|impacket-scripts|crackmapexec|netexec|kerbrute|mimipenguin|lazagne|bettercap|dsniff|ettercap.*|trufflehog|gitleaks|seclists|wordlists|hash-identifier|hashid)"
+| WHERE is_cmd OR is_audit_read OR is_file OR is_pkg
+| EVAL ts = CASE(event.dataset == "bodyfile", COALESCE(file.created, file.ctime), @timestamp)
+| EVAL artifact = CASE(is_cmd, "command", is_audit_read, "audited file access", is_file, "file on disk", CONCAT("package ", event.dataset))
+| EVAL detail = CASE(is_cmd, process.command_line, is_pkg, CONCAT(package.name, " ", COALESCE(package.version, "")),
+    is_file, CONCAT(file.path, " size=", COALESCE(TO_STRING(file.size), ""), " owner=", COALESCE(file.owner, ""), " mtime=", COALESCE(TO_STRING(file.mtime), "")),
+    CONCAT(COALESCE(event.action, ""), " ", COALESCE(file.path, ""), " by ", COALESCE(process.executable, "")))
+| EVAL score = CASE(is_cmd, 3, 0) + CASE(is_audit_read, 2, 0) + CASE(is_file, 2, 0) + CASE(is_pkg AND event.action != "installed", 1, 0)
+| KEEP
+    ts,
+    host.name,
+    score,
+    artifact,
+    user.name,
+    process.working_directory,
+    detail,
+    _index
+| SORT ts DESC
+| LIMIT 5000

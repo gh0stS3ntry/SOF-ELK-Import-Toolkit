@@ -1,0 +1,36 @@
+// LPE-08 | Kernel modules: out-of-tree and unsigned modules loaded, module commands, and module files outside the module tree
+// Tactic: TA0003 Persistence | ATT&CK: T1547.006, T1014
+// Indexes: logstash-*, auditd-*, bodyfile-* | Needs: kernel messages in logstash-*, or auditd-*, or bodyfile-*
+FROM logstash-*, auditd-*, bodyfile-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL p = TO_LOWER(COALESCE(file.path, ""))
+| EVAL m = TO_LOWER(COALESCE(message, ""))
+| EVAL cmd = TO_LOWER(COALESCE(process.command_line, ""))
+| EVAL f_taint = event.dataset IN ("syslog.journal", "syslog.file")
+    AND (m LIKE "*taints kernel*" OR m LIKE "*module verification failed*" OR m LIKE "*out-of-tree module*"
+         OR m LIKE "*unsigned module*" OR m LIKE "*module license*taints*" OR m LIKE "*loading of unsigned module*"
+         OR m LIKE "*disabling lock debugging due to kernel taint*")
+| EVAL f_audit_module = event.action IN ("loaded-kernel-module", "unloaded-kernel-module", "init_module", "finit_module", "delete_module")
+| EVAL f_cmd = event.action IN ("sudo-command", "pkexec-command", "executed", "ran-command")
+    AND cmd RLIKE "(.*/)?(insmod|modprobe|rmmod|kmod|depmod)( .*)?|.*(/etc/modules|/etc/modules-load[.]d|/etc/modprobe[.]d).*"
+| EVAL f_ko_odd = event.dataset == "bodyfile" AND (p LIKE "*.ko" OR p LIKE "*.ko.xz" OR p LIKE "*.ko.zst" OR p LIKE "*.ko.gz")
+    AND NOT STARTS_WITH(p, "/lib/modules/") AND NOT STARTS_WITH(p, "/usr/lib/modules/") AND NOT STARTS_WITH(p, "/usr/src/")
+    AND NOT STARTS_WITH(p, "/var/lib/dkms/")
+| EVAL f_load_conf = event.dataset == "bodyfile" AND (STARTS_WITH(p, "/etc/modules-load.d/") OR STARTS_WITH(p, "/etc/modprobe.d/") OR p == "/etc/modules")
+| WHERE f_taint OR f_audit_module OR f_cmd OR f_ko_odd OR f_load_conf
+| EVAL ts = CASE(event.dataset == "bodyfile", file.ctime, @timestamp)
+| EVAL artifact = CASE(f_taint, "kernel message", f_audit_module, "audit module record", f_cmd, "module command",
+    f_ko_odd, "module file outside the module tree", "module load configuration")
+| EVAL detail = CASE(event.dataset == "bodyfile", CONCAT(file.path, " mtime=", COALESCE(TO_STRING(file.mtime), ""), " owner=", COALESCE(file.owner, "")),
+    COALESCE(process.command_line, message, ""))
+| EVAL score = CASE(f_taint, 3, 0) + CASE(f_audit_module, 2, 0) + CASE(f_cmd, 2, 0) + CASE(f_ko_odd, 3, 0)
+| KEEP
+    ts,
+    host.name,
+    score,
+    artifact,
+    user.name,
+    detail,
+    _index
+| SORT score DESC, ts DESC
+| LIMIT 2000

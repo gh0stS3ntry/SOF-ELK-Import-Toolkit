@@ -83,7 +83,7 @@ sof_elk_all_importers/
 ├── sof-elk-kibana/        (SOF-ELK's out-of-box Data Views and Kibana defaults, used by SOF-ELK_CreateDataViews.py)
 ├── docs/schemas/
 └── hunting/
-    ├── queries/          (Windows queries by tactic; AWS queries under queries/aws/)
+    ├── queries/          (by platform: windows/, linux/ and aws/, each by tactic)
     ├── checklists/
     └── tools/
 ```

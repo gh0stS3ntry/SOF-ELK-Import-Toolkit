@@ -1,0 +1,45 @@
+// LLM-01 | Inbound remote sessions per account and source, with session length, terminal and method
+// Tactic: TA0008 Lateral Movement | ATT&CK: T1021.004, T1078
+// Indexes: wtmp-*, logstash-*, auditd-* | Needs: wtmp-* or sshd logs in logstash-*
+FROM wtmp-*, logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| WHERE source.ip IS NOT NULL AND event.outcome == "success"
+  AND event.action IN ("login", "ssh-login", "logged-in", "ftp-login")
+| EVAL is_wtmp = event.dataset == "wtmp"
+| EVAL minutes = TO_DOUBLE(event.duration) / 60000000000.0
+| STATS
+    wtmp_sessions = COUNT(*) WHERE is_wtmp,
+    log_logins = COUNT(*) WHERE NOT is_wtmp,
+    total_minutes = ROUND(SUM(minutes), 1),
+    longest_minutes = ROUND(MAX(minutes), 1),
+    still_open = COUNT(*) WHERE is_wtmp AND event.end IS NULL,
+    crashed = COUNT(*) WHERE wtmp.logout_type == "crash",
+    ttys = VALUES(wtmp.line),
+    methods = VALUES(ssh.login_method),
+    first_login = MIN(@timestamp),
+    last_login = MAX(@timestamp),
+    datasets = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, user.name, source.ip
+| EVAL internal = CIDR_MATCH(source.ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10", "::1/128", "fe80::/10", "fc00::/7")
+| EVAL logins = wtmp_sessions + log_logins
+| KEEP
+    host.name,
+    user.name,
+    source.ip,
+    internal,
+    logins,
+    wtmp_sessions,
+    log_logins,
+    first_login,
+    last_login,
+    total_minutes,
+    longest_minutes,
+    still_open,
+    crashed,
+    ttys,
+    methods,
+    datasets,
+    indexes
+| SORT internal DESC, last_login DESC
+| LIMIT 5000

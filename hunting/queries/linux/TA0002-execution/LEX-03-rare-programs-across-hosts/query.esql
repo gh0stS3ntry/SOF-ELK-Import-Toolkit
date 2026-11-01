@@ -1,0 +1,33 @@
+// LEX-03 | Rare programs: executables seen in the journal and audit log, stacked across hosts
+// Tactic: TA0002 Execution | ATT&CK: T1059, T1204.002
+// Indexes: logstash-*, auditd-* | Needs: journal export in logstash-* (_EXE), or auditd-*
+FROM logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+| WHERE process.executable IS NOT NULL
+| STATS
+    events = COUNT(*),
+    hosts = COUNT_DISTINCT(host.name),
+    host_names = VALUES(host.name),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    names = VALUES(process.name),
+    run_as_uids = VALUES(process.user.id),
+    units = VALUES(journald.unit),
+    sample_command_lines = VALUES(process.command_line),
+    indexes = VALUES(_index)
+  BY process.executable
+| EVAL sample_command_lines = MV_SLICE(sample_command_lines, 0, 4), host_names = MV_SLICE(host_names, 0, 9)
+| KEEP
+    process.executable,
+    hosts,
+    events,
+    first_seen,
+    last_seen,
+    names,
+    run_as_uids,
+    units,
+    sample_command_lines,
+    host_names,
+    indexes
+| SORT hosts ASC, events ASC
+| LIMIT 2000

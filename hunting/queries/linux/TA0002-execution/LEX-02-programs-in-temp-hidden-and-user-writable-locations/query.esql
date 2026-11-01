@@ -1,0 +1,62 @@
+// LEX-02 | Programs run from, or executables stored in, temporary, hidden and user-writable locations
+// Tactic: TA0002 Execution | ATT&CK: T1059.004, T1036.005, T1564.001
+// Indexes: logstash-*, auditd-*, linuxconfig-*, bodyfile-* | Needs: any of logstash-*, auditd-*, linuxconfig-*, bodyfile-*
+FROM logstash-*, auditd-*, linuxconfig-*, bodyfile-* METADATA _index
+| WHERE host.os.type == "linux"
+| WHERE event.dataset != "bodyfile" OR bodyfile.executable == true
+| EVAL cmd0 = MV_FIRST(SPLIT(COALESCE(process.command_line, ""), " "))
+| EVAL exe = CASE(
+    event.dataset == "bodyfile", file.path,
+    event.action IN ("sudo-command", "pkexec-command", "cron-command"), cmd0,
+    process.executable IS NOT NULL, process.executable,
+    cmd0)
+// relative commands (./tool) are made absolute with the logged working directory
+| EVAL exe = CASE(STARTS_WITH(exe, "./") AND process.working_directory IS NOT NULL,
+    CONCAT(process.working_directory, SUBSTRING(exe, 2)), exe)
+| EVAL e = TO_LOWER(COALESCE(exe, ""))
+| EVAL f_temp = STARTS_WITH(e, "/tmp/") OR STARTS_WITH(e, "/var/tmp/") OR STARTS_WITH(e, "/dev/shm/") OR STARTS_WITH(e, "/run/user/")
+    OR STARTS_WITH(e, "/var/run/") OR (STARTS_WITH(e, "/dev/") AND event.dataset == "bodyfile")
+| EVAL f_hidden = e LIKE "*/.*" AND NOT e LIKE "*/.cache/*" AND NOT e LIKE "*/.local/share/*" AND NOT e LIKE "*/.vscode*"
+| EVAL f_web = STARTS_WITH(e, "/var/www/") OR STARTS_WITH(e, "/srv/") OR STARTS_WITH(e, "/usr/share/nginx/")
+| EVAL f_home = STARTS_WITH(e, "/home/") OR STARTS_WITH(e, "/root/")
+| EVAL f_deleted = e LIKE "* (deleted)"
+| WHERE f_temp OR f_hidden OR f_web OR f_home OR f_deleted
+| EVAL executed = event.dataset != "bodyfile"
+| EVAL dir = REPLACE(REPLACE(exe, " [(]deleted[)]$", ""), "/[^/]*$", "")
+| STATS
+    executions = COUNT(*) WHERE executed,
+    executables_on_disk = COUNT(*) WHERE NOT executed,
+    programs = VALUES(exe),
+    users = VALUES(user.name),
+    newest_file = MAX(file.mtime),
+    first_run = MIN(@timestamp) WHERE executed,
+    last_run = MAX(@timestamp) WHERE executed,
+    temp = MV_MAX(VALUES(f_temp)),
+    hidden = MV_MAX(VALUES(f_hidden)),
+    web = MV_MAX(VALUES(f_web)),
+    deleted = MV_MAX(VALUES(f_deleted)),
+    artifacts = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, dir
+| EVAL score = CASE(executions > 0, 3, 0) + CASE(temp, 3, 0) + CASE(deleted, 3, 0) + CASE(web, 2, 0) + CASE(hidden, 1, 0)
+    + CASE(executables_on_disk > 0 AND executables_on_disk <= 5, 1, 0)
+| EVAL programs = MV_SLICE(programs, 0, 14)
+| KEEP
+    host.name,
+    score,
+    dir,
+    executions,
+    first_run,
+    last_run,
+    executables_on_disk,
+    newest_file,
+    programs,
+    users,
+    temp,
+    hidden,
+    web,
+    deleted,
+    artifacts,
+    indexes
+| SORT score DESC, last_run DESC
+| LIMIT 2000
