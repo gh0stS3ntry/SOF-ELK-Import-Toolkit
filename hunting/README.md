@@ -95,7 +95,11 @@ node hunting/tools/parse_queries.mjs /tmp/esql      # every query.esql under hun
 | [AWS web application (ALB and WAF)](checklists/aws-web-application.md) | applications behind an ALB/ELB and AWS WAF |
 | [AWS network (VPC Flow Logs)](checklists/aws-vpc-network.md) | VPCs, subnets and interfaces with flow logs |
 | [Baseline: all Linux hosts](checklists/linux-baseline-all-hosts.md) | every Linux host |
-| [Linux internet-facing server](checklists/linux-internet-facing-server.md) | Linux web, SSH, FTP and VPN servers reachable from the internet |
+| [Linux web server](checklists/linux-web-server.md) | Apache, nginx and lighttpd servers and their applications |
+| [Linux database server](checklists/linux-database-server.md) | MySQL/MariaDB, PostgreSQL, MongoDB, Redis and Elasticsearch servers |
+| [Linux backup server](checklists/linux-backup-server.md) | backup servers, repositories and snapshot hosts |
+| [Linux file server](checklists/linux-file-server.md) | Samba and NFS servers and shared data folders |
+| [Linux SSH jump host](checklists/linux-ssh-jump-host.md) | bastions, jump boxes, admin and automation servers |
 
 `checklists/IR_CHECKLIST_ROLES.xlsx` has the same content with one sheet per role and the tracking columns of the IR checklist (Tasked to, Status, Findings, Handover). Rebuild it after editing a checklist with `python3 hunting/tools/build_checklist_xlsx.py` (needs `openpyxl`).
 

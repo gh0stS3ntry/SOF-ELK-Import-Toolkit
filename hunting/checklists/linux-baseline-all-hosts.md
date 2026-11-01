@@ -1,6 +1,6 @@
 # Checklist: Baseline: all Linux hosts
 
-Every Linux host loaded with the Linux importers (`Linux/linux2sofelk.py` on a UAC collection or a collected root filesystem), before the role checklist. The order follows an intrusion: what evidence exists, who logged in, what ran, what was left behind to come back, and what was done to hide it. Set the `since` line in the queries that have one to the start of the incident window. The `IR ref` column points to the closest item of the IR checklist, which is written for Windows hosts, and is blank where nothing fits.
+Every Linux host loaded with the Linux importers (`Linux/linux2sofelk.py` on a UAC collection or a collected root filesystem), before the role checklists (web, database, backup and file servers, SSH jump hosts). The order follows an intrusion: what evidence exists, who logged in, what ran, what was left behind to come back, and what was done to hide it. Set the `since` line in the queries that have one to the start of the incident window. The `IR ref` column points to the closest item of the IR checklist, which is written for Windows hosts, and is blank where nothing fits.
 
 ## 1. Evidence and host profile
 

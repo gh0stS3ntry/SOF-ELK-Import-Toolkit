@@ -44,7 +44,11 @@ ORDER = [
     "aws-web-application.md",
     "aws-vpc-network.md",
     "linux-baseline-all-hosts.md",
-    "linux-internet-facing-server.md",
+    "linux-web-server.md",
+    "linux-database-server.md",
+    "linux-backup-server.md",
+    "linux-file-server.md",
+    "linux-ssh-jump-host.md",
 ]
 SHEET_NAMES = {
     "00-baseline-all-windows-hosts.md": "Baseline",
@@ -57,7 +61,11 @@ SHEET_NAMES = {
     "aws-web-application.md": "AWS web app",
     "aws-vpc-network.md": "AWS network",
     "linux-baseline-all-hosts.md": "Linux baseline",
-    "linux-internet-facing-server.md": "Linux internet-facing",
+    "linux-web-server.md": "Linux web",
+    "linux-database-server.md": "Linux database",
+    "linux-backup-server.md": "Linux backup",
+    "linux-file-server.md": "Linux file server",
+    "linux-ssh-jump-host.md": "Linux jump host",
 }
 HEADERS = ["#", "Check", "Tasked to", "Status", "Findings", "Handover From",
            "Handover to", "Handover Date", "Details", "Queries", "IR ref"]
