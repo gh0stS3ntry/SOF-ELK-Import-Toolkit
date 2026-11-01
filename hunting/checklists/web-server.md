@@ -1,6 +1,6 @@
 # Checklist: Web server
 
-IIS (including Exchange OWA/ECP and SharePoint), Tomcat, Apache/PHP and other internet-facing application servers. Run the [baseline](00-baseline-all-windows-hosts.md) first. On a web server the usual question is whether the application was exploited, whether a web shell was planted, and what the worker process ran afterwards.
+IIS (including SharePoint and the IIS side of Exchange; see also the [Exchange server](exchange-server.md) checklist), Tomcat, Apache/PHP and other internet-facing application servers. Run the [baseline](00-baseline-all-windows-hosts.md) first. On a web server the usual question is whether the application was exploited, whether a web shell was planted, and what the worker process ran afterwards.
 
 ## 1. Host profile
 

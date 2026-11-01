@@ -37,6 +37,7 @@ ORDER = [
     "00-baseline-all-windows-hosts.md",
     "end-user-workstation.md",
     "web-server.md",
+    "exchange-server.md",
     "database-server.md",
     "domain-controller.md",
     "file-server.md",
@@ -49,11 +50,15 @@ ORDER = [
     "linux-backup-server.md",
     "linux-file-server.md",
     "linux-ssh-jump-host.md",
+    "linux-mail-server.md",
+    "linux-container-host.md",
+    "linux-vpn-gateway.md",
 ]
 SHEET_NAMES = {
     "00-baseline-all-windows-hosts.md": "Baseline",
     "end-user-workstation.md": "Workstation",
     "web-server.md": "Web server",
+    "exchange-server.md": "Exchange server",
     "database-server.md": "Database server",
     "domain-controller.md": "Domain controller",
     "file-server.md": "File server",
@@ -66,6 +71,9 @@ SHEET_NAMES = {
     "linux-backup-server.md": "Linux backup",
     "linux-file-server.md": "Linux file server",
     "linux-ssh-jump-host.md": "Linux jump host",
+    "linux-mail-server.md": "Linux mail server",
+    "linux-container-host.md": "Linux container host",
+    "linux-vpn-gateway.md": "Linux VPN gateway",
 }
 HEADERS = ["#", "Check", "Tasked to", "Status", "Findings", "Handover From",
            "Handover to", "Handover Date", "Details", "Queries", "IR ref"]

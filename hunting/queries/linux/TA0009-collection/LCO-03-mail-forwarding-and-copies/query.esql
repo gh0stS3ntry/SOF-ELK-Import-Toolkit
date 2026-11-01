@@ -1,0 +1,41 @@
+// LCO-03 | Mail copied or redirected on the server: .forward, procmail and Sieve files, aliases, Postfix BCC and filter settings
+// Tactic: TA0009 Collection | ATT&CK: T1114.003, T1114.002, T1556
+// Indexes: bodyfile-*, logstash-*, auditd-* | Needs: bodyfile-* for the files; logstash-*, auditd-* for the commands that changed them
+FROM bodyfile-*, logstash-*, auditd-* METADATA _index
+| WHERE host.os.type == "linux"
+// EDIT: the start of the incident window; changes after it score higher
+| EVAL since = TO_DATETIME("2026-01-01T00:00:00Z")
+| EVAL p = TO_LOWER(COALESCE(file.path, ""))
+| EVAL n = TO_LOWER(COALESCE(file.name, ""))
+| EVAL text = TO_LOWER(COALESCE(process.command_line, ""))
+| EVAL is_user_rule = n IN (".forward", ".procmailrc", ".mailfilter", ".qmail", "dovecot.sieve", ".dovecot.sieve") OR n LIKE "*.sieve" OR n LIKE "*.svbin"
+| EVAL is_mta_cfg = p RLIKE "/etc/(postfix|exim4?|mail|dovecot|opendkim|amavis|spamassassin)/.*" OR p IN ("/etc/aliases", "/etc/aliases.db", "/etc/mail/aliases", "/etc/procmailrc")
+| EVAL is_file = event.dataset IN ("bodyfile", "auditd.log") AND COALESCE(file.type, "file") != "dir" AND (is_user_rule OR is_mta_cfg)
+| EVAL is_cmd = event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") AND text RLIKE ".*(postconf +-e|always_bcc|sender_bcc_maps|recipient_bcc_maps|content_filter|transport_maps|smtp_header_checks|header_checks|newaliases|postalias|postmap|[.]forward|sievec|doveadm +sieve|procmailrc|exim.*(system_filter|-bf)).*"
+| WHERE is_file OR is_cmd
+| EVAL changed = COALESCE(file.ctime, file.mtime, @timestamp)
+| EVAL f_bcc = text RLIKE ".*(always_bcc|sender_bcc_maps|recipient_bcc_maps).*" OR n LIKE "*bcc*"
+| EVAL f_filter = text RLIKE ".*(content_filter|transport_maps|header_checks).*"
+| EVAL f_recent = changed >= since
+| EVAL kind = CASE(is_cmd, "command", is_user_rule, "user forwarding or filter file", "mail server configuration")
+| EVAL score = CASE(is_user_rule, 2, 0) + CASE(f_bcc, 4, 0) + CASE(f_filter, 2, 0) + CASE(f_recent, 2, 0) + CASE(is_cmd, 1, 0)
+| WHERE score >= 2
+| KEEP
+    @timestamp,
+    host.name,
+    score,
+    kind,
+    f_recent,
+    changed,
+    file.path,
+    file.owner,
+    file.size,
+    file.mtime,
+    file.ctime,
+    user.name,
+    user.effective.name,
+    process.command_line,
+    event.dataset,
+    _index
+| SORT score DESC, changed DESC
+| LIMIT 2000

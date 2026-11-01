@@ -1,0 +1,69 @@
+// LCA-03 | Mail login attacks: Postfix SASL and Dovecot IMAP/POP3 failures and logins per client address
+// Tactic: TA0006 Credential Access | ATT&CK: T1110.001, T1110.003, T1078
+// Indexes: logstash-* | Needs: Postfix and Dovecot lines in logstash-* (mail.log/maillog or the journal)
+FROM logstash-* METADATA _index
+| WHERE host.os.type == "linux"
+| WHERE STARTS_WITH(process.name, "postfix") OR STARTS_WITH(process.name, "dovecot") OR process.name IN ("saslauthd", "imap-login", "pop3-login", "auth")
+| EVAL m = COALESCE(message, "")
+| EVAL ml = TO_LOWER(m)
+| EVAL f_sasl_fail = ml LIKE "*sasl * authentication failed*"
+| EVAL f_dc_fail = ml RLIKE ".*(-login: .*auth failed|pam_authenticate[(][)] failed|password mismatch|unknown user|authentication failure).*"
+| EVAL f_dc_ok = ml RLIKE ".*-login: login: user=.*"
+| EVAL f_sasl_ok = ml LIKE "*sasl_username=*"
+| WHERE f_sasl_fail OR f_dc_fail OR f_dc_ok OR f_sasl_ok
+| EVAL rip = REPLACE(m, ".*rip=([0-9a-fA-F.:]+).*", "$1")
+| EVAL pip = REPLACE(m, ".*[(][^,()]*,([0-9a-fA-F.:]+)[,)].*", "$1")
+| EVAL bip = REPLACE(m, ".*?\\[([0-9a-fA-F.:]+)\\].*", "$1")
+| EVAL client = CASE(rip != m, rip, pip != m, pip, bip != m, bip, null)
+| EVAL u1 = REPLACE(m, ".*user=<([^>]*)>.*", "$1")
+| EVAL u2 = REPLACE(m, ".*sasl_username=([^, ]+).*", "$1")
+| EVAL u3 = REPLACE(m, ".*[(]([^,()]+),[0-9a-fA-F.:]+[,)].*", "$1")
+| EVAL account = CASE(u1 != m, u1, u2 != m, u2, u3 != m, u3, null)
+| EVAL service = CASE(ml LIKE "*imap-login*", "imap", ml LIKE "*pop3-login*", "pop3", STARTS_WITH(process.name, "postfix") OR process.name == "saslauthd", "smtp-auth", "dovecot-auth")
+| EVAL fail = f_sasl_fail OR f_dc_fail
+| EVAL ok = (f_dc_ok OR f_sasl_ok) AND NOT fail
+| WHERE client IS NOT NULL
+| STATS
+    failures = COUNT(*) WHERE fail,
+    accounts_failed = COUNT_DISTINCT(account) WHERE fail,
+    sample_accounts = VALUES(account) WHERE fail,
+    successes = COUNT(*) WHERE ok,
+    accounts_ok = VALUES(account) WHERE ok,
+    first_failure = MIN(@timestamp) WHERE fail,
+    last_failure = MAX(@timestamp) WHERE fail,
+    first_success = MIN(@timestamp) WHERE ok,
+    last_success = MAX(@timestamp) WHERE ok,
+    services = VALUES(service),
+    datasets = VALUES(event.dataset),
+    indexes = VALUES(_index)
+  BY host.name, client
+| EVAL client_ip = TO_IP(client)
+| EVAL internal = CIDR_MATCH(client_ip, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10", "::1/128", "fe80::/10", "fc00::/7")
+| EVAL pattern = CASE(failures == 0, "logins only",
+    accounts_failed >= 10 AND failures <= accounts_failed * 3, "spraying (many accounts, few tries each)",
+    failures >= 20, "brute force (many tries)", "a few failures")
+| EVAL success_after_failures = successes > 0 AND failures > 0 AND last_success >= first_failure
+| EVAL score = CASE(success_after_failures, 4, 0) + CASE(pattern LIKE "spraying*", 2, 0) + CASE(pattern LIKE "brute*", 2, 0)
+    + CASE(NOT internal AND successes > 0, 1, 0)
+| EVAL sample_accounts = MV_SLICE(sample_accounts, 0, 19)
+| KEEP
+    host.name,
+    score,
+    client,
+    internal,
+    pattern,
+    success_after_failures,
+    failures,
+    accounts_failed,
+    sample_accounts,
+    successes,
+    accounts_ok,
+    first_failure,
+    last_failure,
+    first_success,
+    last_success,
+    services,
+    datasets,
+    indexes
+| SORT score DESC, failures DESC
+| LIMIT 2000

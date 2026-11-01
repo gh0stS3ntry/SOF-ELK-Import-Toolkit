@@ -10,7 +10,8 @@ A first cut for each kind of host: what to establish about the host, and which q
 |---|---|
 | [Baseline: all Windows hosts](00-baseline-all-windows-hosts.md) | every host |
 | [End-user workstation](end-user-workstation.md) | laptops, desktops, VDI, RDP/jump hosts used interactively |
-| [Web server](web-server.md) | IIS, Exchange front end, Tomcat/Apache/PHP, other internet-facing applications |
+| [Web server](web-server.md) | IIS, Tomcat/Apache/PHP, other internet-facing applications |
+| [Exchange server](exchange-server.md) | on-premises Exchange (Mailbox and Edge roles, OWA/ECP/EWS) |
 | [Database server](database-server.md) | SQL Server and other database hosts |
 | [Domain controller](domain-controller.md) | AD DS, plus DNS/ADCS/ADFS on tier-0 servers |
 | [File server](file-server.md) | file shares, DFS, backup targets, NAS front ends |
@@ -23,6 +24,9 @@ A first cut for each kind of host: what to establish about the host, and which q
 | [Linux backup server](linux-backup-server.md) | backup servers, repositories and snapshot hosts |
 | [Linux file server](linux-file-server.md) | Samba and NFS servers and shared data folders |
 | [Linux SSH jump host](linux-ssh-jump-host.md) | bastions, jump boxes, admin and automation servers |
+| [Linux mail server](linux-mail-server.md) | Postfix, Exim, Dovecot and webmail servers |
+| [Linux container host](linux-container-host.md) | Docker and Podman hosts, Kubernetes nodes |
+| [Linux VPN gateway](linux-vpn-gateway.md) | OpenVPN, WireGuard, IPsec and SSH remote-access gateways |
 
 **AWS.** The three AWS checklists work per account and per application rather than per host, and do not need the Windows baseline. Run the account checklist for every account in scope, then the web and network checklists where those logs exist. The IR checklist is written for hosts, so their `IR ref` column points to the closest item (for example 2.4.1/2.4.2 for brute force, 2.4.7 for outbound transfers, 2.4.21 for logging stopped) and is blank where nothing fits.
 

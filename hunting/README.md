@@ -62,9 +62,10 @@ The queries need Elasticsearch 9.x, because several use `INLINE STATS` and `STAT
 - **Optional families.** Many hosts have no `auditd-*` (Debian, Ubuntu and Kali do not install auditd), no `httpdlog-*` (no web server) and no `browsinghistory-*` (servers). A query that reads several families never depends on a field only those three have, unless its `Needs:` line names the family, so it still runs without them; ES|QL ignores an index pattern in `FROM` that matches nothing. The checker enforces this. The other families come with every UAC collection; if one is missing, the README's "If it errors" note says what to remove.
 - Without auditd, the only command lines are those sudo, pkexec and cron log, and the command line of every process that wrote to the journal (`_CMDLINE`). Commands an attacker ran in a plain shell are not logged anywhere the toolkit loads; shell history is not loaded (no timestamps) and is read by hand.
 - `linuxconfig-*` and `packages.inventory` are snapshots: `@timestamp` is the modification time of the source file (or the install time), not an event time. Several queries set an incident window with `// EDIT:` `since`, which makes changes after it score higher.
+- Mail logs (`mail.log`, `maillog`, or journal lines from `postfix/*` and `dovecot`) are loaded into `logstash-*` as plain messages, not parsed into fields. The mail queries (LCA-03, LEXF-04, LCO-03) take the client, account and queue ID out of `message` with `REPLACE`, so they follow Postfix's and Dovecot's standard log formats; Exim's own `mainlog` is not loaded.
 - `destination.port` and `source.port` are `integer` in `logstash-*` and `long` in `auditd-*`; queries that read both convert them with `TO_INTEGER()`.
 - Query IDs start with `L`: `LTRI` triage, `LIA` initial access, `LEX` execution, `LPE` persistence, `LPR` privilege escalation, `LCA` credential access, `LDI` discovery, `LLM` lateral movement, `LCO` collection, `LEXF` exfiltration, `LC2` command and control, `LIM` impact, `LDE` defense impairment.
-- The queries pass the static checker and Elastic's ES|QL grammar, and the command-line patterns were tried against the command lines of a real Kali UAC collection; they have not been run on a live cluster.
+- The queries pass the static checker and Elastic's ES|QL grammar, and the command-line patterns were tried against the command lines of a real Kali UAC collection and the mail-log parsing against sample Postfix and Dovecot lines; they have not been run on a live cluster.
 
 ## Checking the pack
 
@@ -87,7 +88,8 @@ node hunting/tools/parse_queries.mjs /tmp/esql      # every query.esql under hun
 |---|---|
 | [Baseline: all Windows hosts](checklists/00-baseline-all-windows-hosts.md) | every host, before the role checklist |
 | [End-user workstation](checklists/end-user-workstation.md) | laptops, desktops, VDI, jump hosts |
-| [Web server](checklists/web-server.md) | IIS, Exchange front end, other internet-facing applications |
+| [Web server](checklists/web-server.md) | IIS, Tomcat, other internet-facing applications |
+| [Exchange server](checklists/exchange-server.md) | on-premises Exchange (Mailbox and Edge roles, OWA/ECP/EWS) |
 | [Database server](checklists/database-server.md) | SQL Server and other database hosts |
 | [Domain controller](checklists/domain-controller.md) | AD DS, DNS, and other tier-0 servers |
 | [File server](checklists/file-server.md) | file shares, DFS, backup targets |
@@ -100,6 +102,9 @@ node hunting/tools/parse_queries.mjs /tmp/esql      # every query.esql under hun
 | [Linux backup server](checklists/linux-backup-server.md) | backup servers, repositories and snapshot hosts |
 | [Linux file server](checklists/linux-file-server.md) | Samba and NFS servers and shared data folders |
 | [Linux SSH jump host](checklists/linux-ssh-jump-host.md) | bastions, jump boxes, admin and automation servers |
+| [Linux mail server](checklists/linux-mail-server.md) | Postfix, Exim, Dovecot and webmail servers |
+| [Linux container host](checklists/linux-container-host.md) | Docker and Podman hosts, Kubernetes nodes |
+| [Linux VPN gateway](checklists/linux-vpn-gateway.md) | OpenVPN, WireGuard, IPsec and SSH remote-access gateways |
 
 `checklists/IR_CHECKLIST_ROLES.xlsx` has the same content with one sheet per role and the tracking columns of the IR checklist (Tasked to, Status, Findings, Handover). Rebuild it after editing a checklist with `python3 hunting/tools/build_checklist_xlsx.py` (needs `openpyxl`).
 
@@ -227,6 +232,7 @@ The Windows queries come first, then [AWS](#aws) and [Linux](#linux).
 | [CO-04](queries/windows/TA0009-collection/CO-04-shellbags-network-removable-and-other-profiles/) | Folders browsed on network shares, removable drives, other profiles and sensitive paths | `shellbag-*` | end-user workstation, RDP/jump host, file server (for admins browsing locally) |
 | [CO-05](queries/windows/TA0009-collection/CO-05-jumplist-files-opened/) | Files and folders opened, per application (jump lists) | `jumplist-*` | end-user workstation, RDP/jump host |
 | [CO-06](queries/windows/TA0009-collection/CO-06-office-mru-and-recent-docs/) | Recently opened documents (OfficeMRU and RecentDocs) | `registry-*` | end-user workstation, RDP/jump host |
+| [CO-07](queries/windows/TA0009-collection/CO-07-exchange-mailbox-exports-forwarding-and-permissions/) | Exchange: mailbox exports and searches, forwarding and inbox rules, transport rules, mailbox permissions and audit changes | `evtxlogs-*` | Exchange server |
 
 ### TA0010 Exfiltration
 
@@ -404,6 +410,7 @@ The Linux queries, by tactic. Run LTRI-01 first: it shows which Linux index fami
 | [LEX-02](queries/linux/TA0002-execution/LEX-02-programs-in-temp-hidden-and-user-writable-locations/) | Programs run from, or executables stored in, temporary, hidden and user-writable locations | `logstash-*`, `auditd-*`, `linuxconfig-*`, `bodyfile-*` | every Linux host |
 | [LEX-03](queries/linux/TA0002-execution/LEX-03-rare-programs-across-hosts/) | Rare programs: executables seen in the journal and audit log, stacked across hosts | `logstash-*`, `auditd-*` | every Linux host; best across several hosts |
 | [LEX-04](queries/linux/TA0002-execution/LEX-04-suspicious-command-lines/) | Download-and-run, encoded and interpreter one-liner command lines (logs, audit, cron, units, shell startup files) | `logstash-*`, `auditd-*`, `linuxconfig-*`, `packages-*` | every Linux host |
+| [LEX-05](queries/linux/TA0002-execution/LEX-05-container-abuse-and-escapes/) | Container abuse: privileged and host-mounted containers, exposed Docker APIs, exec into containers and escape commands | `logstash-*`, `auditd-*`, `linuxconfig-*`, `bodyfile-*` | container hosts (Docker, Podman, containerd, Kubernetes nodes) |
 
 #### Linux: TA0003 Persistence
 
@@ -434,6 +441,7 @@ The Linux queries, by tactic. Run LTRI-01 first: it shows which Linux index fami
 |---|---|---|---|
 | [LCA-01](queries/linux/TA0006-credential-access/LCA-01-brute-force-and-password-spraying/) | Brute force and password spraying per source address, and whether a login then succeeded | `logstash-*`, `wtmp-*`, `auditd-*` | every Linux host reachable over the network |
 | [LCA-02](queries/linux/TA0006-credential-access/LCA-02-credential-files-and-cracking-tools/) | Credential files read or copied, credential theft and cracking tools: commands, files on disk and installed packages | `logstash-*`, `auditd-*`, `bodyfile-*`, `packages-*` | every Linux host |
+| [LCA-03](queries/linux/TA0006-credential-access/LCA-03-mail-login-attacks/) | Mail login attacks: Postfix SASL and Dovecot IMAP/POP3 failures and logins per client address | `logstash-*` | Linux mail servers |
 
 #### Linux: TA0007 Discovery
 
@@ -456,6 +464,7 @@ The Linux queries, by tactic. Run LTRI-01 first: it shows which Linux index fami
 |---|---|---|---|
 | [LCO-01](queries/linux/TA0009-collection/LCO-01-archives-dumps-and-staging/) | Archives and database dumps in staging folders, and the archive and dump commands that made them | `bodyfile-*`, `logstash-*`, `auditd-*`, `linuxconfig-*` | every Linux host; file and database servers first |
 | [LCO-02](queries/linux/TA0009-collection/LCO-02-file-creation-bursts/) | Bursts of files created in one folder within ten minutes (mass copy, unpacking, collection) | `bodyfile-*`, `auditd-*` | file servers and hosts holding sensitive data |
+| [LCO-03](queries/linux/TA0009-collection/LCO-03-mail-forwarding-and-copies/) | Mail copied or redirected on the server: .forward, procmail and Sieve files, aliases, Postfix BCC and filter settings | `bodyfile-*`, `logstash-*`, `auditd-*` | Linux mail servers; any host with user mailboxes |
 
 #### Linux: TA0010 Exfiltration
 
@@ -464,6 +473,7 @@ The Linux queries, by tactic. Run LTRI-01 first: it shows which Linux index fami
 | [LEXF-01](queries/linux/TA0010-exfiltration/LEXF-01-exfiltration-tools-and-commands/) | Exfiltration commands and tools: uploads with rclone, curl, scp, cloud CLIs, netcat; tools installed and their config files | `logstash-*`, `auditd-*`, `linuxconfig-*`, `packages-*`, `bodyfile-*` | every Linux host |
 | [LEXF-02](queries/linux/TA0010-exfiltration/LEXF-02-file-sharing-and-paste-sites/) | File-sharing, paste, cloud-storage and request-capture sites in browser history and command lines | `browsinghistory-*`, `logstash-*`, `auditd-*`, `linuxconfig-*` | workstations and jump hosts; servers for command-line use |
 | [LEXF-03](queries/linux/TA0010-exfiltration/LEXF-03-large-transfers-served-by-web-and-ftp/) | Clients that pulled the most data from the host's web and FTP servers | `httpdlog-*`, `logstash-*` | Linux web and FTP servers |
+| [LEXF-04](queries/linux/TA0010-exfiltration/LEXF-04-mail-sent-per-user-and-client/) | Mail sent through Postfix per authenticated user and client: messages, size, recipient domains and relay rejections | `logstash-*` | Linux mail servers |
 
 #### Linux: TA0011 Command and Control
 

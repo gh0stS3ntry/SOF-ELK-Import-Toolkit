@@ -1,0 +1,55 @@
+// CO-07 | Exchange: mailbox exports and searches, forwarding and inbox rules, transport rules, mailbox permissions and audit changes
+// Tactic: TA0009 Collection | ATT&CK: T1114.002, T1114.003, T1098.002, T1505.003, T1562
+// Indexes: evtxlogs-* | Needs: MSExchange Management log, PowerShell Operational 4104 or Security 4688 with command lines, from the Exchange servers
+FROM evtxlogs-* METADATA _index
+| EVAL ch = TO_STRING(winlog.channel)
+| EVAL eid = TO_STRING(winlog.event_id)
+| WHERE ch == "MSExchange Management"
+     OR (ch == "Microsoft-Windows-PowerShell/Operational" AND eid == "4104")
+     OR (ch == "Windows PowerShell" AND eid IN ("400", "800"))
+     OR (ch == "Security" AND eid == "4688")
+| EVAL raw = CASE(
+    eid == "4104", TO_STRING(winlog.payload.event_data.ScriptBlockText),
+    eid == "4688", TO_STRING(kape.executable_info),
+    MV_CONCAT(winlog.payload.event_data.string, " | "))
+| EVAL t = TO_LOWER(COALESCE(raw, ""))
+| EVAL f_export = t RLIKE ".*(new-mailboxexportrequest|new-compliancesearch|new-compliancesearchaction|new-mailboxsearch|search-mailbox .*-targetmailbox).*"
+| EVAL f_cleanup = t RLIKE ".*(remove-mailboxexportrequest|remove-compliancesearch).*"
+| EVAL f_forward = t RLIKE ".*set-mailbox .*(forwardingsmtpaddress|forwardingaddress|delivertomailboxandforward).*"
+| EVAL f_inboxrule = t RLIKE ".*(new|set|enable)-inboxrule .*(forwardto|forwardasattachmentto|redirectto|deletemessage|movetofolder|markasread|softdeletemessage).*"
+| EVAL f_transport = t RLIKE ".*((new|set)-transportrule|(new|set)-journalrule|set-transportconfig .*journal|(new|set)-sendconnector|(new|set)-transportagent|install-transportagent|enable-transportagent).*"
+| EVAL f_perm = t RLIKE ".*(add-mailboxpermission|add-recipientpermission|add-mailboxfolderpermission|set-mailboxfolderpermission|add-adpermission|new-managementroleassignment|add-rolegroupmember|new-rolegroup|new-managementrole).*"
+| EVAL f_impersonation = t RLIKE ".*(applicationimpersonation|mailbox import export|fullaccess).*"
+| EVAL f_vdir = t RLIKE ".*(set-(oab|ecp|owa|webservices|activesync|autodiscover|mapi|powershell)virtualdirectory|new-exchangecertificate|import-exchangecertificate).*"
+| EVAL f_audit = t RLIKE ".*(set-adminauditlogconfig|set-mailboxauditbypassassociation|disable-mailboxaudit|set-organizationconfig .*auditdisabled|set-mailbox .*auditenabled).*"
+| EVAL f_discovery = t RLIKE ".*(get-mailbox|get-recipient|get-exchangeserver|get-managementroleassignment|get-globaladdresslist|get-addresslist|get-mailboxexportrequest|get-transportrule|get-inboxrule).*"
+| EVAL score = CASE(f_export, 4, 0) + CASE(f_cleanup, 3, 0) + CASE(f_forward, 4, 0) + CASE(f_inboxrule, 3, 0)
+    + CASE(f_transport, 4, 0) + CASE(f_perm, 3, 0) + CASE(f_impersonation, 2, 0) + CASE(f_vdir, 3, 0)
+    + CASE(f_audit, 4, 0) + CASE(f_discovery, 1, 0)
+| WHERE score > 0
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_export, "mailbox export or content search; ", ""),
+    CASE(f_cleanup, "export request or search removed (cleanup); ", ""),
+    CASE(f_forward, "mailbox forwarding set; ", ""),
+    CASE(f_inboxrule, "inbox rule that forwards, redirects, moves or deletes; ", ""),
+    CASE(f_transport, "transport rule, journal rule, send connector or transport agent; ", ""),
+    CASE(f_perm, "mailbox or role permission granted; ", ""),
+    CASE(f_impersonation, "impersonation, import-export role or full access; ", ""),
+    CASE(f_vdir, "virtual directory or certificate change; ", ""),
+    CASE(f_audit, "audit logging changed; ", ""),
+    CASE(f_discovery, "mailbox or configuration enumeration; ", "")
+  ), "; $", "")
+| EVAL source = CASE(ch == "MSExchange Management", "Exchange cmdlet log", eid == "4104", "PowerShell script block", eid == "4688", "process command line", "Windows PowerShell pipeline")
+| EVAL detail = SUBSTRING(COALESCE(raw, ""), 1, 2000)
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    source,
+    eid,
+    score,
+    reasons,
+    winlog.payload.event_data.SubjectUserName,
+    detail
+| SORT score DESC, @timestamp ASC
+| LIMIT 5000

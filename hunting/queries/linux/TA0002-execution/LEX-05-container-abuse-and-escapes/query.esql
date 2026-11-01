@@ -1,0 +1,54 @@
+// LEX-05 | Container abuse: privileged and host-mounted containers, exposed Docker APIs, exec into containers and escape commands
+// Tactic: TA0002 Execution | ATT&CK: T1609, T1610, T1611, T1613
+// Indexes: logstash-*, auditd-*, linuxconfig-*, bodyfile-* | Needs: commands in logstash-*, auditd-* or linuxconfig-*; dockerd lines in logstash-*; bodyfile-* for Docker and Kubernetes config files
+FROM logstash-*, auditd-*, linuxconfig-*, bodyfile-* METADATA _index
+| WHERE host.os.type == "linux"
+// EDIT: the start of the incident window; changes after it score higher
+| EVAL since = TO_DATETIME("2026-01-01T00:00:00Z")
+| EVAL text = TO_LOWER(COALESCE(process.command_line, linuxconfig.line, ""))
+| EVAL ml = TO_LOWER(COALESCE(message, ""))
+| EVAL p = TO_LOWER(COALESCE(file.path, ""))
+| EVAL is_cmd = (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") OR (STARTS_WITH(event.dataset, "linux.") AND COALESCE(linuxconfig.init.kind, "") != "init.d"))
+    AND text RLIKE ".*(docker|podman|nerdctl|ctr|crictl|kubectl|nsenter|runc|unshare).*"
+| EVAL f_priv = is_cmd AND text RLIKE ".*(--privileged|--cap-add[ =]*(all|sys_admin|sys_ptrace|sys_module)|--pid[ =]*host|--net(work)?[ =]*host|--ipc[ =]*host|--userns[ =]*host|--security-opt[ =]*(apparmor|seccomp)[=:]unconfined).*"
+| EVAL f_hostmount = is_cmd AND text RLIKE ".*(-v|--volume|--mount)[ =]*(type=bind,)?(source=|src=)?/(:|,|(etc|root)(/[^ :,]*)?[:,]|(proc|dev|boot|home|var/lib/kubelet|var/log)[:,]|(var/)?run/docker[.]sock).*"
+| EVAL f_escape = is_cmd AND text RLIKE ".*(nsenter +.*(-t|--target)[ =]*1 |chroot +/host|/proc/1/root|release_agent|notify_on_release|core_pattern|cdk +(run|eva)|deepce|amicontained).*"
+| EVAL f_exec = is_cmd AND text RLIKE ".*((docker|podman|nerdctl) +exec|kubectl +(exec|cp|debug|attach)|crictl +exec|ctr +.*task +exec).*"
+| EVAL f_k8s_priv = is_cmd AND text RLIKE ".*kubectl +.*(create +(clusterrolebinding|rolebinding|token|serviceaccount)|auth +can-i|get +secrets?|-n +kube-system).*"
+| EVAL f_remote_api = is_cmd AND text RLIKE ".*(-h|--host)[ =]*tcp://.*|.*docker_host=tcp://.*"
+| EVAL f_api_listen = STARTS_WITH(COALESCE(process.name, ""), "dockerd") AND ml RLIKE ".*api listen on .*:(2375|2376|[0-9]+).*" AND NOT ml LIKE "*/var/run/docker.sock*" AND NOT ml LIKE "*/run/docker.sock*"
+| EVAL f_cfg = event.dataset IN ("bodyfile", "auditd.log") AND COALESCE(file.type, "file") != "dir"
+    AND (p IN ("/etc/docker/daemon.json", "/root/.docker/config.json", "/etc/containerd/config.toml", "/etc/kubernetes/admin.conf", "/root/.kube/config")
+         OR p LIKE "/etc/systemd/system/docker.service.d/*" OR p LIKE "/etc/kubernetes/manifests/*" OR p LIKE "/home/*/.kube/config" OR p LIKE "/home/*/.docker/config.json")
+    AND COALESCE(file.ctime, file.mtime) >= since
+| WHERE f_priv OR f_hostmount OR f_escape OR f_exec OR f_k8s_priv OR f_remote_api OR f_api_listen OR f_cfg
+| EVAL score = CASE(f_escape, 5, 0) + CASE(f_priv, 3, 0) + CASE(f_hostmount, 3, 0) + CASE(f_remote_api, 3, 0) + CASE(f_api_listen, 3, 0)
+    + CASE(f_k8s_priv, 2, 0) + CASE(f_exec, 1, 0) + CASE(f_cfg, 2, 0)
+| EVAL reasons = REPLACE(CONCAT(
+    CASE(f_escape, "escape technique; ", ""),
+    CASE(f_priv, "privileged or host-namespace container; ", ""),
+    CASE(f_hostmount, "host folder or Docker socket mounted; ", ""),
+    CASE(f_remote_api, "remote Docker API used; ", ""),
+    CASE(f_api_listen, "dockerd listening on TCP; ", ""),
+    CASE(f_k8s_priv, "Kubernetes RBAC, token or secrets command; ", ""),
+    CASE(f_exec, "exec into a container; ", ""),
+    CASE(f_cfg, "Docker or Kubernetes config changed after since; ", "")
+  ), "; $", "")
+| EVAL artifact = CASE(STARTS_WITH(event.dataset, "linux."), CONCAT(event.dataset, " (planted: file mtime)"), COALESCE(event.action, event.dataset))
+| KEEP
+    @timestamp,
+    host.name,
+    score,
+    reasons,
+    artifact,
+    user.name,
+    user.effective.name,
+    process.command_line,
+    linuxconfig.line,
+    message,
+    file.path,
+    file.mtime,
+    file.ctime,
+    _index
+| SORT score DESC, @timestamp DESC
+| LIMIT 2000
