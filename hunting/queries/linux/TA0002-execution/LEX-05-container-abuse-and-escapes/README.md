@@ -6,7 +6,7 @@
 | ATT&CK | T1609 Container Administration Command, T1610 Deploy Container, T1611 Escape to Host, T1613 Container and Resource Discovery |
 | Indexes | `logstash-*`, `auditd-*`, `linuxconfig-*`, `bodyfile-*` |
 | Needs | commands in logstash-*, auditd-* or linuxconfig-*; dockerd lines in logstash-*; bodyfile-* for Docker and Kubernetes config files |
-| Applies to | container hosts (Docker, Podman, containerd, Kubernetes nodes) |
+| Applies to | every Linux host (web, database and other servers often run containers); container hosts and Kubernetes nodes first |
 
 **What it finds.** Container runtimes used to run code with the host's privileges, or to reach other containers: `docker`/`podman`/`nerdctl` runs with `--privileged`, added capabilities, host PID, network or user namespaces, or with `/`, `/etc`, `/root`, `/proc` or the Docker socket mounted; `nsenter -t 1`, `chroot /host`, cgroup `release_agent` and `core_pattern` tricks and escape tools (`cdk`, `deepce`); `exec` into containers and pods; `kubectl` commands that create bindings or tokens or read secrets; the Docker API used over TCP (`-H tcp://`, `DOCKER_HOST`) and `dockerd` listening on a TCP port; and Docker, containerd and Kubernetes configuration files changed after `since`. Commands come from sudo, pkexec, cron and audit records and from cron entries, units and startup files.
 

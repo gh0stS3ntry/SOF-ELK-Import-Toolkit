@@ -410,7 +410,7 @@ The Linux queries, by tactic. Run LTRI-01 first: it shows which Linux index fami
 | [LEX-02](queries/linux/TA0002-execution/LEX-02-programs-in-temp-hidden-and-user-writable-locations/) | Programs run from, or executables stored in, temporary, hidden and user-writable locations | `logstash-*`, `auditd-*`, `linuxconfig-*`, `bodyfile-*` | every Linux host |
 | [LEX-03](queries/linux/TA0002-execution/LEX-03-rare-programs-across-hosts/) | Rare programs: executables seen in the journal and audit log, stacked across hosts | `logstash-*`, `auditd-*` | every Linux host; best across several hosts |
 | [LEX-04](queries/linux/TA0002-execution/LEX-04-suspicious-command-lines/) | Download-and-run, encoded and interpreter one-liner command lines (logs, audit, cron, units, shell startup files) | `logstash-*`, `auditd-*`, `linuxconfig-*`, `packages-*` | every Linux host |
-| [LEX-05](queries/linux/TA0002-execution/LEX-05-container-abuse-and-escapes/) | Container abuse: privileged and host-mounted containers, exposed Docker APIs, exec into containers and escape commands | `logstash-*`, `auditd-*`, `linuxconfig-*`, `bodyfile-*` | container hosts (Docker, Podman, containerd, Kubernetes nodes) |
+| [LEX-05](queries/linux/TA0002-execution/LEX-05-container-abuse-and-escapes/) | Container abuse: privileged and host-mounted containers, exposed Docker APIs, exec into containers and escape commands | `logstash-*`, `auditd-*`, `linuxconfig-*`, `bodyfile-*` | every Linux host (web, database and other servers often run containers); container hosts and Kubernetes nodes first |
 
 #### Linux: TA0003 Persistence
 

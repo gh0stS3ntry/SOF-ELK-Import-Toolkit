@@ -1,6 +1,6 @@
 # Checklist: Linux container host
 
-Docker and Podman hosts and Kubernetes nodes (containerd, CRI-O). Run the [Linux baseline](linux-baseline-all-hosts.md) first. A container host runs many workloads on one kernel, so the questions are whether a container or the container API was used to reach the host, what ran on the host afterwards, and whether the cluster's credentials were taken. The toolkit loads the host, not the containers: their file systems and logs are only seen where they are on the host's disk. The `IR ref` column is approximate, because the IR checklist is written for Windows hosts.
+Hosts whose main job is running containers: Docker and Podman hosts and Kubernetes nodes (containerd, CRI-O). Run the [Linux baseline](linux-baseline-all-hosts.md) first; its row 3.7 already checks every Linux host for container abuse, and this checklist goes deeper. A container host runs many workloads on one kernel, so the questions are whether a container or the container API was used to reach the host, what ran on the host afterwards, and whether the cluster's credentials were taken. The toolkit loads the host, not the containers: their file systems and logs are only seen where they are on the host's disk. The `IR ref` column is approximate, because the IR checklist is written for Windows hosts.
 
 ## 1. Host profile
 
