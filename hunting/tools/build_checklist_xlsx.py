@@ -51,7 +51,6 @@ ORDER = [
     "linux-file-server.md",
     "linux-ssh-jump-host.md",
     "linux-mail-server.md",
-    "linux-container-host.md",
     "linux-vpn-gateway.md",
 ]
 SHEET_NAMES = {
@@ -72,7 +71,6 @@ SHEET_NAMES = {
     "linux-file-server.md": "Linux file server",
     "linux-ssh-jump-host.md": "Linux jump host",
     "linux-mail-server.md": "Linux mail server",
-    "linux-container-host.md": "Linux container host",
     "linux-vpn-gateway.md": "Linux VPN gateway",
 }
 HEADERS = ["#", "Check", "Tasked to", "Status", "Findings", "Handover From",

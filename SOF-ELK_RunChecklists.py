@@ -66,10 +66,10 @@ WINDOWS_BASELINE = "00-baseline-all-windows-hosts.md"
 LINUX_BASELINE = "linux-baseline-all-hosts.md"
 AWS_CHECKLISTS = ("aws-account-control-plane.md", "aws-web-application.md", "aws-vpc-network.md")
 
-# Role -> (platform, checklists run after the platform baseline). The pack's Linux SSH jump
-# host and container host checklists are not offered: every query they name is already in
-# the Linux baseline (row 3.7 checks every Linux host for container abuse), so those
-# hosts take the baseline plus whichever of these roles fits.
+# Role -> (platform, checklists run after the platform baseline). Container hosts have no
+# role: the Linux baseline's section 7 covers them on every Linux host. The pack's SSH jump
+# host checklist is not offered either, because every query it names is already in the
+# Linux baseline; such hosts take the baseline plus whichever of these roles fits.
 ROLES = {
     "windows-end-user": ("windows", ("end-user-workstation.md",)),
     "windows-web-server": ("windows", ("web-server.md",)),

@@ -103,7 +103,6 @@ node hunting/tools/parse_queries.mjs /tmp/esql      # every query.esql under hun
 | [Linux file server](checklists/linux-file-server.md) | Samba and NFS servers and shared data folders |
 | [Linux SSH jump host](checklists/linux-ssh-jump-host.md) | bastions, jump boxes, admin and automation servers |
 | [Linux mail server](checklists/linux-mail-server.md) | Postfix, Exim, Dovecot and webmail servers |
-| [Linux container host](checklists/linux-container-host.md) | Docker and Podman hosts, Kubernetes nodes |
 | [Linux VPN gateway](checklists/linux-vpn-gateway.md) | OpenVPN, WireGuard, IPsec and SSH remote-access gateways |
 
 `checklists/IR_CHECKLIST_ROLES.xlsx` has the same content with one sheet per role and the tracking columns of the IR checklist (Tasked to, Status, Findings, Handover). Rebuild it after editing a checklist with `python3 hunting/tools/build_checklist_xlsx.py` (needs `openpyxl`).

@@ -311,9 +311,11 @@ class UnitTest(unittest.TestCase):
         self.assertEqual(len(r.ROLES), 12)
 
     def test_container_and_jump_host_checks_are_in_the_linux_baseline(self):
-        baseline = set(r.build_plan([r.LINUX_BASELINE]))
-        for name in ("linux-container-host.md", "linux-ssh-jump-host.md"):
-            self.assertLessEqual(set(r.build_plan([name])), baseline, name)
+        baseline = r.build_plan([r.LINUX_BASELINE])
+        self.assertLessEqual(set(r.build_plan(["linux-ssh-jump-host.md"])), set(baseline))
+        self.assertFalse((r.CHECKLISTS / "linux-container-host.md").exists())
+        self.assertTrue(any(ref.startswith("Baseline: all Linux hosts 7.")
+                            for ref in baseline["LEX-05"].refs))
 
     def test_build_query(self):
         query = r.load_query(r.QUERIES / "windows" / "00-triage" / "TRI-05-installed-software")

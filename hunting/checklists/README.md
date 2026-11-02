@@ -25,7 +25,6 @@ A first cut for each kind of host: what to establish about the host, and which q
 | [Linux file server](linux-file-server.md) | Samba and NFS servers and shared data folders |
 | [Linux SSH jump host](linux-ssh-jump-host.md) | bastions, jump boxes, admin and automation servers |
 | [Linux mail server](linux-mail-server.md) | Postfix, Exim, Dovecot and webmail servers |
-| [Linux container host](linux-container-host.md) | Docker and Podman hosts, Kubernetes nodes |
 | [Linux VPN gateway](linux-vpn-gateway.md) | OpenVPN, WireGuard, IPsec and SSH remote-access gateways |
 
 **AWS.** The three AWS checklists work per account and per application rather than per host, and do not need the Windows baseline. Run the account checklist for every account in scope, then the web and network checklists where those logs exist. The IR checklist is written for hosts, so their `IR ref` column points to the closest item (for example 2.4.1/2.4.2 for brute force, 2.4.7 for outbound transfers, 2.4.21 for logging stopped) and is blank where nothing fits.
