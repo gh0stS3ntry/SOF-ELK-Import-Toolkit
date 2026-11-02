@@ -623,8 +623,8 @@ The two arguments are the case name (as given to the importers with `--case`; up
 | 10 | `linux-backup-server` | Linux baseline + Linux backup server |
 | 11 | `linux-mail-server` | Linux baseline + Linux mail server |
 | 12 | `linux-vpn-gateway` | Linux baseline + Linux VPN gateway |
-| 13 | `linux-ssh-jump-host` | Linux baseline + Linux SSH jump host (extra checklist in the pack) |
-| 14 | `linux-container-host` | Linux baseline + Linux container host (extra checklist in the pack) |
+
+Container hosts and SSH jump hosts have no role of their own: every query their checklists in the pack name is already in the Linux baseline (its row 3.7 checks every Linux host for container abuse), so the baseline covers them.
 
 4. Runs each query the chosen checklists name once for the whole case, in checklist order, and routes each result row to the host it came from (its `_index`, `source_indices` or `indexes` column, or `host.name`). The query's `FROM` line is rewritten to the case's indexes of every host, so the rarity columns (`host_count` and similar) compare the hosts of the case; the case itself is applied as a Query DSL filter. A row stacked across several hosts goes to each of them. A query that finds no index of its families for a host is recorded as `no-data` rather than run.
 5. Writes the results:

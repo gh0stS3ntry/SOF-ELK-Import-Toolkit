@@ -66,9 +66,10 @@ WINDOWS_BASELINE = "00-baseline-all-windows-hosts.md"
 LINUX_BASELINE = "linux-baseline-all-hosts.md"
 AWS_CHECKLISTS = ("aws-account-control-plane.md", "aws-web-application.md", "aws-vpc-network.md")
 
-# Role -> (platform, checklists run after the platform baseline). The first twelve are the
-# roles offered by number; the last two are extra Linux checklists in the pack that can be
-# picked by name or number as well.
+# Role -> (platform, checklists run after the platform baseline). The pack's Linux SSH jump
+# host and container host checklists are not offered: every query they name is already in
+# the Linux baseline (row 3.7 checks every Linux host for container abuse), so those
+# hosts take the baseline plus whichever of these roles fits.
 ROLES = {
     "windows-end-user": ("windows", ("end-user-workstation.md",)),
     "windows-web-server": ("windows", ("web-server.md",)),
@@ -82,8 +83,6 @@ ROLES = {
     "linux-backup-server": ("linux", ("linux-backup-server.md",)),
     "linux-mail-server": ("linux", ("linux-mail-server.md",)),
     "linux-vpn-gateway": ("linux", ("linux-vpn-gateway.md",)),
-    "linux-ssh-jump-host": ("linux", ("linux-ssh-jump-host.md",)),
-    "linux-container-host": ("linux", ("linux-container-host.md",)),
 }
 ROLE_NAMES = list(ROLES)
 BASELINES = {"windows": WINDOWS_BASELINE, "linux": LINUX_BASELINE}
@@ -435,8 +434,7 @@ def print_role_menu(out=None):
     print("\nHost roles (several roles for one host: separate them with commas, e.g. 6,5;"
           " 's' skips the host):", file=out)
     for n, role in enumerate(ROLE_NAMES, 1):
-        extra = "   (extra Linux checklist in the pack)" if n > 12 else ""
-        print(f"  {n:>2}. {role}{extra}", file=out)
+        print(f"  {n:>2}. {role}", file=out)
 
 
 def ask_roles(target, input_fn=input):

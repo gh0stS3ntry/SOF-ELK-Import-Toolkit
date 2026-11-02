@@ -297,7 +297,7 @@ class UnitTest(unittest.TestCase):
         self.assertEqual(r.parse_role_answer(" 6, 5 "), ["windows-domain-controller", "windows-file-server"])
         self.assertEqual(r.parse_role_answer("linux-web-server+8"), ["linux-web-server", "linux-database-server"])
         self.assertEqual(r.parse_role_answer("skip"), [])
-        for bad in ("0", "15", "web", "", "1,7"):
+        for bad in ("0", "13", "linux-container-host", "web", "", "1,7"):
             with self.assertRaises(ValueError, msg=bad):
                 r.parse_role_answer(bad)
 
@@ -308,6 +308,12 @@ class UnitTest(unittest.TestCase):
             self.assertEqual(files[0], r.BASELINES[r.ROLES[role][0]])
             self.assertTrue(r.build_plan(files), role)
         self.assertEqual(len(r.build_plan(r.checklists_for(r.Target("aws", "AWS")))), 31)
+        self.assertEqual(len(r.ROLES), 12)
+
+    def test_container_and_jump_host_checks_are_in_the_linux_baseline(self):
+        baseline = set(r.build_plan([r.LINUX_BASELINE]))
+        for name in ("linux-container-host.md", "linux-ssh-jump-host.md"):
+            self.assertLessEqual(set(r.build_plan([name])), baseline, name)
 
     def test_build_query(self):
         query = r.load_query(r.QUERIES / "windows" / "00-triage" / "TRI-05-installed-software")
