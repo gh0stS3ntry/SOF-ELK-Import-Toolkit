@@ -1,6 +1,6 @@
 # ES|QL hunting query pack
 
-A first-cut set of ES|QL queries for incident response on SOF-ELK, for data loaded with this toolkit. The queries are grouped by platform and then by MITRE ATT&CK tactic, each in its own folder with a `query.esql` and a short `README.md` (what it finds, what it needs, how to read the output). The role checklists in [`checklists/`](checklists/) say which queries to run for which kind of host.
+A first-cut set of ES|QL queries for incident response on SOF-ELK, for data loaded with this toolkit. The queries are grouped by platform and then by MITRE ATT&CK tactic, each in its own folder with a `query.esql` and a short `README.md` (what it finds, what it needs, how to read the output). The role checklists in [`checklists/`](checklists/) say which queries to run for which kind of host. To run them all for a case in one go, with one CSV per query and host and a super timeline, use [`SOF-ELK_RunChecklists.py`](../SOF-ELK_RunChecklists.py) (see the main README, "Running the hunting checklists for a case").
 
 | Folder | Evidence | Loaded with |
 |---|---|---|

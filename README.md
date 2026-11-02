@@ -9,6 +9,7 @@ sof_elk_all_importers/
 ├── SOF-ELK_ImportWrapper.py
 ├── SOF-ELK_CreateDataViews.py
 ├── SOF-ELK_DeleteIndexes.py
+├── SOF-ELK_RunChecklists.py
 ├── SOF-ELK_ConfigureRemoteIngest.sh
 ├── Install-ForensicELK.ps1
 ├── README.md
@@ -593,6 +594,76 @@ python3 SOF-ELK_DeleteIndexes.py --hostname RD01 --prefix amcache --prefix files
 | `--max-retries`, `--retry-backoff`, `--timeout`, `--log-file` | Retry and logging options, as for the importers. |
 
 The exit status is `0` on success or when there is nothing to delete, `1` when the prompt is declined or a delete fails, and `2` when Elasticsearch is unreachable. Tests: `python3 tests/test_delete_indexes.py -v`.
+
+## Running the hunting checklists for a case
+
+`SOF-ELK_RunChecklists.py` runs the [hunting pack](hunting/README.md)'s role checklists against everything loaded for one case and saves each query's result as CSV, plus a super timeline. It is standard-library only and uses the same Elasticsearch client, connection options and retry options as the importers.
+
+```bash
+python3 SOF-ELK_RunChecklists.py IR-2026-042 ./IR-2026-042-hunt --es http://192.168.233.128:9200
+```
+
+The two arguments are the case name (as given to the importers with `--case`; upper/lower case ignored) and the output directory (created if missing). The script then:
+
+1. Finds every index holding documents of the case, and groups them into hosts by the `<prefix>-<hostname>` suffix (`host.name` gives the folder name, such as `RD01`). SOF-ELK's own dated indexes (`logstash-2026.10`) are ignored.
+2. Groups the AWS indexes (`aws-cloudtrail-*`, `aws-vpcflow-*`, `aws-waf-*`, and `httpdlog-*` loaded by `AWS/alb2sofelk.py`) into one `AWS` target that runs the three AWS checklists without a prompt. A Linux web server's own `httpdlog-<host>` stays with that host.
+3. Asks the role of every other host, by number or name. A host with several roles takes them comma-separated (`6,5` for a DC that is also a file server); `s` skips the host.
+
+| # | Role | Checklists run |
+|---|---|---|
+| 1 | `windows-end-user` | Windows baseline + end-user workstation |
+| 2 | `windows-web-server` | Windows baseline + web server |
+| 3 | `windows-exchange-server` | Windows baseline + Exchange server |
+| 4 | `windows-database-server` | Windows baseline + database server |
+| 5 | `windows-file-server` | Windows baseline + file server |
+| 6 | `windows-domain-controller` | Windows baseline + domain controller |
+| 7 | `linux-web-server` | Linux baseline + Linux web server |
+| 8 | `linux-database-server` | Linux baseline + Linux database server |
+| 9 | `linux-file-server` | Linux baseline + Linux file server |
+| 10 | `linux-backup-server` | Linux baseline + Linux backup server |
+| 11 | `linux-mail-server` | Linux baseline + Linux mail server |
+| 12 | `linux-vpn-gateway` | Linux baseline + Linux VPN gateway |
+| 13 | `linux-ssh-jump-host` | Linux baseline + Linux SSH jump host (extra checklist in the pack) |
+| 14 | `linux-container-host` | Linux baseline + Linux container host (extra checklist in the pack) |
+
+4. Runs each query the chosen checklists name once for the whole case, in checklist order, and routes each result row to the host it came from (its `_index`, `source_indices` or `indexes` column, or `host.name`). The query's `FROM` line is rewritten to the case's indexes of every host, so the rarity columns (`host_count` and similar) compare the hosts of the case; the case itself is applied as a Query DSL filter. A row stacked across several hosts goes to each of them. A query that finds no index of its families for a host is recorded as `no-data` rather than run.
+5. Writes the results:
+
+```text
+IR-2026-042-hunt/
+├── IR-2026-042_supertimeline.csv     # l2tcsv layout, every timestamp in the results, sorted
+├── IR-2026-042_run_summary.csv       # host, roles, query, status, rows, file, checklist rows, error
+├── IR-2026-042_run.log               # every query sent, retries and errors
+├── RD01/
+│   ├── 00-triage/TRI-05_RD01.csv
+│   ├── TA0002-execution/EX-10_RD01.csv
+│   └── ...
+├── kali/
+│   └── 00-triage/LTRI-01_kali.csv ...
+└── AWS/
+    └── 00-triage/ATRI-01_AWS.csv ...
+```
+
+The category folders are the queries' tactic folders in the pack (`00-triage`, `TA0002-execution`, ...). A query that ran and found nothing still gets a CSV with its header row, so an empty file means "checked, nothing found", while the summary says `no-data` when there was nothing to check.
+
+**Super timeline.** The timeline uses the log2timeline `l2tcsv` columns of the sample RD01 timeline (`date,time,timezone,MACB,source,sourcetype,type,user,host,short,desc,version,filename,inode,notes,format,extra`), in UTC. Every date column of every result row becomes an event (columns with the same time are merged into one row, as plaso does); `type` is the column name (or `kape.timestamp_meaning` for `@timestamp`), `MACB` is derived from it (`file.created` is `...B`, `file.mtime` is `M...`), `source`/`sourcetype` come from the index family (`EVT`/`WinEVTX`, `AMCACHE`, `FILE`/`Bodyfile`, `LOG`/`AWS CloudTrail`, ...), `desc` is the query ID and title followed by the row's other columns, `notes` lists the checklist rows that asked for the query, and `format` is `esql/<Query_ID>`. Stacked queries contribute their `first_seen`/`last_seen` columns, which is what the checklist found rather than every raw event. The data-coverage queries (`TRI-01`, `LTRI-01`, `ATRI-01`) are left out because their dates are ranges, not events; leave out others with `--timeline-exclude ID`.
+
+**Resource use.** Queries run one at a time. Each ES|QL response (at most 10,000 rows, the cluster's default limit) is written to its CSVs and released before the next query. The timeline is sorted on disk: rows are held in memory only up to `--timeline-chunk` (50,000), written as sorted runs to a temporary folder in the output directory, then merged with `heapq` and de-duplicated; the temporary folder is removed afterwards. A query whose result reaches its `LIMIT` is flagged `truncated` in the summary and on screen; narrow it in Kibana with `--since` or by hand.
+
+| Option | Purpose |
+|---|---|
+| `--role HOST=ROLE[,ROLE]` | Give a host's role without the prompt (number or name, or `skip`); repeatable. Needed for every host when stdin is not a terminal. |
+| `--since DATE` | Start of the incident window (`2026-10-01` or `2026-10-01T08:00:00Z`), written into the Linux queries' `since` lines. |
+| `--include-pivots` | Also run the pivot queries (`EX-15`, `C2-09`), which still hold another engagement's file names and accounts. Skipped by default. |
+| `--only HOST` | Run only these hosts (repeatable; `AWS` for the AWS group). The other hosts still count for rarity. |
+| `--no-aws` | Do not run the AWS checklists. |
+| `--dry-run` | Find the hosts, ask the roles and list each query and output file; run nothing. |
+| `--timeline-exclude ID` | Leave a query out of the super timeline; repeatable. |
+| `--timeline-chunk N`, `--desc-limit N` | Timeline rows held in memory per sorted run (default 50,000); maximum `desc` length (default 4,000). |
+| `--es`, `--user`, `--password`, `--insecure` | Connection options, as for the importers. With `--user` and no `--password` the password is asked for. |
+| `--max-retries`, `--retry-backoff`, `--timeout`, `--log-file` | Retry and logging options, as for the importers. Raise `--timeout` (default 300 s) for very large cases. The log defaults to `<output>/<case>_run.log`. |
+
+The `// EDIT:` thresholds and lists in the queries are used as they are in the pack; edit the query files first to tune them for an engagement. Every query has only been checked statically, so expect a few to fail on a live cluster with a field the evidence does not have: they are listed as `error` in the summary with Elasticsearch's message, and the run carries on. The exit status is `0` when every query ran, `1` when one or more failed (or the case has no indexes), and `2` when Elasticsearch became unreachable (everything up to that point, including the timeline, is still written). Tests: `python3 tests/test_run_checklists.py -v`.
 
 ## Windows Elasticsearch and Kibana setup
 
