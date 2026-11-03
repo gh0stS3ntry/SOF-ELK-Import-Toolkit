@@ -46,7 +46,7 @@
     (sof-elk-templates\, used by evtxlogs-*, filesystem-*, lnkfiles-* and
     the other SOF-ELK indexes) and the toolkit's own templates
     (Windows\index_templates\, AWS\index_templates\,
-    Generic-CSV\index_templates\, Linux\index_templates\) from the toolkit checkout it is run from
+    Generic-CSV\index_templates\, Generic-JSON\index_templates\, Linux\index_templates\) from the toolkit checkout it is run from
     into forensic-elk\templates\, and writes forensic-elk\load-templates.ps1.
     start.bat runs that loader on every start, before any data is ingested,
     so new indexes get the same settings and mappings as on a SOF-ELK VM
@@ -393,6 +393,7 @@ function Copy-IndexTemplates([string]$SourceRoot, [string]$Destination) {
         @{ Dir = 'Windows\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
         @{ Dir = 'AWS\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-httpdlog.json') },
         @{ Dir = 'Generic-CSV\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
+        @{ Dir = 'Generic-JSON\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
         @{ Dir = 'Linux\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-logstash.json', 'index-httpdlog.json') }
     )
     if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }

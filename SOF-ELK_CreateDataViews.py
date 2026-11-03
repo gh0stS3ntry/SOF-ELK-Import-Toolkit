@@ -32,6 +32,7 @@ Create the Kibana Data Views used with the SOF-ELK direct-import toolkit.
   aws-vpcflow-*       AWS/vpcflow2sofelk.py (VPC Flow Logs)
   aws-waf-*           AWS/waf2sofelk.py (AWS WAF)
   genericcsv-*        Generic-CSV/genericcsv2sofelk.py (any CSV, fields from its header)
+  genericjson-*       Generic-JSON/genericjson2sofelk.py (any JSON, fields from its keys)
   auditd-*            Linux/auditd2sofelk.py (Linux audit log, one document per event)
   bodyfile-*          Linux/bodyfile2sofelk.py (Linux bodyfile file system timeline)
   wtmp-*              Linux/wtmp2sofelk.py (wtmp, btmp and wtmpdb login records)
@@ -80,6 +81,7 @@ DATA_VIEWS = [
     ("aws-vpcflow", "aws-vpcflow-*"),
     ("aws-waf", "aws-waf-*"),
     ("genericcsv", "genericcsv-*"),
+    ("genericjson", "genericjson-*"),
     ("auditd", "auditd-*"),
     ("bodyfile", "bodyfile-*"),
     ("wtmp", "wtmp-*"),

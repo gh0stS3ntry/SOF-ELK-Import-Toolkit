@@ -13,8 +13,8 @@ By hostname, matching is deliberately strict so that a similar hostname is never
 * The hostname is normalized exactly as the importers do it (lower-case, other
   characters replaced by "-"), and only indexes whose name ends in "-<hostname>" are
   considered. "rd01" does not match "rd011" or "rd01-old".
-* Each candidate's documents are then checked. When they carry host.name (Windows and
-  Generic-CSV importers) or labels.evidence_source (AWS importers), the index is
+* Each candidate's documents are then checked. When they carry host.name (Windows, Generic-CSV
+  and Generic-JSON importers) or labels.evidence_source (AWS importers), the index is
   selected only if that value is the hostname. This keeps "amcache-ws-01" (host
   ws-01) safe when deleting host "01".
 * An index whose documents do not say which host they came from (empty, closed, or
@@ -58,8 +58,8 @@ TOOLKIT_PREFIXES = frozenset({
     "filesystem", "evtxlogs", "lnkfiles", "prefetch",
     # AWS (httpdlog also holds Linux/httpd2sofelk.py web server logs)
     "aws-cloudtrail", "aws-vpcflow", "aws-waf", "httpdlog",
-    # Generic-CSV
-    "genericcsv",
+    # Generic-CSV and Generic-JSON
+    "genericcsv", "genericjson",
     # Linux (journal, text syslog and vsftpd share SOF-ELK's logstash family; web logs go to
     # httpdlog and browser history to browsinghistory, both listed above)
     "logstash", "auditd", "bodyfile", "wtmp", "packages", "linuxconfig",

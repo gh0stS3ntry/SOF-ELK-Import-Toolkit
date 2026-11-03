@@ -93,7 +93,7 @@ WINDOWS_FAMILIES = frozenset({
     "jumplist", "shellbag", "recyclebin", "srum", "activitiescache", "clrusagelogs",
     "recentfilecache", "sqlitedb", "sum"})
 LINUX_FAMILIES = frozenset({"logstash", "auditd", "bodyfile", "wtmp", "packages", "linuxconfig"})
-SHARED_FAMILIES = frozenset({"browsinghistory", "httpdlog", "genericcsv"})
+SHARED_FAMILIES = frozenset({"browsinghistory", "httpdlog", "genericcsv", "genericjson"})
 AWS_FAMILIES = frozenset({"aws-cloudtrail", "aws-vpcflow", "aws-waf"})
 KNOWN_FAMILIES = sorted(WINDOWS_FAMILIES | LINUX_FAMILIES | SHARED_FAMILIES | AWS_FAMILIES,
                         key=len, reverse=True)
@@ -132,6 +132,7 @@ FAMILY_SOURCE = {
     "sqlitedb": ("LOG", "SQLite Database"),
     "sum": ("LOG", "User Access Logging (SUM)"),
     "genericcsv": ("LOG", "Generic CSV"),
+    "genericjson": ("LOG", "Generic JSON"),
     "logstash": ("LOG", "Syslog/Journal"),
     "auditd": ("LOG", "Linux Audit"),
     "bodyfile": ("FILE", "Bodyfile"),
