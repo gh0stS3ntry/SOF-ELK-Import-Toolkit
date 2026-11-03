@@ -174,7 +174,7 @@ Each recognised message gets `event.category`, `event.type`, `event.action`, `ev
 
 ## Hunting
 
-The Linux ES|QL hunting queries are in [`hunting/queries/linux/`](../hunting/queries/linux/), grouped by MITRE ATT&CK tactic, with the checklist [Baseline: all Linux hosts](../hunting/checklists/linux-baseline-all-hosts.md) (its section 7 covers container hosts and Kubernetes nodes) and role checklists for web, database, backup, file and mail servers, SSH jump hosts and VPN gateways (see [`hunting/checklists/`](../hunting/checklists/)). Each hunt reads every index above that can answer it, and still runs when the optional `auditd-*`, `httpdlog-*` or `browsinghistory-*` indexes are missing. See [Linux evidence](../hunting/README.md#linux-evidence) for what each source can and cannot show.
+The Linux ES|QL hunting queries are in [`hunting/queries/linux/`](../hunting/queries/linux/), grouped by MITRE ATT&CK tactic, with the checklist [Baseline: all Linux hosts](../hunting/checklists/linux-baseline-all-hosts.md) (its section 7 covers Docker and Podman hosts) and role checklists for web, database, backup, file and mail servers, SSH jump hosts and VPN gateways (see [`hunting/checklists/`](../hunting/checklists/)). Each hunt reads every index above that can answer it, and still runs when the optional `auditd-*`, `httpdlog-*` or `browsinghistory-*` indexes are missing. See [Linux evidence](../hunting/README.md#linux-evidence) for what each source can and cannot show.
 
 ## Tests
 
