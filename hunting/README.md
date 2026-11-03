@@ -1,6 +1,6 @@
 # ES|QL hunting query pack
 
-A first-cut set of ES|QL queries for incident response on SOF-ELK, for data loaded with this toolkit. The queries are grouped by platform and then by MITRE ATT&CK tactic, each in its own folder with a `query.esql` and a short `README.md` (what it finds, what it needs, how to read the output). The role checklists in [`checklists/`](checklists/) say which queries to run for which kind of host.
+A first-cut set of ES|QL queries for incident response on SOF-ELK, for data loaded with this toolkit. The queries are grouped by platform and then by MITRE ATT&CK tactic, each in its own folder with a `query.esql` and a short `README.md` (what it finds, what it needs, how to read the output). The role checklists in [`checklists/`](checklists/) say which queries to run for which kind of host. To run them all for a case in one go, with one CSV per query and host and a super timeline, use [`SOF-ELK_RunChecklists.py`](../SOF-ELK_RunChecklists.py) (see the main README, "Running the hunting checklists for a case").
 
 | Folder | Evidence | Loaded with |
 |---|---|---|
@@ -103,7 +103,6 @@ node hunting/tools/parse_queries.mjs /tmp/esql      # every query.esql under hun
 | [Linux file server](checklists/linux-file-server.md) | Samba and NFS servers and shared data folders |
 | [Linux SSH jump host](checklists/linux-ssh-jump-host.md) | bastions, jump boxes, admin and automation servers |
 | [Linux mail server](checklists/linux-mail-server.md) | Postfix, Exim, Dovecot and webmail servers |
-| [Linux container host](checklists/linux-container-host.md) | Docker and Podman hosts, Kubernetes nodes |
 | [Linux VPN gateway](checklists/linux-vpn-gateway.md) | OpenVPN, WireGuard, IPsec and SSH remote-access gateways |
 
 `checklists/IR_CHECKLIST_ROLES.xlsx` has the same content with one sheet per role and the tracking columns of the IR checklist (Tasked to, Status, Findings, Handover). Rebuild it after editing a checklist with `python3 hunting/tools/build_checklist_xlsx.py` (needs `openpyxl`).
@@ -410,7 +409,7 @@ The Linux queries, by tactic. Run LTRI-01 first: it shows which Linux index fami
 | [LEX-02](queries/linux/TA0002-execution/LEX-02-programs-in-temp-hidden-and-user-writable-locations/) | Programs run from, or executables stored in, temporary, hidden and user-writable locations | `logstash-*`, `auditd-*`, `linuxconfig-*`, `bodyfile-*` | every Linux host |
 | [LEX-03](queries/linux/TA0002-execution/LEX-03-rare-programs-across-hosts/) | Rare programs: executables seen in the journal and audit log, stacked across hosts | `logstash-*`, `auditd-*` | every Linux host; best across several hosts |
 | [LEX-04](queries/linux/TA0002-execution/LEX-04-suspicious-command-lines/) | Download-and-run, encoded and interpreter one-liner command lines (logs, audit, cron, units, shell startup files) | `logstash-*`, `auditd-*`, `linuxconfig-*`, `packages-*` | every Linux host |
-| [LEX-05](queries/linux/TA0002-execution/LEX-05-container-abuse-and-escapes/) | Container abuse: privileged and host-mounted containers, exposed Docker APIs, exec into containers and escape commands | `logstash-*`, `auditd-*`, `linuxconfig-*`, `bodyfile-*` | every Linux host (web, database and other servers often run containers); container hosts and Kubernetes nodes first |
+| [LEX-05](queries/linux/TA0002-execution/LEX-05-container-abuse-and-escapes/) | Container abuse: privileged and host-mounted containers, exposed Docker APIs, exec into containers and escape commands | `logstash-*`, `auditd-*`, `linuxconfig-*`, `bodyfile-*` | every Linux host (web, database and other servers often run containers); Docker and Podman hosts first |
 
 #### Linux: TA0003 Persistence
 
