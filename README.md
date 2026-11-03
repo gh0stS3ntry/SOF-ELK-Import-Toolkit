@@ -1,6 +1,6 @@
 # SOF-ELK Import Toolkit
 
-This package contains a recursive wrapper and seventeen standalone Python importers for Windows forensic artifacts, four importers for AWS logs (CloudTrail, VPC Flow Logs, ALB/ELB access logs and AWS WAF; see [`AWS/README.md`](AWS/README.md)), a generic CSV importer for any other CSV export ([`Generic-CSV/README.md`](Generic-CSV/README.md)), Linux importers for the systemd journal, text syslog, auditd, the bodyfile, login records (wtmp, btmp, wtmpdb), package history, an accounts and persistence snapshot, web server logs, browser history and FTP logs in UAC collections and collected root filesystems ([`Linux/README.md`](Linux/README.md)), and an ES|QL hunting pack with checklists ([`hunting/`](hunting/README.md)), for loading forensic CSV and JSON exports directly into Elasticsearch indexes used by SOF-ELK without relying on Logstash or Filebeat. The importers do not run KAPE, NirSoft, or Eric Zimmerman tools; they ingest exports that those tools have already produced.
+This package contains a recursive wrapper and seventeen standalone Python importers for Windows forensic artifacts, four importers for AWS logs (CloudTrail, VPC Flow Logs, ALB/ELB access logs and AWS WAF; see [`AWS/README.md`](AWS/README.md)), a generic CSV importer for any other CSV export ([`Generic-CSV/README.md`](Generic-CSV/README.md)), a generic JSON importer for any other JSON or JSON Lines export ([`Generic-JSON/README.md`](Generic-JSON/README.md)), Linux importers for the systemd journal, text syslog, auditd, the bodyfile, login records (wtmp, btmp, wtmpdb), package history, an accounts and persistence snapshot, web server logs, browser history and FTP logs in UAC collections and collected root filesystems ([`Linux/README.md`](Linux/README.md)), and an ES|QL hunting pack with checklists ([`hunting/`](hunting/README.md)), for loading forensic CSV and JSON exports directly into Elasticsearch indexes used by SOF-ELK without relying on Logstash or Filebeat. The importers do not run KAPE, NirSoft, or Eric Zimmerman tools; they ingest exports that those tools have already produced.
 
 ## Contents
 
@@ -61,6 +61,12 @@ sof_elk_all_importers/
 │   │   └── index-genericcsv.json
 │   ├── tests/
 │   └── README.md
+├── Generic-JSON
+│   ├── genericjson2sofelk.py
+│   ├── index_templates/
+│   │   └── index-genericjson.json
+│   ├── tests/
+│   └── README.md
 ├── Linux
 │   ├── linux2sofelk.py      (runs every Linux importer on one collection)
 │   ├── journal2sofelk.py
@@ -89,7 +95,7 @@ sof_elk_all_importers/
     └── tools/
 ```
 
-Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. Every importer loads the shared Elasticsearch client from `Windows/common/sof_elk_es_client.py`, so keep `common/` beside `csv_importers/` and `json_importers/`. Also keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers in `csv_importers/` (the RecentFileCacheParser, SQLECmd, and SumECmd importers require it). The AWS, generic CSV and Linux importers load the same client from `Windows/common/`, so keep `AWS/`, `Generic-CSV/`, `Linux/` and `Windows/` side by side.
+Requirements: Python 3.9+ and network access from the runtime to the Elasticsearch HTTP(S) endpoint. The scripts use Python's standard library; no `pip install` is required. Keep each script in its supplied folder. Every importer loads the shared Elasticsearch client from `Windows/common/sof_elk_es_client.py`, so keep `common/` beside `csv_importers/` and `json_importers/`. Also keep `sof_elk_json_bulk_common.py` beside the four importers in `json_importers/`, and keep `sof_elk_csv_bulk_common.py` beside the CSV importers in `csv_importers/` (the RecentFileCacheParser, SQLECmd, and SumECmd importers require it). The AWS, generic CSV, generic JSON and Linux importers load the same client from `Windows/common/`, so keep `AWS/`, `Generic-CSV/`, `Generic-JSON/`, `Linux/` and `Windows/` side by side.
 
 ## Quick start: use the wrapper
 
@@ -483,6 +489,7 @@ The script also applies SOF-ELK's Kibana advanced settings from `sof-elk-kibana/
 | `AWS/vpcflow2sofelk.py` | `aws-vpcflow-*` | `aws-vpcflow-<source>` |
 | `AWS/waf2sofelk.py` | `aws-waf-*` | `aws-waf-<source>` |
 | `Generic-CSV/genericcsv2sofelk.py` | `genericcsv-*` | `genericcsv-<hostname>` |
+| `Generic-JSON/genericjson2sofelk.py` | `genericjson-*` | `genericjson-<hostname>` |
 | `Linux/auditd2sofelk.py` | `auditd-*` | `auditd-<hostname>` |
 | `Linux/bodyfile2sofelk.py` | `bodyfile-*` | `bodyfile-<hostname>` |
 | `Linux/wtmp2sofelk.py` | `wtmp-*` | `wtmp-<hostname>` |
@@ -563,8 +570,8 @@ python3 SOF-ELK_DeleteIndexes.py --case IR-2026-042 --dry-run --es http://192.16
 **By hostname.** The hostname is normalized exactly as the importers do it (`RD01` becomes `rd01`). Matching is strict so that a similar hostname is never caught:
 
 - Only indexes named `<prefix>-<hostname>` are considered: `rd01` matches `amcache-rd01` and `aws-cloudtrail-rd01`, but not `amcache-rd011` or `amcache-rd01-old`.
-- Each candidate's documents are checked. When they carry `host.name` (Windows, Generic-CSV and Linux importers) or `labels.evidence_source` (AWS importers), the index is selected only if that value is the hostname. This protects `amcache-ws-01` (host `ws-01`) when you delete host `01`.
-- An index whose documents do not say which host they came from (empty, closed, or loaded by an older importer) is selected only when its prefix is one of the toolkit's (`amcache`, `filesystem`, `evtxlogs`, `aws-cloudtrail`, `httpdlog`, `genericcsv`, `logstash`, `auditd`, `bodyfile`, `wtmp`, `packages`, `linuxconfig`, ...) or one given with `--prefix`.
+- Each candidate's documents are checked. When they carry `host.name` (Windows, Generic-CSV, Generic-JSON and Linux importers) or `labels.evidence_source` (AWS importers), the index is selected only if that value is the hostname. This protects `amcache-ws-01` (host `ws-01`) when you delete host `01`.
+- An index whose documents do not say which host they came from (empty, closed, or loaded by an older importer) is selected only when its prefix is one of the toolkit's (`amcache`, `filesystem`, `evtxlogs`, `aws-cloudtrail`, `httpdlog`, `genericcsv`, `genericjson`, `logstash`, `auditd`, `bodyfile`, `wtmp`, `packages`, `linuxconfig`, ...) or one given with `--prefix`.
 
 **By case.** The case ID is not part of the index name; the importers store it in each document's `case` field (from their `--case` option). The script searches every non-hidden index for documents with that `case` (upper/lower case ignored) and deletes an index only when **all** of its documents belong to the case. An index that also holds documents from another case, or without a case (for example the same host imported twice under different `--case` values), is listed with its counts and kept, so another case's evidence is never removed; delete those documents by hand with `_delete_by_query` if needed. Documents imported without `--case` cannot be found this way; use `--hostname` for them. Closed indexes cannot be searched and are listed as skipped.
 
@@ -682,7 +689,7 @@ It creates `forensic-elk\`, downloads both Windows zips from artifacts.elastic.c
 | `discovery.type` | `single-node` | Standalone node; no production bootstrap checks for the non-loopback bind. |
 | `xpack.security.enabled` (and enrollment, HTTP/transport TLS) | `false` | No username or password for the Kibana UI or the REST APIs. Written before the first start, so Elasticsearch never auto-generates TLS certificates or the `elastic` password. |
 | `elasticsearch.hosts` | `http://127.0.0.1:9200` | Connects Kibana to Elasticsearch. With security disabled there is no enrolment token to use; this is the whole integration. |
-| Index templates | SOF-ELK's native component and index templates from [`sof-elk-templates/`](sof-elk-templates/README.md) (`evtxlogs`, `filesystem`, `lnkfiles`, `aws`, `zeek` and the rest, under SOF-ELK's own names), plus the toolkit's templates from `Windows/`, `AWS/`, `Generic-CSV/` and `Linux/index_templates/` (`sofelk-toolkit-*`; `AWS/index_templates/index-httpdlog.json`, `Linux/index_templates/index-httpdlog.json` and `Linux/index_templates/index-logstash.json` are left out, as their importers never install them as templates over SOF-ELK's own families) | New indexes get the same settings and mappings as on a SOF-ELK VM with the toolkit, even before the first import. Copied to `forensic-elk\templates\` and loaded by `forensic-elk\load-templates.ps1`. |
+| Index templates | SOF-ELK's native component and index templates from [`sof-elk-templates/`](sof-elk-templates/README.md) (`evtxlogs`, `filesystem`, `lnkfiles`, `aws`, `zeek` and the rest, under SOF-ELK's own names), plus the toolkit's templates from `Windows/`, `AWS/`, `Generic-CSV/`, `Generic-JSON/` and `Linux/index_templates/` (`sofelk-toolkit-*`; `AWS/index_templates/index-httpdlog.json`, `Linux/index_templates/index-httpdlog.json` and `Linux/index_templates/index-logstash.json` are left out, as their importers never install them as templates over SOF-ELK's own families) | New indexes get the same settings and mappings as on a SOF-ELK VM with the toolkit, even before the first import. Copied to `forensic-elk\templates\` and loaded by `forensic-elk\load-templates.ps1`. |
 | Firewall rules (group "Forensic ELK") | Inbound TCP 9200/5601 from `LocalSubnet`, tied to the bundled `java.exe`/`node.exe` | Lets VMs on host-only/NAT/Hyper-V networks connect. Change the scope with `-FirewallRemoteAddress 192.168.56.0/24`, or skip with `-SkipFirewall`. Without Administrator rights the script skips this and warns. |
 
 Other options: `-InstallRoot DIR` (where `forensic-elk` is created; default is the current directory), `-HeapSize 4g` (fixed JVM heap instead of automatic sizing), `-SkipTemplates` (do not stage or load any templates), `-NoStart` (configure only), `-KeepDownloads` (keep the zip files), and `-StartupTimeoutSeconds N` (how long `start.bat` waits for each service; default 300).
