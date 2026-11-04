@@ -1,0 +1,89 @@
+// EX-18 | Executables and scripts in user-writable and world-writable folders ($MFT)
+// Tactic: TA0002 Execution | ATT&CK: T1204.002, T1105, T1036.005, T1059
+// Indexes: filesystem-* | Needs: MFTECmd $MFT output
+FROM filesystem-* METADATA _index
+// $MFT rows only ($J rows carry update reasons), files only, no alternate data stream rows
+| WHERE file.update_reasons IS NULL
+| WHERE COALESCE(TO_STRING(file.type), "") != "dir"
+| WHERE NOT COALESCE(kape.mft.isads, false)
+| EVAL fname = TO_LOWER(COALESCE(TO_STRING(file.name), ""))
+| EVAL kind = CASE(
+    fname RLIKE ".*[.](exe|dll|sys|scr|cpl|ocx|com|pif|efi|drv|msi|msp|msix|appx|jar)", "executable",
+    fname RLIKE ".*[.](ps1|psm1|psd1|bat|cmd|vbs|vbe|js|jse|wsf|wsh|hta|sct|py|pyw|sh|pl|rb|php|lua|ahk|au3|a3x)", "script",
+    "")
+| EVAL kind = COALESCE(kind, "")
+| WHERE kind != ""
+// MFTECmd paths start with "." for the volume root, e.g. .\Users\bob\AppData\Local\Temp
+| EVAL d = CONCAT(TO_LOWER(COALESCE(TO_STRING(file.directory), "")), "\\")
+| EVAL top = REPLACE(d, "^(?:[.]|[a-z]:)\\\\([^\\\\]*)\\\\.*$", "$1")
+// folders a standard user (or every user) can write to by default; the first match names the row
+| EVAL location = CASE(
+    d RLIKE "([.]|[a-z]:)\\\\[$]recycle[.]bin\\\\.*", "Recycle Bin",
+    d RLIKE "([.]|[a-z]:)\\\\users\\\\public\\\\.*", "Users\\Public",
+    d RLIKE "([.]|[a-z]:)\\\\users\\\\[^\\\\]+\\\\appdata\\\\local\\\\temp\\\\.*", "user Temp",
+    d RLIKE "([.]|[a-z]:)\\\\users\\\\[^\\\\]+\\\\appdata\\\\.*", "user AppData",
+    d RLIKE "([.]|[a-z]:)\\\\users\\\\[^\\\\]+\\\\(downloads|desktop|documents)\\\\.*", "user Downloads/Desktop/Documents",
+    d RLIKE "([.]|[a-z]:)\\\\users\\\\[^\\\\]+\\\\.*", "user profile (other)",
+    d RLIKE "([.]|[a-z]:)\\\\windows\\\\temp\\\\.*", "Windows\\Temp",
+    d RLIKE "([.]|[a-z]:)\\\\windows\\\\(tasks|tracing|registration\\\\crmlog|(system32|syswow64)\\\\(tasks|tasks_migrated|fxstmp|com\\\\dmp|spool\\\\(drivers\\\\color|printers|servers)|microsoft\\\\crypto\\\\rsa\\\\machinekeys))\\\\.*", "Windows user-writable subfolder",
+    d RLIKE "([.]|[a-z]:)\\\\programdata\\\\.*", "ProgramData",
+    d RLIKE "([.]|[a-z]:)\\\\perflogs\\\\.*", "PerfLogs",
+    d RLIKE "([.]|[a-z]:)\\\\", "drive root",
+    d RLIKE "([.]|[a-z]:)\\\\.*" AND NOT top IN ("windows", "program files", "program files (x86)", "users", "programdata", "$extend",
+        "boot", "recovery", "system volume information", "$recycle.bin", "perflogs", "documents and settings", "msocache",
+        "config.msi", "$windows.~bt", "$windows.~ws", "$winreagent", "$sysreset", "windows.old", "efi", "pathunknown"), "drive-root folder",
+    "")
+| EVAL location = COALESCE(location, "")
+| WHERE location != ""
+| INLINE STATS name_hosts = COUNT_DISTINCT(_index) BY fname
+// software that installs per user or into ProgramData by design; scored down, not removed
+| EVAL f_vendor = d RLIKE ".*\\\\appdata\\\\local\\\\(microsoft\\\\(onedrive|teams|edge|edgeupdate|windowsapps|onedrive[^\\\\]*)|packages|google\\\\(chrome|update)|slack|discord|zoom|programs\\\\(microsoft vs code|python|common)|githubdesktop|mozilla firefox|squirrel[^\\\\]*)\\\\.*"
+    OR d RLIKE ".*\\\\appdata\\\\(local|roaming)\\\\(zoom|microsoft\\\\teams)\\\\.*"
+    OR d RLIKE "([.]|[a-z]:)\\\\programdata\\\\(microsoft\\\\(windows defender|windows defender advanced threat protection|edgeupdate|windows\\\\wer|windows\\\\start menu|clicktorun|office)|package cache|chocolatey|amazon|regid[.].*)\\\\.*"
+| EVAL f_temp = location IN ("user Temp", "Windows\\Temp") OR top IN ("temp", "tmp")
+| EVAL f_odd = location IN ("Recycle Bin", "Users\\Public", "Windows user-writable subfolder", "PerfLogs", "drive root", "drive-root folder")
+// straight in %APPDATA%, %LOCALAPPDATA% or %ProgramData%, with no vendor folder around it
+| EVAL f_bare = d RLIKE "([.]|[a-z]:)\\\\users\\\\[^\\\\]+\\\\appdata\\\\(roaming|local|locallow)\\\\" OR d RLIKE "([.]|[a-z]:)\\\\programdata\\\\"
+| EVAL f_double_ext = fname RLIKE ".*[.](pdf|doc|docx|xls|xlsx|ppt|pptx|rtf|txt|jpg|jpeg|png|gif|zip|rar|7z|iso)[.](exe|scr|com|pif|js|jse|vbs|vbe|wsf|hta|bat|cmd|ps1|msi)"
+| EVAL f_random = fname RLIKE "([a-z]+[0-9]+[a-z0-9]*|[0-9]+[a-z]+[a-z0-9]*)[.](exe|dll|scr|ps1|bat|cmd|vbs|js|hta)|[0-9a-f]{8,32}[.](exe|dll|scr|ps1|bat|cmd|vbs|js|hta)"
+| EVAL f_script = kind == "script" AND NOT f_vendor
+| EVAL f_rare = name_hosts <= 1
+| EVAL f_hidden = COALESCE(file.attributes.hidden, false)
+| EVAL f_deleted = NOT COALESCE(kape.mft.inuse, true)
+| EVAL f_timestomp = COALESCE(DATE_DIFF("seconds", file.stdinfo.created, file.filename.created) > 60, false)
+| EVAL score = CASE(f_temp, 2, 0) + CASE(f_odd, 2, 0) + CASE(f_bare, 2, 0) + CASE(f_double_ext, 3, 0) + CASE(f_random, 1, 0)
+    + CASE(f_script, 1, 0) + CASE(f_rare, 1, 0) + CASE(f_hidden, 1, 0) + CASE(f_deleted, 1, 0) + CASE(f_timestomp, 2, 0)
+    - CASE(f_vendor, 3, 0)
+| EVAL flags = REPLACE(CONCAT(
+    CASE(f_temp, "temp folder; ", ""),
+    CASE(f_odd, "folder that rarely holds programs; ", ""),
+    CASE(f_bare, "loose in AppData/ProgramData; ", ""),
+    CASE(f_double_ext, "double extension; ", ""),
+    CASE(f_random, "random-looking name; ", ""),
+    CASE(f_rare, "name on one host only; ", ""),
+    CASE(f_hidden, "hidden attribute; ", ""),
+    CASE(f_deleted, "deleted; ", ""),
+    CASE(f_timestomp, "$SI created before $FN created; ", ""),
+    CASE(f_vendor, "known per-user software folder; ", "")
+  ), "; $", "")
+| EVAL event_time = COALESCE(file.filename.created, file.stdinfo.created, @timestamp)
+| KEEP
+    _index,
+    event_time,
+    score,
+    location,
+    kind,
+    flags,
+    file.name,
+    file.directory,
+    file.size,
+    file.stdinfo.created,
+    file.stdinfo.mtime,
+    file.filename.created,
+    kape.mft.inuse,
+    kape.mft.hasads,
+    name_hosts,
+    file.inode,
+    file.sequence_number
+| SORT score DESC, event_time DESC
+| LIMIT 10000

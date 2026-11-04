@@ -1,0 +1,90 @@
+// LEX-06 | Executables and scripts in user-writable and world-writable folders (bodyfile)
+// Tactic: TA0002 Execution | ATT&CK: T1204.002, T1105, T1036.005, T1059.004
+// Indexes: bodyfile-* | Needs: bodyfile-*
+FROM bodyfile-* METADATA _index
+| WHERE host.os.type == "linux"
+| EVAL fname = TO_LOWER(COALESCE(file.name, ""))
+// no file-type magic in a bodyfile: scripts and Windows programs by extension, ELF files and
+// extensionless #! scripts by their execute bit
+| EVAL kind = CASE(
+    file.type != "file", "",
+    fname RLIKE ".*[.](sh|bash|zsh|ksh|csh|fish|py|pyw|pl|pm|rb|php|php[0-9]|phtml|phar|lua|tcl|js|mjs|awk|exp|ps1|psm1)", "script",
+    fname RLIKE ".*[.]so([.][0-9]+)*|.*[.]ko", "shared object or kernel module",
+    fname RLIKE ".*[.](elf|bin|run|out|appimage)", "executable (by name)",
+    fname RLIKE ".*[.](exe|dll|scr|bat|cmd|vbs|hta|msi|jar)", "Windows program or script",
+    // documents, archives and images copied from Windows or a VM share often carry execute bits
+    fname RLIKE ".*[.](pdf|doc|docx|xls|xlsx|ppt|pptx|odt|ods|rtf|txt|md|csv|json|xml|htm|html|log|conf|cfg|ini|ovpn|jpg|jpeg|png|gif|svg|ico|mp3|mp4|zip|tar|gz|tgz|bz2|xz|7z|rar|iso|ova|ovf|vmdk)", "",
+    bodyfile.executable == true, "executable (execute bit: ELF or #! script)",
+    "")
+| EVAL kind = COALESCE(kind, "")
+// directories are kept until their owner and world-writable flag are joined onto their files
+| WHERE file.type == "dir" OR kind != ""
+| EVAL dkey = CASE(file.type == "dir", file.path, file.directory)
+| INLINE STATS
+    dir_world_writable = MAX(CASE(file.type == "dir" AND bodyfile.world_writable == true, 1, 0)),
+    dir_uid = MAX(CASE(file.type == "dir", TO_INTEGER(file.uid), -1))
+  BY _index, dkey
+| WHERE file.type == "file"
+| EVAL d = CONCAT(COALESCE(file.directory, ""), "/")
+// first match names the row; /root and web roots are not user-writable (see LEX-02 and LPE-07)
+| EVAL location = CASE(
+    STARTS_WITH(d, "/tmp/") OR STARTS_WITH(d, "/var/tmp/") OR STARTS_WITH(d, "/dev/shm/") OR STARTS_WITH(d, "/run/shm/")
+        OR STARTS_WITH(d, "/run/lock/") OR STARTS_WITH(d, "/var/lock/") OR STARTS_WITH(d, "/var/crash/"), "temporary folder",
+    STARTS_WITH(d, "/run/user/"), "user runtime folder (/run/user)",
+    d RLIKE "/home/[^/]+/[.]local/share/[Tt]rash/.*", "user Trash",
+    STARTS_WITH(d, "/home/"), "home folder",
+    dir_world_writable == 1, "world-writable folder",
+    dir_uid >= 1000 AND dir_uid != 65534, "folder owned by a regular user",
+    bodyfile.world_writable == true, "world-writable file (any folder)",
+    "")
+| EVAL location = COALESCE(location, "")
+| WHERE location != ""
+| INLINE STATS name_hosts = COUNT_DISTINCT(_index) BY fname
+| EVAL p = TO_LOWER(file.path)
+// language package folders, virtual environments and editor extensions; scored down, not removed
+| EVAL f_library = p RLIKE ".*/(site-packages|dist-packages|node_modules|[.]?venv|virtualenv|[.]npm|[.]nvm|[.]cargo|[.]rustup|[.]gradle|[.]m2|[.]vscode|[.]vscode-server|[.]cursor-server|go/pkg/mod|[.]rbenv|[.]pyenv|[.]sdkman|[.]gem|snap)/.*"
+| EVAL f_temp = location IN ("temporary folder", "user runtime folder (/run/user)")
+| EVAL f_dir_ww = dir_world_writable == 1
+| EVAL f_file_ww = COALESCE(bodyfile.world_writable, false)
+| EVAL f_setid = COALESCE(bodyfile.setuid, false) OR COALESCE(bodyfile.setgid, false)
+| EVAL f_hidden = COALESCE(bodyfile.hidden, false)
+| EVAL f_deleted = COALESCE(bodyfile.deleted, false)
+| EVAL f_exec = COALESCE(bodyfile.executable, false)
+| EVAL f_rare = name_hosts <= 1
+| EVAL score = CASE(f_temp, 3, 0) + CASE(f_dir_ww AND NOT f_temp, 2, 0) + CASE(f_file_ww, 2, 0) + CASE(f_setid, 3, 0)
+    + CASE(f_hidden, 1, 0) + CASE(f_deleted, 2, 0) + CASE(f_exec, 1, 0) + CASE(f_rare, 1, 0)
+    + CASE(location == "user Trash", 1, 0) - CASE(f_library, 3, 0)
+| EVAL flags = REPLACE(CONCAT(
+    CASE(f_temp, "temporary folder; ", ""),
+    CASE(f_dir_ww, "folder writable by everyone; ", ""),
+    CASE(f_file_ww, "file writable by everyone; ", ""),
+    CASE(f_setid, "setuid/setgid; ", ""),
+    CASE(f_exec, "execute bit; ", ""),
+    CASE(f_hidden, "hidden name; ", ""),
+    CASE(f_deleted, "deleted; ", ""),
+    CASE(f_rare, "name on one host only; ", ""),
+    CASE(f_library, "language package or virtualenv folder; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    host.name,
+    file.mtime,
+    score,
+    location,
+    kind,
+    flags,
+    file.path,
+    file.size,
+    bodyfile.mode_string,
+    file.owner,
+    file.uid,
+    file.ctime,
+    file.created,
+    file.accessed,
+    file.hash.md5,
+    file.hash.sha1,
+    file.hash.sha256,
+    name_hosts,
+    file.inode
+| SORT score DESC, file.mtime DESC
+| LIMIT 10000

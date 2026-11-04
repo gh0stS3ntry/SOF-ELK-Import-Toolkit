@@ -151,6 +151,7 @@ The Windows queries come first, then [AWS](#aws) and [Linux](#linux).
 | [EX-15](queries/windows/TA0002-execution/EX-15-execution-evidence-pivot/) | Execution evidence for named files across Amcache, ShimCache and SRUM (pivot) | `amcache-*`, `shimcache-*`, `srum-*` | all (pivot, not first cut) |
 | [EX-16](queries/windows/TA0002-execution/EX-16-userassist-bam/) | Program execution recorded in UserAssist and BAM/DAM | `registry-*` | all; UserAssist matters most on workstations and RDP/jump hosts |
 | [EX-17](queries/windows/TA0002-execution/EX-17-runmru-commands/) | Commands typed in the Run dialog (RunMRU) | `registry-*` | end-user workstation, RDP/jump host, any server where admins log on interactively |
+| [EX-18](queries/windows/TA0002-execution/EX-18-executables-and-scripts-in-user-writable-folders/) | Executables (PE) and scripts in user-writable and world-writable folders: profiles, AppData, Temp, ProgramData, Public, Recycle Bin, writable Windows subfolders, drive-root folders | `filesystem-*` | all (baseline) |
 
 ### TA0003 Persistence
 
@@ -410,6 +411,7 @@ The Linux queries, by tactic. Run LTRI-01 first: it shows which Linux index fami
 | [LEX-03](queries/linux/TA0002-execution/LEX-03-rare-programs-across-hosts/) | Rare programs: executables seen in the journal and audit log, stacked across hosts | `logstash-*`, `auditd-*` | every Linux host; best across several hosts |
 | [LEX-04](queries/linux/TA0002-execution/LEX-04-suspicious-command-lines/) | Download-and-run, encoded and interpreter one-liner command lines (logs, audit, cron, units, shell startup files) | `logstash-*`, `auditd-*`, `linuxconfig-*`, `packages-*` | every Linux host |
 | [LEX-05](queries/linux/TA0002-execution/LEX-05-container-abuse-and-escapes/) | Container abuse: privileged and host-mounted containers, exposed Docker APIs, exec into containers and escape commands | `logstash-*`, `auditd-*`, `linuxconfig-*`, `bodyfile-*` | every Linux host (web, database and other servers often run containers); Docker and Podman hosts first |
+| [LEX-06](queries/linux/TA0002-execution/LEX-06-executables-and-scripts-in-user-writable-folders/) | Executables (ELF) and scripts in user-writable and world-writable folders: /tmp, /var/tmp, /dev/shm, /run/user, home folders, world-writable and user-owned folders, world-writable files | `bodyfile-*` | every Linux host |
 
 #### Linux: TA0003 Persistence
 
