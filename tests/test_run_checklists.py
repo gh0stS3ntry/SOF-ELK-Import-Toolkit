@@ -52,6 +52,7 @@ INDICES = {
 }
 QUERIES = []        # every /_query body received
 FAIL_IDS = {"TRI-02"}
+FULL_IDS = set()    # queries that fill their LIMIT whenever they read more than one index
 
 
 def case_match(d, query):
@@ -90,6 +91,9 @@ def esql_result(text):
                                  {"name": "last_seen", "type": "date"}, {"name": "indexes", "type": "keyword"}],
                      "values": [[h, 3, "2026-10-31T10:41:00.000Z", [i for i in indexes if i.endswith(h)]]
                                 for h in hosts]}
+    if qid in FULL_IDS and len(indexes) > 1:
+        return 200, {"columns": [{"name": "_index", "type": "keyword"}, {"name": "message", "type": "keyword"}],
+                     "values": [[indexes[n % len(indexes)], f"{qid} row {n}"] for n in range(10000)]}
     rows = []
     for n, index in enumerate(indexes):
         rows.append([index, f"2023-01-{10 + n:02d}T08:00:0{n % 10}.123Z", "tdungan", f"{qid} row {n}",
@@ -273,6 +277,28 @@ class RunnerTest(unittest.TestCase):
         self.assertIn('| WHERE _index IN ("amcache-rd01")\n| LIMIT', tri05)
         rows = read_csv(self.out / "RD01" / "TA0002-execution" / "EX-10_RD01.csv")
         self.assertEqual(len(rows), 2)
+
+    def test_query_that_fills_its_limit_runs_again_per_host(self):
+        FULL_IDS.add("TRI-05")
+        try:
+            code, output = self.run_main("--role", "RD01=windows-end-user", "--role", "WS-02=windows-file-server",
+                                         "--role", "kali=skip", "--no-aws")
+        finally:
+            FULL_IDS.clear()
+        self.assertIn("running it again once per host", output)
+        texts = [q["query"] for q in QUERIES if q["query"].startswith("// TRI-05")]
+        self.assertEqual(len(texts), 3)                  # once for both hosts, then once per host
+        for text in texts:                               # rarity still reads every host
+            self.assertIn("FROM amcache-rd01, amcache-ws-02 METADATA _index", text)
+        self.assertIn('| WHERE _index IN ("amcache-rd01")', texts[1])
+        self.assertIn('| WHERE _index IN ("amcache-ws-02")', texts[2])
+        for host, index in (("RD01", "amcache-rd01"), ("WS-02", "amcache-ws-02")):
+            rows = read_csv(self.out / host / "00-triage" / f"TRI-05_{host}.csv")
+            self.assertEqual({row[0] for row in rows[1:]}, {index})
+        summary = read_csv(self.out / f"{CASE}_run_summary.csv")
+        tri05 = [row for row in summary[1:] if row[3] == "TRI-05"]
+        self.assertEqual(sorted(row[0] for row in tri05), ["RD01", "WS-02"])
+        self.assertEqual({row[8] for row in tri05}, {""})  # neither host is truncated on its own
 
     def test_dry_run_runs_nothing(self):
         code, output = self.run_main("--dry-run", "--role", "RD01=1", "--role", "WS-02=s", "--role", "kali=s")

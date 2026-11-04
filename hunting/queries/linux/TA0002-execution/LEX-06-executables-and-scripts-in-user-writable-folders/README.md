@@ -14,4 +14,6 @@
 
 **If it errors or looks empty.** `Unknown column`: no `bodyfile-*` index exists for the case. No rows: none of the folders holds a program, which is rare on a host with user accounts. On the Kali UAC sample the query returns about 3,800 rows, about 2,700 of them Python packages in `~/.local` scored below zero; the top rows are a setuid `bash` in an NFS payload folder and exploit scripts and `libhax.so` in the Trash.
 
+**Many hosts.** Run the query over every index of the case so `name_hosts` compares the hosts, and read it one host at a time: uncomment the `// | WHERE _index == "bodyfile-kali"` line near the end and put the host's index in it. The filter sits after `name_hosts` is counted, so the count still covers every host while the 10,000-row `LIMIT` applies to that host alone. `SOF-ELK_RunChecklists.py` does this by itself: when the query fills its `LIMIT` for several hosts, it runs it again once per host.
+
 **Next.** [LEX-02](../LEX-02-programs-in-temp-hidden-and-user-writable-locations/) for which of these folders a program ran from, [LEX-03](../LEX-03-rare-programs-across-hosts/) for rarity, [LDE-04](../../TA0112-defense-impairment/LDE-04-hidden-masquerading-and-deleted-binaries/) for masquerading names and deleted binaries.

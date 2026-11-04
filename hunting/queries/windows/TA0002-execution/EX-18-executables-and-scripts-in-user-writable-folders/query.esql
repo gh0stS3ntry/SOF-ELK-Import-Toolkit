@@ -85,5 +85,8 @@ FROM filesystem-* METADATA _index
     name_hosts,
     file.inode,
     file.sequence_number
+// EDIT: one host at a time without losing name_hosts: keep every index of the case in FROM
+// (name_hosts is counted above, across all of them) and uncomment the next line
+// | WHERE _index == "filesystem-rd01"
 | SORT score DESC, event_time DESC
 | LIMIT 10000

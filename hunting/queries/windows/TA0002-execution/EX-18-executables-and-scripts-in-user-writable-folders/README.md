@@ -14,4 +14,6 @@
 
 **If it errors or looks empty.** `Unknown column [file.attributes.hidden]`: replace `file.attributes.hidden` with `false`. No rows: no `$MFT` was loaded for the host (check [TRI-01](../../00-triage/TRI-01-data-coverage/)). Entries under `PathUnknown` (orphans whose parent folder is gone) cannot be placed and are left out. On RD01 the query returns about 1,100 rows; about 1,000 of them are vendor software scored below zero.
 
+**Many hosts.** Run the query over every index of the case so `name_hosts` compares the hosts, and read it one host at a time: uncomment the `// | WHERE _index == "filesystem-rd01"` line near the end and put the host's index in it. The filter sits after `name_hosts` is counted, so the count still covers every host while the 10,000-row `LIMIT` applies to that host alone. `SOF-ELK_RunChecklists.py` does this by itself: when the query fills its `LIMIT` for several hosts, it runs it again once per host.
+
 **Next.** For each lead, [EX-15](../EX-15-execution-evidence-pivot/) shows whether and when it ran; [EX-10](../EX-10-amcache-long-tail/), [EX-11](../EX-11-shimcache-long-tail/) and [EX-13](../EX-13-prefetch-rare-executables/) show execution by rarity; sort `filesystem-*` around `event_time` for what arrived with it.
