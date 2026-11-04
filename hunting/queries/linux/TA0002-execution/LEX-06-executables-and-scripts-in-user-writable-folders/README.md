@@ -1,0 +1,17 @@
+# LEX-06 Executables and scripts in user-writable and world-writable folders
+
+| | |
+|---|---|
+| Tactic | TA0002 Execution |
+| ATT&CK | T1204.002 Malicious File, T1105 Ingress Tool Transfer, T1036.005 Match Legitimate Name or Location, T1059.004 Unix Shell |
+| Indexes | `bodyfile-*` |
+| Needs | bodyfile-* |
+| Applies to | every Linux host |
+
+**What it finds.** One row per file (not per folder, unlike [LEX-02](../LEX-02-programs-in-temp-hidden-and-user-writable-locations/)) for every ELF file and script in a folder an unprivileged user can write to: `/tmp`, `/var/tmp`, `/dev/shm`, `/run/shm`, `/run/lock`, `/var/lock`, `/var/crash`, `/run/user/<uid>`, `/home/*` (with the desktop Trash called out), any folder the bodyfile shows as world-writable (`drwxrwxrwx`, sticky or not), and any folder owned by a regular account (uid 1000 or above, not `nobody`), such as an application or upload folder under `/opt`, `/srv` or `/mnt`. Files that are themselves writable by everyone are listed wherever they are, because anyone can replace them. A bodyfile has no file contents, so scripts and Windows programs are recognised by extension (`.sh`, `.py`, `.pl`, `.rb`, `.php`, `.lua`, `.js`, `.ps1`, `.exe`, `.dll`, `.bat` and similar), shared objects and kernel modules by `.so`/`.ko`, and ELF binaries and extensionless `#!` scripts by their execute bit. Documents, archives and images with an execute bit (common after a copy from Windows or a VM share) are left out.
+
+**Reading the output.** Highest `score` first. Points for a temporary folder, a world-writable folder or file, setuid or setgid, the execute bit, a hidden name, a deleted entry, a name seen on one host only, and the Trash. Files under language package folders, virtual environments and editor extensions (`site-packages`, `dist-packages`, `node_modules`, `venv`, `.cargo`, `.vscode-server` and similar) lose 3 points and sort to the bottom; they are not removed, because `.pth` files and planted modules are a known persistence trick. `file.mtime` is the last content change; `file.ctime` moves when a file is copied in, extracted with its original time or `touch`ed, so a `ctime` far after `mtime` marks an archive extract or timestomping (see [LDE-03](../../TA0112-defense-impairment/LDE-03-timestomping-and-clock-changes/)). Compare `file.hash.*` (present for files UAC hashed) across hosts and with threat intelligence. `/root` and web roots are not user-writable and are not listed here: [LEX-02](../LEX-02-programs-in-temp-hidden-and-user-writable-locations/) and [LPE-07](../../TA0003-persistence/LPE-07-web-shells-files-and-requests/) cover them.
+
+**If it errors or looks empty.** `Unknown column`: no `bodyfile-*` index exists for the case. No rows: none of the folders holds a program, which is rare on a host with user accounts. On the Kali UAC sample the query returns about 3,800 rows, about 2,700 of them Python packages in `~/.local` scored below zero; the top rows are a setuid `bash` in an NFS payload folder and exploit scripts and `libhax.so` in the Trash.
+
+**Next.** [LEX-02](../LEX-02-programs-in-temp-hidden-and-user-writable-locations/) for which of these folders a program ran from, [LEX-03](../LEX-03-rare-programs-across-hosts/) for rarity, [LDE-04](../../TA0112-defense-impairment/LDE-04-hidden-masquerading-and-deleted-binaries/) for masquerading names and deleted binaries.

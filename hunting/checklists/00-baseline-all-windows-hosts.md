@@ -49,7 +49,8 @@ Run this on every host before its role checklist. Sections 1 and 2 tell you what
 | 5.4 | Execution artifacts by rarity | [EX-10](../queries/windows/TA0002-execution/EX-10-amcache-long-tail/), [EX-11](../queries/windows/TA0002-execution/EX-11-shimcache-long-tail/), [EX-12](../queries/windows/TA0002-execution/EX-12-srum-long-tail/), [EX-13](../queries/windows/TA0002-execution/EX-13-prefetch-rare-executables/) | 2.1.1 | Executables on one host only, in user-writable folders, with tool-like names. These work without any event logs. |
 | 5.5 | .NET loaded by unusual processes | [EX-14](../queries/windows/TA0002-execution/EX-14-clr-usage-unusual-hosts/) | 2.1.1 | In-memory .NET tooling (Cobalt Strike `execute-assembly`, SharpHound, Rubeus). |
 | 5.6 | Masquerading binaries | [DE-09](../queries/windows/TA0112-defense-impairment/DE-09-masquerading-system-binaries/) | 2.1.10 | `svchost.exe` outside System32, look-alike names. |
-| 5.7 | Every artifact for a named file (pivot) | [EX-15](../queries/windows/TA0002-execution/EX-15-execution-evidence-pivot/) | 2.1.1 | Use with each tool name found above to date its first and last run. |
+| 5.7 | Executables and scripts in user-writable and world-writable folders | [EX-18](../queries/windows/TA0002-execution/EX-18-executables-and-scripts-in-user-writable-folders/) | 2.1.1, 2.1.4 | PE files and scripts in profiles (`AppData`, `Temp`, `Downloads`), `\Users\Public`, `\ProgramData`, `\Windows\Temp`, writable System32 subfolders, the Recycle Bin and drive-root folders like `C:\temp`. Loose files in `AppData` or `ProgramData`, double extensions, random names, scripts outside vendor folders. Works from the `$MFT` alone, whether or not the file ever ran. |
+| 5.8 | Every artifact for a named file (pivot) | [EX-15](../queries/windows/TA0002-execution/EX-15-execution-evidence-pivot/) | 2.1.1 | Use with each tool name found above to date its first and last run. |
 
 ## 6. Persistence
 

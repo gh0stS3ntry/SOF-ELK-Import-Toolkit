@@ -317,6 +317,18 @@ class UnitTest(unittest.TestCase):
         self.assertTrue(any(ref.startswith("Baseline: all Linux hosts 7.")
                             for ref in baseline["LEX-05"].refs))
 
+    def test_writable_folder_checks_are_in_both_baselines(self):
+        windows = r.build_plan([r.WINDOWS_BASELINE])
+        linux = r.build_plan([r.LINUX_BASELINE])
+        self.assertIn("EX-18", windows)
+        self.assertIn("LEX-06", linux)
+        self.assertTrue(any(ref.endswith(" 5.7") for ref in windows["EX-18"].refs))
+        self.assertTrue(any(ref == "Baseline: all Linux hosts 3.4" for ref in linux["LEX-06"].refs))
+        # both list one row per file and keep _index, so their rows go to the right host
+        for plan, qid in ((windows, "EX-18"), (linux, "LEX-06")):
+            text = r.build_query(plan[qid].query, ["x-a", "x-b"], ["x-a"])
+            self.assertIn("    _index,\n", text)
+
     def test_build_query(self):
         query = r.load_query(r.QUERIES / "windows" / "00-triage" / "TRI-05-installed-software")
         text = r.build_query(query, ["amcache-rd01", "amcache-ws-02"], ["amcache-rd01"])
