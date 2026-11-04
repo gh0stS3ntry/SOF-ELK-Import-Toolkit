@@ -86,5 +86,8 @@ FROM bodyfile-* METADATA _index
     file.hash.sha256,
     name_hosts,
     file.inode
+// EDIT: one host at a time without losing name_hosts: keep every index of the case in FROM
+// (name_hosts is counted above, across all of them) and uncomment the next line
+// | WHERE _index == "bodyfile-kali"
 | SORT score DESC, file.mtime DESC
 | LIMIT 10000

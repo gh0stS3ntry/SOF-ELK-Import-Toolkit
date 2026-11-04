@@ -21,7 +21,9 @@ What it does:
    filter, and each result row is routed to the host(s) it belongs to, by its _index,
    source_indices or indexes column, or by host.name. Queries that return _index also get
    `| WHERE _index IN (...)` before their final LIMIT, so hosts that did not ask for the
-   query do not use up its LIMIT. Pivot queries (EX-15, C2-09), which hold example values
+   query do not use up its LIMIT; when such a query still fills its LIMIT for several hosts,
+   it is run again once per host (FROM unchanged, so rarity across hosts still holds), so
+   each host gets the full LIMIT. Pivot queries (EX-15, C2-09), which hold example values
    from another engagement, are skipped unless --include-pivots is given.
 5. Writes <output>/<host>/<category>/<Query_ID>_<host>.csv, where <category> is the
    query's tactic folder in the pack (00-triage, TA0002-execution, ...).
@@ -821,61 +823,97 @@ def run_group(client, case, targets, peers, out_dir, timeline, summary, args, to
             print(f"{prefix} no data ({', '.join(query.families)})")
             continue
         from_idx = sorted(i for t in peers for f in query.families for i in t.indexes.get(f, []))
-        keep = sorted(i for t in runnable for f in query.families for i in t.indexes.get(f, []))
-        text = build_query(query, from_idx, keep if (query.keeps_index and keep != from_idx) else None,
-                           args.since)
-        log.debug("query %s for %s:\n%s", qid, ", ".join(t.name for t in runnable), text,
-                  extra={"file_only": True})
-        started = time.monotonic()
-        status, payload = run_esql(client, text, case)
-        seconds = f"{time.monotonic() - started:.1f}"
-        if status >= 300 or not isinstance(payload, dict) or "columns" not in payload:
-            message = error_text(payload)
-            log.error("%s failed: HTTP %s: %s", qid, status, message)
-            for t in runnable:
-                record(t, query, "error", seconds=seconds, error=f"HTTP {status}: {message}")
-            print(f"{prefix} ERROR HTTP {status}: {message[:160]}")
-            continue
 
-        columns = payload.get("columns") or []
-        values = payload.get("values") or []
-        partial = bool(payload.get("is_partial"))
-        del payload
-        names = [c.get("name", "") for c in columns]
-        date_cols = [i for i, c in enumerate(columns) if c.get("type") in ("date", "date_nanos")]
-        in_timeline = bool(date_cols) and not query.coverage and qid not in args.timeline_exclude
-        router = RowRouter(columns, runnable)
-        outputs = {}
-        try:
+        def target_indexes(group):
+            return sorted(i for t in group for f in query.families for i in t.indexes.get(f, []))
+
+        def execute(group):
+            """Run the query for these targets; returns (rows per target, truncated) or None on error.
+
+            FROM always reads every peer's indexes (rarity across the case); rows are cut to the
+            group's own indexes with `| WHERE _index IN (...)` when the query keeps _index.
+            """
+            keep = target_indexes(group)
+            text = build_query(query, from_idx, keep if (query.keeps_index and keep != from_idx) else None,
+                               args.since)
+            log.debug("query %s for %s:\n%s", qid, ", ".join(t.name for t in group), text,
+                      extra={"file_only": True})
+            started = time.monotonic()
+            status, payload = run_esql(client, text, case)
+            seconds = f"{time.monotonic() - started:.1f}"
+            if status >= 300 or not isinstance(payload, dict) or "columns" not in payload:
+                message = error_text(payload)
+                log.error("%s failed: HTTP %s: %s", qid, status, message)
+                for t in group:
+                    record(t, query, "error", seconds=seconds, error=f"HTTP {status}: {message}")
+                print(f"{prefix} ERROR HTTP {status}: {message[:160]}")
+                return None
+            columns = payload.get("columns") or []
+            values = payload.get("values") or []
+            partial = bool(payload.get("is_partial"))
+            del payload
+            names = [c.get("name", "") for c in columns]
+            date_cols = [i for i, c in enumerate(columns) if c.get("type") in ("date", "date_nanos")]
+            in_timeline = bool(date_cols) and not query.coverage and qid not in args.timeline_exclude
+            truncated = partial or bool(query.limit and len(values) >= query.limit)
+            return columns, values, names, date_cols, in_timeline, truncated, seconds
+
+        def write(group, result):
+            columns, values, names, date_cols, in_timeline, truncated, seconds = result
+            router = RowRouter(columns, group)
+            outputs = {}
+            try:
+                for t in group:
+                    rel = Path(t.name) / query.category / f"{qid}_{t.name}.csv"
+                    path = out_dir / rel
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    fh = path.open("w", newline="", encoding="utf-8")
+                    writer = csv.writer(fh)
+                    writer.writerow(names)
+                    outputs[t.key] = [fh, writer, 0, 0, rel.as_posix()]
+                for row in values:
+                    for t in router.owners(row):
+                        out = outputs[t.key]
+                        out[1].writerow([cell(v) for v in row])
+                        out[2] += 1
+                        if in_timeline:
+                            out[3] += timeline.add_row(t, plans[t.key][qid], names, date_cols, row, out[4])
+            finally:
+                for out in outputs.values():
+                    out[0].close()
+            parts = []
+            for t in group:
+                _fh, _w, rows, _events, rel = outputs[t.key]
+                record(t, query, "ok" if rows else "empty", rows=rows, file=rel, seconds=seconds,
+                       truncated="yes" if truncated else "",
+                       error="case-wide result (rows are not tied to one host)" if router.case_wide else "")
+                parts.append(f"{t.name}: {rows}")
+            return parts
+
+        result = execute(runnable)
+        if result is None:
+            continue
+        # A query that keeps _index and fills its LIMIT for several hosts is run again once per
+        # host: FROM still reads every host of the case, so rarity columns (name_hosts,
+        # host_count...) keep comparing the hosts, but each host gets its own LIMIT of rows.
+        if result[5] and query.keeps_index and len(runnable) > 1:
+            print(f"{prefix} {len(result[1]):>6} row(s) hit the LIMIT for {len(runnable)} hosts; "
+                  "running it again once per host")
+            log.info("%s hit its LIMIT for %d hosts; re-running per host", qid, len(runnable))
+            del result
             for t in runnable:
-                rel = Path(t.name) / query.category / f"{qid}_{t.name}.csv"
-                path = out_dir / rel
-                path.parent.mkdir(parents=True, exist_ok=True)
-                fh = path.open("w", newline="", encoding="utf-8")
-                writer = csv.writer(fh)
-                writer.writerow(names)
-                outputs[t.key] = [fh, writer, 0, 0, rel.as_posix()]
-            for row in values:
-                for t in router.owners(row):
-                    out = outputs[t.key]
-                    out[1].writerow([cell(v) for v in row])
-                    out[2] += 1
-                    if in_timeline:
-                        out[3] += timeline.add_row(t, plans[t.key][qid], names, date_cols, row, out[4])
-        finally:
-            for out in outputs.values():
-                out[0].close()
-        truncated = partial or bool(query.limit and len(values) >= query.limit)
-        parts = []
-        for t in runnable:
-            _fh, _w, rows, events, rel = outputs[t.key]
-            record(t, query, "ok" if rows else "empty", rows=rows, file=rel, seconds=seconds,
-                   truncated="yes" if truncated else "",
-                   error="case-wide result (rows are not tied to one host)" if router.case_wide else "")
-            parts.append(f"{t.name}: {rows}")
-        note = "  (hit the query LIMIT; more rows exist)" if truncated else ""
-        print(f"{prefix} {len(values):>6} row(s) in {seconds}s -> {', '.join(parts)}{note}")
-        del values
+                one = execute([t])
+                if one is None:
+                    continue
+                parts = write([t], one)
+                note = "  (hit the query LIMIT; more rows exist)" if one[5] else ""
+                print(f"{prefix} {len(one[1]):>6} row(s) in {one[6]}s -> {', '.join(parts)}{note}")
+                del one
+            continue
+        parts = write(runnable, result)
+        note = "  (hit the query LIMIT; more rows exist)" if result[5] else ""
+        print(f"{prefix} {len(result[1]):>6} row(s) in {result[6]}s -> {', '.join(parts)}{note}")
+        del result
 
 
 def parse_role_args(values):
