@@ -10,7 +10,14 @@ FROM bodyfile-*, logstash-*, auditd-*, linuxconfig-* METADATA _index
     AND NOT STARTS_WITH(lp, "/usr/") AND NOT STARTS_WITH(lp, "/var/lib/") AND NOT lp LIKE "*/site-packages/*" AND NOT lp LIKE "*/node_modules/*"
     AND NOT lp LIKE "*/.cache/*" AND NOT lp LIKE "*/.git/*" AND NOT lp LIKE "*/go/pkg/*" AND NOT lp LIKE "*/.cargo/*"
 | EVAL is_cmd = (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") OR (STARTS_WITH(event.dataset, "linux.") AND COALESCE(linuxconfig.init.kind, "") != "init.d"))
-    AND text RLIKE ".*(openssl +(enc|aes|rsautl|pkeyutl) +.*(-e|-encrypt|-in)|gpg +.*(-c|--symmetric|--encrypt|-e )|ccrypt|aescrypt|7z +a +.*-p|zip +.*(-p|-e|--encrypt)|for +.* in .*(openssl|gpg)|find +.*-exec +.*(openssl|gpg)|vim-cmd +vmsvc/getallvms|esxcli +vm +process +list|chattr +-i|encrypt|ransom|lockbit|babuk|gonnacry).*"
+    // keyword list and "X ... Y" pairs are separate patterns: one alternation holding several ".*" pairs is too complex to determinize
+    AND (text RLIKE ".*(ccrypt|aescrypt|vim-cmd +vmsvc/getallvms|esxcli +vm +process +list|chattr +-i|encrypt|ransom|lockbit|babuk|gonnacry).*"
+         OR text RLIKE ".*openssl +(enc|aes|rsautl|pkeyutl) +.*(-e|-encrypt|-in).*"
+         OR text RLIKE ".*gpg +.*(-c|--symmetric|--encrypt|-e ).*"
+         OR text RLIKE ".*7z +a +.*-p.*"
+         OR text RLIKE ".*zip +.*(-p|-e|--encrypt).*"
+         OR text RLIKE ".*for +.* in .*(openssl|gpg).*"
+         OR text RLIKE ".*find +.*-exec +.*(openssl|gpg).*")
 | WHERE is_file OR is_cmd
 | EVAL born = COALESCE(file.created, file.ctime)
 | EVAL is_note = is_file AND n RLIKE ".*[.](txt|html|hta|htm)"

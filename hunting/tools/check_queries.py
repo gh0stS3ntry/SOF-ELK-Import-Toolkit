@@ -13,7 +13,9 @@ It cannot run a query, but it catches the mistakes that cost the most time on a 
     family, so it still runs on a host without auditd, a web server or a browser; and every
     Linux query filters host.os.type == "linux";
   * RLIKE patterns that Lucene regex rejects or reads differently than intended
-    (\\d / \\s / \\w, unescaped & @ ~ # < >, ^ / $ anchors, bounded repetition after .*);
+    (\\d / \\s / \\w, unescaped & @ ~ # < > ", empty alternatives, a trailing '-' in a character
+    class, ^ / $ anchors, bounded repetition after .*). It cannot tell whether a pattern is too
+    complex to determinize: tools/LuceneRegexCheck.java compiles every pattern with Lucene itself;
   * LIKE patterns with a lone backslash (ES|QL LIKE uses backslash as its escape character);
   * every query folder has a README.md, every query is in the catalog in hunting/README.md,
     every query ID a checklist names exists, and relative links in the pack's Markdown resolve.
@@ -273,14 +275,21 @@ def check_rlike(pattern, where, problems):
             escaped = True
             continue
         if in_class:
+            if ch == "-" and pattern[i + 1:i + 2] == "]" and i > class_start:
+                problems.append(("error", f"{where}: '-]' in an RLIKE character class is read by Lucene as a "
+                                          "range ending at ']'; escape the dash (\\\\-) or put it first"))
             if ch == "]":
                 in_class = False
             continue
         if ch == "[":
             in_class = True
+            class_start = i + 2 if pattern[i + 1:i + 2] == "^" else i + 1
             continue
-        if ch in "&@~#<>":
+        if ch in "&@~#<>\"":
             problems.append(("error", f"{where}: unescaped '{ch}' in RLIKE is a Lucene operator; use [{ch}]"))
+        if ch == "|" and (pattern[i + 1:i + 2] in ("|", ")", "") or pattern[i - 1:i] in ("(", "")):
+            problems.append(("error", f"{where}: empty alternative in RLIKE; Lucene reads the next ')' as a "
+                                      "literal (invalid regex). Use (x)? for an optional part"))
         if ch in "^$":
             problems.append(("warning", f"{where}: '{ch}' is a literal in Lucene RLIKE (patterns are always anchored)"))
 

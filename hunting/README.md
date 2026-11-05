@@ -82,6 +82,13 @@ npm install --prefix /tmp/esql @elastic/esql
 node hunting/tools/parse_queries.mjs /tmp/esql      # every query.esql under hunting/queries
 ```
 
+The grammar check does not compile regular expressions. Elasticsearch compiles each RLIKE and LIKE pattern with Lucene and refuses the query when a pattern is invalid or "too complex to determinize" (usually one alternation holding several `.*` pairs; split those into separate RLIKE or LIKE tests joined with `OR`, which ES|QL compiles one by one). To compile every pattern of the pack the same way, with Java 11 or later:
+
+```
+curl -sSfO https://repo1.maven.org/maven2/org/apache/lucene/lucene-core/10.2.2/lucene-core-10.2.2.jar
+java -cp lucene-core-10.2.2.jar hunting/tools/LuceneRegexCheck.java hunting/queries
+```
+
 ## Checklists
 
 | Checklist | Use for |
