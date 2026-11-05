@@ -34,7 +34,7 @@ FROM evtxlogs-* METADATA _index
     null)
 | WHERE kind IS NOT NULL
 | EVAL user = COALESCE(TO_STRING(winlog.payload.event_data.SubjectUserName), TO_STRING(winlog.payload.event_data.User), TO_STRING(winlog.user.name), "")
-| EVAL detail = SUBSTRING(TRIM(COALESCE(NULLIF(TRIM(txt), ""), TO_STRING(message), "")), 1, 600)
+| EVAL detail = SUBSTRING(TRIM(CASE(TRIM(txt) != "", txt, COALESCE(TO_STRING(message), ""))), 1, 600)
 | EVAL f_cmd = NOT (ch IN ("Application", "Microsoft-Windows-Backup"))
 | KEEP
     _index,

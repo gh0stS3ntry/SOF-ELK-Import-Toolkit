@@ -2,7 +2,9 @@
 // Tactic: TA0112 Defense Impairment | ATT&CK: T1036.005, T1036.003, T1036.004
 // Indexes: amcache-*, shimcache-*, prefetch-* | Needs: any of the three
 FROM amcache-*, shimcache-*, prefetch-* METADATA _index
-| EVAL exe_path = TO_LOWER(COALESCE(file.path, file.target.path, ""))
+// file.path is keyword in amcache/shimcache but text+keyword in prefetch (SOF-ELK's native
+// mapping); TO_STRING lets ES|QL read both instead of rejecting the field as ambiguous
+| EVAL exe_path = TO_LOWER(COALESCE(TO_STRING(file.path), TO_STRING(file.target.path), ""))
 | WHERE exe_path LIKE "*.exe" AND exe_path LIKE "*\\\\*"
 | EVAL exe_name = REPLACE(exe_path, "^.*\\\\", "")
 | EVAL exe_dir = REPLACE(REPLACE(exe_path, "\\\\[^\\\\]*$", ""), "^(\\\\device\\\\harddiskvolume[0-9]+|[a-z]:|\\\\volume[{][^}]*[}])", "")
