@@ -6,7 +6,18 @@ FROM logstash-*, auditd-*, linuxconfig-*, packages-*, bodyfile-* METADATA _index
 | EVAL text = TO_LOWER(COALESCE(process.command_line, linuxconfig.line, ""))
 | EVAL lp = TO_LOWER(COALESCE(file.path, ""))
 | EVAL is_cmd = (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") OR STARTS_WITH(event.dataset, "linux.") OR event.dataset IN ("packages.apt", "packages.dnf_history"))
-    AND text RLIKE ".*(([ /;|(]|)rclone +(copy|sync|move|copyto|moveto)|curl .*(-t |--upload-file|-f |--form|--data-binary +[@]|-d +[@]|--data +[@])|wget .*--post-(file|data)|(scp|rsync|sftp) .*[^ ]+:[^ ]*|(nc|ncat|netcat) .*[<]|/dev/tcp/.*[<]|aws +s3 +(cp|sync|mv)|gsutil +(-m +)?(cp|rsync)|gcloud +storage +cp|az +storage +(blob|file) +upload|azcopy +(copy|cp|sync)|mega-?put|megacmd|megatools|transfer[.]sh|dropbox_uploader|gdrive +upload|lftp .*(put|mirror +-r)|smbclient .*put|s3cmd +(put|sync)|restic .*backup|rsync .*--remove-source-files|openssl +s_client .*[<]).*" AND NOT text RLIKE "(.*/)?(apt|apt-get|apt-mark|apt-cache|aptitude|dpkg|dnf|yum|zypper|apk|snap|pip|pip3|pipx|gem|npm)( .*)?"
+    // keyword list and "X ... Y" pairs are separate patterns: one alternation holding several ".*" pairs is too complex to determinize
+    AND (text RLIKE ".*(aws +s3 +(cp|sync|mv)|gsutil +(-m +)?(cp|rsync)|gcloud +storage +cp|az +storage +(blob|file) +upload|azcopy +(copy|cp|sync)|mega-?put|megacmd|megatools|transfer[.]sh|dropbox_uploader|gdrive +upload|s3cmd +(put|sync)).*"
+         OR text RLIKE "(.*[ /;|(])?rclone +(copy|sync|move|copyto|moveto).*"
+         OR text RLIKE ".*curl .*(-t |--upload-file|-f |--form|--data-binary +[@]|-d +[@]|--data +[@]).*"
+         OR text RLIKE ".*wget .*--post-(file|data).*"
+         OR text RLIKE ".*(scp|rsync|sftp) .*[^ ]:.*"
+         OR text RLIKE ".*((nc|ncat|netcat|openssl +s_client) |/dev/tcp/).*[<].*"
+         OR text RLIKE ".*lftp .*(put|mirror +-r).*"
+         OR text LIKE "*smbclient *put*"
+         OR text LIKE "*restic *backup*"
+         OR text LIKE "*rsync *--remove-source-files*")
+    AND NOT text RLIKE "(.*/)?(apt|apt-get|apt-mark|apt-cache|aptitude|dpkg|dnf|yum|zypper|apk|snap|pip|pip3|pipx|gem|npm)( .*)?"
 | EVAL is_pkg = STARTS_WITH(event.dataset, "packages.") AND event.action IN ("install", "installed", "reinstall")
     AND package.name RLIKE "(rclone|megatools|megacmd|s3cmd|awscli|aws-cli|azure-cli|google-cloud-cli|google-cloud-sdk|lftp|restic|rclone-browser|croc|magic-wormhole)"
 | EVAL is_file = event.dataset == "bodyfile" AND COALESCE(file.type, "file") == "file"

@@ -7,7 +7,14 @@ FROM logstash-*, auditd-*, linuxconfig-*, bodyfile-* METADATA _index
 | EVAL m = TO_LOWER(COALESCE(message, ""))
 | EVAL lp = TO_LOWER(COALESCE(file.path, ""))
 | EVAL n = TO_LOWER(COALESCE(file.name, ""))
-| EVAL is_cmd = (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") OR (STARTS_WITH(event.dataset, "linux.") AND COALESCE(linuxconfig.init.kind, "") != "init.d")) AND text RLIKE ".*(history +-[cw]|history +-d|unset +histfile|histfile=/dev/null|histsize=0|histfilesize=0|set +[+]o +history|ln +-[a-z]*s[a-z]* +/dev/null +.*history|(rm|shred|truncate|srm|wipe|unlink) .*/var/log/|[>] */var/log/|cat +/dev/null +[>] *.*(/var/log/|history)|sed +-i .*/var/log/|journalctl +.*--(vacuum|rotate)|/var/log/journal|utmpdump|logrotate +-f|systemctl +(stop|disable|mask|kill) +(rsyslog|syslog-ng|systemd-journald|auditd|syslog)|service +(rsyslog|auditd|syslog) +stop|auditctl +(-d|-e +0)|chattr +[+]a +/var/log|wtmp|btmp|lastlog).*"
+| EVAL is_cmd = (event.action IN ("sudo-command", "pkexec-command", "cron-command", "executed", "ran-command") OR (STARTS_WITH(event.dataset, "linux.") AND COALESCE(linuxconfig.init.kind, "") != "init.d"))
+    // keyword list and "X ... Y" pairs are separate patterns: one alternation holding several ".*" pairs is too complex to determinize
+    AND (text RLIKE ".*(history +-[cw]|history +-d|unset +histfile|histfile=/dev/null|histsize=0|histfilesize=0|set +[+]o +history|[>] */var/log/|/var/log/journal|utmpdump|logrotate +-f|systemctl +(stop|disable|mask|kill) +(rsyslog|syslog-ng|systemd-journald|auditd|syslog)|service +(rsyslog|auditd|syslog) +stop|auditctl +(-d|-e +0)|chattr +[+]a +/var/log|wtmp|btmp|lastlog).*"
+         OR text RLIKE ".*ln +-[a-z]*s[a-z]* +/dev/null +.*history.*"
+         OR text RLIKE ".*(rm|shred|truncate|srm|wipe|unlink) .*/var/log/.*"
+         OR text RLIKE ".*cat +/dev/null +[>] *.*(/var/log/|history).*"
+         OR text RLIKE ".*sed +-i .*/var/log/.*"
+         OR text RLIKE ".*journalctl +.*--(vacuum|rotate).*")
 | EVAL is_msg = event.dataset IN ("syslog.journal", "syslog.file")
     AND (m LIKE "*journal stopped*" OR m LIKE "*vacuuming done*" OR m LIKE "*deleted archived journal*" OR m LIKE "*exiting on signal*"
          OR (process.name IN ("rsyslogd", "syslog-ng", "auditd") AND (m LIKE "*exiting*" OR m LIKE "*stopped*" OR m LIKE "*shutdown*")))

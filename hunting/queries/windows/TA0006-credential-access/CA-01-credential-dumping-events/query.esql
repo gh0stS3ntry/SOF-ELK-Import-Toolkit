@@ -35,7 +35,13 @@ FROM evtxlogs-* METADATA _index
     AND NOT txt RLIKE ".*(kerberos|msv1_0|schannel|wdigest|tspkg|pku2u|cloudap|negotiate|negoexts|livessp|scecli|rassfm|credssp|credsspsvc|ntlm).*"
 | EVAL f_driver = ((ch == "Security" AND eid == "4697") OR (ch == "System" AND eid == "7045"))
     AND txt RLIKE ".*(mimidrv|mimikatz|dumpert|nanodump|physmem|winpmem|dumpit|kdmapper|gdrv|rtcore64|dbutil|iqvw64|procexp152|pmdump).*"
-| EVAL f_cmd_dump = txt RLIKE ".*(invoke-mimikatz|sekurlsa|lsadump|privilege::debug|kerberos::(ptt|golden|list)|minidumpwritedump|out-minidump|comsvcs[.]dll.*minidump|procdump.*lsass|get-process[ ]+lsass|ntds[.]dit|ntdsutil.*(ifm|create full)|diskshadow|vssadmin.*create|esentutl.*/vss|secretsdump|invoke-dcsync|dumpcreds|nanodump|safetykatz|lazagne|invoke-kerberoast|invoke-powerdump|dpapi::|vault::|harddiskvolumeshadowcopy|reg(.exe)?[ ]+save[ ]+hklm.(sam|system|security)).*"
+// keyword list and "X ... Y" pairs are separate patterns: one alternation holding several ".*" pairs is too complex to determinize
+| EVAL f_cmd_dump = txt RLIKE ".*(invoke-mimikatz|sekurlsa|lsadump|privilege::debug|kerberos::(ptt|golden|list)|minidumpwritedump|out-minidump|get-process[ ]+lsass|ntds[.]dit|diskshadow|secretsdump|invoke-dcsync|dumpcreds|nanodump|safetykatz|lazagne|invoke-kerberoast|invoke-powerdump|dpapi::|vault::|harddiskvolumeshadowcopy|reg([.]exe)?[ ]+save[ ]+hklm.(sam|system|security)).*"
+    OR txt LIKE "*comsvcs.dll*minidump*"
+    OR txt LIKE "*procdump*lsass*"
+    OR txt RLIKE ".*ntdsutil.*(ifm|create full).*"
+    OR txt LIKE "*vssadmin*create*"
+    OR txt LIKE "*esentutl*/vss*"
 | EVAL f_ci_lsass = ch LIKE "*CodeIntegrity*" AND txt LIKE "*lsass*"
 | EVAL f_lsass_crash = ch == "Application" AND txt LIKE "*lsass.exe*"
 | EVAL f_sysmon_lsass = ch == "Microsoft-Windows-Sysmon/Operational" AND eid == "10" AND txt LIKE "*lsass*"

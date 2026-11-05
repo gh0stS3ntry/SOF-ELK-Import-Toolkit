@@ -9,7 +9,15 @@ FROM logstash-*, auditd-*, linuxconfig-*, packages-*, bodyfile-* METADATA _index
 | EVAL n = TO_LOWER(COALESCE(file.name, ""))
 // journal rows: the command line of every process that logged (openvpn, ssh, socat...) as well as sudo and cron
 | EVAL is_cmd = (event.dataset IN ("syslog.journal", "syslog.file", "auditd.log") OR (STARTS_WITH(event.dataset, "linux.") AND COALESCE(linuxconfig.init.kind, "") != "init.d"))
-    AND (text RLIKE ".*(/dev/tcp/|/dev/udp/|([ /;|(]|)(nc|ncat|netcat|nc[.]traditional|nc[.]openbsd) .*(-e|-c|--exec|--sh-exec|-l)|(ba|z|da)?sh +-i|socat .*(exec|pty|system|tcp)|mkfifo|telnet .*[|]|python[0-9.]* .*(socket|pty[.]spawn)|perl .*socket|php .*fsockopen|ruby .*(socket|tcpsocket)|ssh .*(-r |-l |-d |-w |-n |-r[0-9]|-l[0-9]|-d[0-9])|autossh|sshuttle|chisel|ligolo|gost |frpc|frps|ngrok|cloudflared +tunnel|iodine|dnscat|ptunnel|stunnel|proxychains|revsocks|rpivot|pivotnacci|meterpreter|msfconsole|msfvenom|sliver|havoc|mythic|pwncat|villain|openvpn|wg-quick|[ /]tor( .*)?|torsocks|xmrig).*" OR flags LIKE "*reverse_shell*" OR flags LIKE "*dev_tcp*")
+    // keyword list and "X ... Y" pairs are separate patterns: one alternation holding several ".*" pairs is too complex to determinize
+    AND (text RLIKE ".*(/dev/tcp/|/dev/udp/|(ba|z|da)?sh +-i|mkfifo|autossh|sshuttle|chisel|ligolo|gost |frpc|frps|ngrok|cloudflared +tunnel|iodine|dnscat|ptunnel|stunnel|proxychains|revsocks|rpivot|pivotnacci|meterpreter|msfconsole|msfvenom|sliver|havoc|mythic|pwncat|villain|openvpn|wg-quick|[ /]tor|torsocks|xmrig).*"
+         OR text RLIKE ".*socat .*(exec|pty|system|tcp).*"
+         OR text RLIKE ".*telnet .*[|].*"
+         OR text RLIKE ".*(python[0-9.]*|perl|ruby) .*(socket|pty[.]spawn).*"
+         OR text LIKE "*php *fsockopen*"
+         OR text RLIKE ".*ssh .*(-r |-l |-d |-w |-n |-r[0-9]|-l[0-9]|-d[0-9]).*"
+         OR text RLIKE "(.*[ /;|(])?(nc|ncat|netcat|nc[.]traditional|nc[.]openbsd) .*(-e|-c|--exec|--sh-exec|-l).*"
+         OR flags LIKE "*reverse_shell*" OR flags LIKE "*dev_tcp*")
     AND NOT text RLIKE "(.*/)?(apt|apt-get|apt-mark|apt-cache|aptitude|dpkg|dnf|yum|zypper|apk|snap|pip|pip3|pipx|gem|npm)( .*)?"
 | EVAL is_pkg = STARTS_WITH(event.dataset, "packages.") AND event.action IN ("install", "reinstall")
     AND package.name RLIKE "(socat|ncat|netcat.*|proxychains.*|chisel|ligolo.*|sshuttle|autossh|iodine|dnscat2|ptunnel.*|stunnel.*|tor|torsocks|ngrok|cloudflared|frp|gost|openvpn|wireguard.*|pwncat.*|metasploit-framework|sliver|havoc)"

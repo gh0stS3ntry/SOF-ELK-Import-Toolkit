@@ -16,7 +16,7 @@ FROM evtxlogs-* METADATA _index
 // the Microsoft script modules that define these cmdlets match too; drop their definitions
 | WHERE NOT cmd LIKE "*function register-scheduledtask*"
 | EVAL f_remote = cmd RLIKE ".*(/s [a-z0-9.\\-]+|-cimsession|-computername).*"
-| EVAL f_system = cmd RLIKE ".*(/ru (\"?system\"?|\"?nt authority)|-user (\"?system|\"?nt authority)|/rl highest|-runlevel highest).*"
+| EVAL f_system = cmd RLIKE ".*(/ru ([\"]?system[\"]?|[\"]?nt authority)|-user ([\"]?system|[\"]?nt authority)|/rl highest|-runlevel highest).*"
 | EVAL f_lolbin = cmd RLIKE ".*/tr .*(powershell|pwsh|cmd|mshta|wscript|cscript|rundll32|regsvr32|certutil|bitsadmin).*"
     OR cmd RLIKE ".*-execute .*(powershell|pwsh|cmd|mshta|wscript|cscript|rundll32|regsvr32).*"
 | EVAL f_userpath = cmd RLIKE ".*\\\\(users\\\\public|programdata|perflogs|appdata|temp|downloads)\\\\.*"
