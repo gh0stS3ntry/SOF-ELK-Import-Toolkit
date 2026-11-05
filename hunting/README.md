@@ -286,7 +286,7 @@ The Windows queries come first, then [AWS](#aws) and [Linux](#linux).
 | [DE-06](queries/windows/TA0112-defense-impairment/DE-06-firewall-rules-registry/) | Inbound allow rules and odd programs in the firewall rule list (registry) | `registry-*` | all; servers first |
 | [DE-07](queries/windows/TA0112-defense-impairment/DE-07-deleted-executables-usn/) | Executables and scripts deleted (USN `$J`) | `filesystem-*` | all |
 | [DE-08](queries/windows/TA0112-defense-impairment/DE-08-recycle-bin-deletions/) | Files sent to the Recycle Bin | `recyclebin-*` | end-user workstation; any host with interactive logons |
-| [DE-09](queries/windows/TA0112-defense-impairment/DE-09-masquerading-system-binaries/) | Masquerading: Windows binary names in the wrong folder, and look-alike names | `amcache-*`, `shimcache-*`, `prefetch-*` | all |
+| [DE-09](queries/windows/TA0112-defense-impairment/DE-09-masquerading-system-binaries/) | Masquerading: Windows binary names in the wrong folder, and look-alike names | `amcache-*`, `shimcache-*`, `filesystem-*` | all |
 | [DE-10](queries/windows/TA0112-defense-impairment/DE-10-audit-policy-and-time-changes/) | Audit policy reduced, system time changed | `evtxlogs-*` | all; domain controllers for policy changes pushed by GPO |
 
 ### AWS

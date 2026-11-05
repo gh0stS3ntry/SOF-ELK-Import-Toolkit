@@ -1,17 +1,24 @@
 // DE-09 | Masquerading: Windows binary names in the wrong folder, and look-alike names
 // Tactic: TA0112 Defense Impairment | ATT&CK: T1036.005, T1036.003, T1036.004
-// Indexes: amcache-*, shimcache-*, prefetch-* | Needs: any of the three
-FROM amcache-*, shimcache-*, prefetch-* METADATA _index
-// file.path is keyword in amcache/shimcache but text+keyword in prefetch (SOF-ELK's native
-// mapping); TO_STRING lets ES|QL read both instead of rejecting the field as ambiguous
-| EVAL exe_path = TO_LOWER(COALESCE(TO_STRING(file.path), TO_STRING(file.target.path), ""))
+// Indexes: amcache-*, shimcache-*, filesystem-* | Needs: any of the three ($MFT for filesystem-*)
+FROM amcache-*, shimcache-*, filesystem-* METADATA _index
+// file.path is keyword in amcache/shimcache but text+keyword in filesystem (SOF-ELK's native
+// mapping); TO_STRING lets ES|QL read both instead of rejecting the field as ambiguous.
+// $MFT paths are relative to the volume root (.\Windows\System32\svchost.exe); $J rows
+// carry no parent path, so they have no backslash and drop out below
+| EVAL exe_path = TO_LOWER(COALESCE(TO_STRING(file.path), ""))
 | WHERE exe_path LIKE "*.exe" AND exe_path LIKE "*\\\\*"
 | EVAL exe_name = REPLACE(exe_path, "^.*\\\\", "")
-| EVAL exe_dir = REPLACE(REPLACE(exe_path, "\\\\[^\\\\]*$", ""), "^(\\\\device\\\\harddiskvolume[0-9]+|[a-z]:|\\\\volume[{][^}]*[}])", "")
+| EVAL exe_dir = REPLACE(REPLACE(exe_path, "\\\\[^\\\\]*$", ""), "^(\\\\device\\\\harddiskvolume[0-9]+|[a-z]:|[.]|\\\\volume[{][^}]*[}])", "")
 | EVAL f_sysname = exe_name IN ("svchost.exe", "lsass.exe", "csrss.exe", "smss.exe", "services.exe", "winlogon.exe", "wininit.exe", "spoolsv.exe", "taskhostw.exe", "taskhost.exe", "rundll32.exe", "dllhost.exe", "conhost.exe", "lsm.exe", "lsaiso.exe", "sihost.exe", "ctfmon.exe", "fontdrvhost.exe", "dwm.exe", "searchindexer.exe", "wuauclt.exe", "wermgr.exe", "werfault.exe", "msiexec.exe", "regsvr32.exe", "mshta.exe", "cmd.exe", "powershell.exe", "wmiprvse.exe", "audiodg.exe", "userinit.exe", "taskmgr.exe", "notepad.exe", "certutil.exe", "schtasks.exe", "sc.exe", "net.exe", "net1.exe", "explorer.exe")
 | EVAL f_expected_dir = exe_dir RLIKE "\\\\windows(\\\\system32|\\\\syswow64|\\\\winsxs\\\\.*|\\\\servicing\\\\.*|\\\\softwaredistribution\\\\.*|\\\\systemapps\\\\.*|\\\\system32\\\\windowspowershell\\\\v1[.]0|\\\\syswow64\\\\windowspowershell\\\\v1[.]0|\\\\system32\\\\wbem|\\\\syswow64\\\\wbem|\\\\temp\\\\[^\\\\]+[.]tmp|\\\\uus\\\\.*)?"
     OR (exe_name == "explorer.exe" AND exe_dir RLIKE "\\\\windows")
     OR exe_dir RLIKE ".*\\\\([$]windows[.][~]bt|windows[.]old)(\\\\.*)?"
+    // $MFT: component store folders whose parent is gone (\PathUnknown\Directory with id ...)
+    OR exe_dir RLIKE ".*\\\\(amd64|wow64|x86|arm64)_microsoft-windows-[^\\\\]+(\\\\[fr])?"
+    // Windows 11 Notepad is a Store app with a per-user execution alias
+    OR (exe_name == "notepad.exe" AND exe_dir RLIKE "\\\\program files\\\\windowsapps\\\\microsoft[.]windowsnotepad_[^\\\\]+\\\\notepad")
+    OR (exe_name == "notepad.exe" AND exe_dir RLIKE "\\\\users\\\\[^\\\\]+\\\\appdata\\\\local\\\\microsoft\\\\windowsapps(\\\\microsoft[.]windowsnotepad_8wekyb3d8bbwe)?")
 | EVAL f_wrong_dir = f_sysname AND NOT f_expected_dir
 | EVAL f_lookalike = exe_name RLIKE "(scvhost|svchosts|svch0st|svhost|svchost32|svchosst|svchos|lsas|lssass|lsasss|isass|1sass|lsaas|csrs|cssrs|crss|smms|servics|service|winlogin|winlogon32|winiinit|spoolsvc|spools|taskhostt|taskhosts|rundl32|rundll|rundll64|dlhost|dllhst|conhst|expl0rer|explorar|explore|iexplorer|powershel|powershel1|cmd32|regsvr|msiexe|wmiprvse32|wmipsrv)[.]exe"
 | WHERE f_wrong_dir OR f_lookalike
@@ -21,8 +28,8 @@ FROM amcache-*, shimcache-*, prefetch-* METADATA _index
     artifacts = VALUES(artifact),
     sha1_values = VALUES(file.hash.sha1),
     products = VALUES(file.pe.product),
-    first_seen = MIN(COALESCE(amcache.file_key_last_write, file.mtime, @timestamp)),
-    last_seen = MAX(COALESCE(amcache.file_key_last_write, file.mtime, @timestamp)),
+    first_seen = MIN(COALESCE(amcache.file_key_last_write, file.mtime, file.stdinfo.created, @timestamp)),
+    last_seen = MAX(COALESCE(amcache.file_key_last_write, file.mtime, file.stdinfo.mtime, @timestamp)),
     source_indices = VALUES(_index)
   BY exe_name, exe_dir, f_wrong_dir, f_lookalike
 | EVAL score = CASE(f_lookalike, 4, 0) + CASE(f_wrong_dir, 3, 0)
