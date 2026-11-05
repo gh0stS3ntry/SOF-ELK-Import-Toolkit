@@ -53,6 +53,9 @@ INDICES = {
 QUERIES = []        # every /_query body received
 FAIL_IDS = {"TRI-02"}
 FULL_IDS = set()    # queries that fill their LIMIT whenever they read more than one index
+# query ID -> fields no index maps; the mock rejects the query (one field per answer, as ES
+# reports each problem it finds) until every one is stubbed after FROM
+MISSING = {}
 
 
 def case_match(d, query):
@@ -69,6 +72,11 @@ def esql_result(text):
     if keep:
         allowed = set(json.loads(f"[{keep.group(1)}]"))
         indexes = [i for i in indexes if i in allowed]
+    for name in MISSING.get(qid, ()):
+        if f"`{name}` = TO_STRING(NULL)" not in text:
+            return 400, {"error": {"type": "verification_exception",
+                                   "reason": f"Found 1 problem\nline 8:44: Unknown column [{name}], did you "
+                                             f"mean any of [winlog.payload.event_data.User]?"}}
     if qid in FAIL_IDS:
         return 400, {"error": {"type": "verification_exception",
                                "reason": f"Found 1 problem\nline 5:9: Unknown column [x] in {qid}"}}
@@ -299,6 +307,39 @@ class RunnerTest(unittest.TestCase):
         tri05 = [row for row in summary[1:] if row[3] == "TRI-05"]
         self.assertEqual(sorted(row[0] for row in tri05), ["RD01", "WS-02"])
         self.assertEqual({row[8] for row in tri05}, {""})  # neither host is truncated on its own
+
+    def test_unmapped_fields_are_read_as_empty(self):
+        MISSING["EX-02"] = ["winlog.payload.event_data.Image", "winlog.payload.event_data.Hashes"]
+        try:
+            code, output = self.run_main("--role", "RD01=windows-end-user", "--role", "WS-02=skip",
+                                         "--role", "kali=skip", "--no-aws")
+        finally:
+            MISSING.clear()
+        texts = [q["query"] for q in QUERIES if q["query"].startswith("// EX-02")]
+        self.assertEqual(len(texts), 3)                  # Image, then Hashes, then it runs
+        stub = ("| EVAL `winlog.payload.event_data.Hashes` = TO_STRING(NULL), "
+                "`winlog.payload.event_data.Image` = TO_STRING(NULL)")
+        lines = texts[-1].splitlines()
+        from_at = next(i for i, line in enumerate(lines) if line.startswith("FROM "))
+        self.assertEqual(lines[from_at + 1], stub)       # right after FROM, before any use
+        self.assertNotIn("TO_STRING(NULL)", texts[0])
+        summary = read_csv(self.out / f"{CASE}_run_summary.csv")
+        ex02 = next(row for row in summary[1:] if row[3] == "EX-02")
+        self.assertEqual(ex02[6], "ok")
+        self.assertIn("read as empty: winlog.payload.event_data.Hashes, winlog.payload.event_data.Image",
+                      ex02[12])
+        # an undotted unknown column (a typo in the pack's own EVAL names) still fails
+        tri02 = next(row for row in summary[1:] if row[3] == "TRI-02")
+        self.assertEqual(tri02[6], "error")
+        self.assertEqual(sum(q["query"].startswith("// TRI-02") for q in QUERIES), 1)
+
+    def test_unknown_columns(self):
+        msg = ("verification_exception: Found 2 problems\nline 9:33: Unknown column [winlog.payload.event_data.TaskContent],"
+               " did you mean any of [winlog.payload.event_data.TaskName]?\nline 9:83: Unknown column "
+               "[winlog.payload.event_data.TaskContentNew], did you mean [x]?\nline 1:1: Unknown column [tgt]")
+        self.assertEqual(r.unknown_columns(msg), {"winlog.payload.event_data.TaskContent",
+                                                  "winlog.payload.event_data.TaskContentNew"})
+        self.assertEqual(r.unknown_columns("parsing_exception: Unknown column [a.b]"), set())
 
     def test_dry_run_runs_nothing(self):
         code, output = self.run_main("--dry-run", "--role", "RD01=1", "--role", "WS-02=s", "--role", "kali=s")

@@ -29,8 +29,9 @@ The queries need Elasticsearch 9.x, because several use `INLINE STATS` and `STAT
 
 ## When a query errors
 
-- **`Unknown column [...]`.** ES|QL refuses a field that no index in `FROM` has. A query that reads several event sources (for example 4688, Sysmon 1 and 4104) fails if one of them was never loaded. The README's "If it errors" note says which term to replace with `null` or `""`. Removing an index family you did not load from `FROM` also works.
-- **Field with conflicting types.** If the same field is a keyword in one index and a date or number in another (for example after loading an old index made by the original importers), wrap it in `TO_STRING()` or reload the old index with the current importer. `file.update_timestamp` is one such field, and the pack avoids it.
+- **`Unknown column [...]`.** ES|QL refuses a field that no index in `FROM` has. A query that reads several event sources (for example 4688, Sysmon 1 and 4104) fails if one of them was never loaded. `SOF-ELK_RunChecklists.py` handles this by itself. When you run a query by hand in Kibana, add one line right after `FROM` for each field the error names, for example `` | EVAL `winlog.payload.event_data.Image` = TO_STRING(NULL) ``; the field is then read as empty and the rest of the query still runs. The README's "If it errors" note says which fields to expect. Removing an index family you did not load from `FROM` also works.
+- **`Unknown function [...]`.** The query calls a function ES|QL does not have (`NULLIF` is SQL, not ES|QL). `tools/check_queries.py` now rejects function names outside ES|QL's list.
+- **Field with conflicting types.** If the same field is a keyword in one index and a date or number in another (for example after loading an old index made by the original importers), wrap it in `TO_STRING()` or reload the old index with the current importer. `file.update_timestamp` is one such field, and the pack avoids it. `file.path` is `keyword` in the toolkit's template indexes (`amcache-*`, `shimcache-*`) but `text` with a `.keyword` sub-field in the native ones (`prefetch-*`, `lnkfiles-*`, `filesystem-*`), as in SOF-ELK; a query reading both must use `TO_STRING(file.path)`, and the checker enforces it.
 - **No rows.** Check [TRI-01](queries/windows/00-triage/TRI-01-data-coverage/) and [TRI-02](queries/windows/00-triage/TRI-02-event-log-coverage/) first: they list which artifact families, channels and event IDs each host actually has.
 
 ## Notes on the Windows data
@@ -285,7 +286,7 @@ The Windows queries come first, then [AWS](#aws) and [Linux](#linux).
 | [DE-06](queries/windows/TA0112-defense-impairment/DE-06-firewall-rules-registry/) | Inbound allow rules and odd programs in the firewall rule list (registry) | `registry-*` | all; servers first |
 | [DE-07](queries/windows/TA0112-defense-impairment/DE-07-deleted-executables-usn/) | Executables and scripts deleted (USN `$J`) | `filesystem-*` | all |
 | [DE-08](queries/windows/TA0112-defense-impairment/DE-08-recycle-bin-deletions/) | Files sent to the Recycle Bin | `recyclebin-*` | end-user workstation; any host with interactive logons |
-| [DE-09](queries/windows/TA0112-defense-impairment/DE-09-masquerading-system-binaries/) | Masquerading: Windows binary names in the wrong folder, and look-alike names | `amcache-*`, `shimcache-*`, `prefetch-*` | all |
+| [DE-09](queries/windows/TA0112-defense-impairment/DE-09-masquerading-system-binaries/) | Masquerading: Windows binary names in the wrong folder, and look-alike names | `amcache-*`, `shimcache-*`, `filesystem-*` | all |
 | [DE-10](queries/windows/TA0112-defense-impairment/DE-10-audit-policy-and-time-changes/) | Audit policy reduced, system time changed | `evtxlogs-*` | all; domain controllers for policy changes pushed by GPO |
 
 ### AWS

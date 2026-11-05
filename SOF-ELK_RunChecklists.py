@@ -24,7 +24,12 @@ What it does:
    query do not use up its LIMIT; when such a query still fills its LIMIT for several hosts,
    it is run again once per host (FROM unchanged, so rarity across hosts still holds), so
    each host gets the full LIMIT. Pivot queries (EX-15, C2-09), which hold example values
-   from another engagement, are skipped unless --include-pivots is given.
+   from another engagement, are skipped unless --include-pivots is given. A field that no
+   index in FROM maps (Sysmon fields on a host without Sysmon, WFP fields without "Audit
+   Filtering Platform Connection", process.executable without srum-*) makes ES|QL reject the
+   whole query with "Unknown column"; the runner then adds `| EVAL `field` = TO_STRING(NULL)`
+   after FROM for those fields only and sends the query again, so the query's other
+   detections still run. The summary's error column lists the fields read as empty.
 5. Writes <output>/<host>/<category>/<Query_ID>_<host>.csv, where <category> is the
    query's tactic folder in the pack (00-triage, TA0002-execution, ...).
 6. Writes <output>/<case>_supertimeline.csv, a log2timeline (l2tcsv) style timeline built
@@ -111,6 +116,9 @@ SINCE_RE = re.compile(r'^(\|\s*EVAL\s+since\s*=\s*TO_DATETIME\()"[^"]*"(\))', re
 LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 UNQUOTED_INDEX_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 UNSAFE_PATH_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+# ES|QL rejects a query that names a field no index in FROM maps ("Unknown column [x]").
+UNKNOWN_COLUMN_RE = re.compile(r"Unknown column \[`?([^\]`]+)`?\]")
+STUB_ROUNDS = 5
 
 L2T_HEADER = ["date", "time", "timezone", "MACB", "source", "sourcetype", "type", "user", "host",
               "short", "desc", "version", "filename", "inode", "notes", "format", "extra"]
@@ -482,14 +490,22 @@ def index_list(indexes):
     return ", ".join(i if UNQUOTED_INDEX_RE.match(i) else f'"{i}"' for i in indexes)
 
 
-def build_query(query: Query, from_indexes, keep_indexes=None, since=None):
+def build_query(query: Query, from_indexes, keep_indexes=None, since=None, missing_fields=()):
     """The query with its FROM line pointed at from_indexes.
+
+    missing_fields: fields that no index in from_indexes maps (a Sysmon field on a host
+    without Sysmon, process.executable without srum-*). They get
+    `| EVAL `field` = TO_STRING(NULL)` right after FROM, so the query runs and reads them as
+    empty instead of failing with "Unknown column"; where the field exists it is not stubbed.
 
     keep_indexes, when given, adds `| WHERE _index IN (...)` just before the final LIMIT
     (every query in the pack keeps _index in its output), so only this host's rows are
     returned while earlier STATS/INLINE STATS still see every host in from_indexes.
     """
-    text = FROM_RE.sub(lambda m: f"FROM {index_list(from_indexes)} METADATA _index", query.text, count=1)
+    stub = ""
+    if missing_fields:
+        stub = "\n| EVAL " + ", ".join(f"`{name}` = TO_STRING(NULL)" for name in sorted(missing_fields))
+    text = FROM_RE.sub(lambda m: f"FROM {index_list(from_indexes)} METADATA _index{stub}", query.text, count=1)
     if since:
         text = SINCE_RE.sub(lambda m: f'{m.group(1)}"{since}"{m.group(2)}', text)
     if keep_indexes:
@@ -513,6 +529,17 @@ def run_esql(client, text, case):
     """POST /_query; returns (status, payload). The case filter is applied as Query DSL."""
     body = {"query": text, "filter": case_query(case)}
     return client.request("POST", "/_query", body)
+
+
+def unknown_columns(message):
+    """Index field names an ES|QL verification error says no index maps.
+
+    Only dotted names (winlog.payload.event_data.Image, process.executable) are returned: the
+    pack's own EVAL columns are undotted, so a typo in a query still fails loudly.
+    """
+    if "verification_exception" not in message:
+        return set()
+    return {name for name in UNKNOWN_COLUMN_RE.findall(message) if "." in name}
 
 
 def error_text(payload):
@@ -827,19 +854,34 @@ def run_group(client, case, targets, peers, out_dir, timeline, summary, args, to
         def target_indexes(group):
             return sorted(i for t in group for f in query.families for i in t.indexes.get(f, []))
 
+        missing = set()   # fields no index of this query's FROM maps; shared by the per-host re-runs
+
         def execute(group):
             """Run the query for these targets; returns (rows per target, truncated) or None on error.
 
             FROM always reads every peer's indexes (rarity across the case); rows are cut to the
             group's own indexes with `| WHERE _index IN (...)` when the query keeps _index.
+            A field that none of those indexes maps (ES|QL "Unknown column") is read as null
+            and the query is sent again, so a host without Sysmon or WFP auditing still gets the
+            query's other detections.
             """
             keep = target_indexes(group)
-            text = build_query(query, from_idx, keep if (query.keeps_index and keep != from_idx) else None,
-                               args.since)
-            log.debug("query %s for %s:\n%s", qid, ", ".join(t.name for t in group), text,
-                      extra={"file_only": True})
             started = time.monotonic()
-            status, payload = run_esql(client, text, case)
+            for _round in range(STUB_ROUNDS + 1):
+                text = build_query(query, from_idx, keep if (query.keeps_index and keep != from_idx) else None,
+                                   args.since, missing)
+                log.debug("query %s for %s:\n%s", qid, ", ".join(t.name for t in group), text,
+                          extra={"file_only": True})
+                status, payload = run_esql(client, text, case)
+                if status >= 300 or not isinstance(payload, dict) or "columns" not in payload:
+                    message = error_text(payload)
+                    new = unknown_columns(message) - missing
+                    if status == 400 and new and _round < STUB_ROUNDS:
+                        log.info("%s: not mapped in %s, read as empty: %s", qid, index_list(from_idx),
+                                 ", ".join(sorted(new)))
+                        missing.update(new)
+                        continue
+                break
             seconds = f"{time.monotonic() - started:.1f}"
             if status >= 300 or not isinstance(payload, dict) or "columns" not in payload:
                 message = error_text(payload)
@@ -881,12 +923,16 @@ def run_group(client, case, targets, peers, out_dir, timeline, summary, args, to
             finally:
                 for out in outputs.values():
                     out[0].close()
+            notes = []
+            if router.case_wide:
+                notes.append("case-wide result (rows are not tied to one host)")
+            if missing:
+                notes.append("not mapped on these indexes, read as empty: " + ", ".join(sorted(missing)))
             parts = []
             for t in group:
                 _fh, _w, rows, _events, rel = outputs[t.key]
                 record(t, query, "ok" if rows else "empty", rows=rows, file=rel, seconds=seconds,
-                       truncated="yes" if truncated else "",
-                       error="case-wide result (rows are not tied to one host)" if router.case_wide else "")
+                       truncated="yes" if truncated else "", error="; ".join(notes))
                 parts.append(f"{t.name}: {rows}")
             return parts
 
@@ -912,6 +958,8 @@ def run_group(client, case, targets, peers, out_dir, timeline, summary, args, to
             continue
         parts = write(runnable, result)
         note = "  (hit the query LIMIT; more rows exist)" if result[5] else ""
+        if missing:
+            note += f"  (not mapped, read as empty: {', '.join(sorted(missing))})"
         print(f"{prefix} {len(result[1]):>6} row(s) in {result[6]}s -> {', '.join(parts)}{note}")
         del result
 

@@ -17,6 +17,11 @@ It cannot run a query, but it catches the mistakes that cost the most time on a 
     class, ^ / $ anchors, bounded repetition after .*). It cannot tell whether a pattern is too
     complex to determinize: tools/LuceneRegexCheck.java compiles every pattern with Lucene itself;
   * LIKE patterns with a lone backslash (ES|QL LIKE uses backslash as its escape character);
+  * function names ES|QL does not have (NULLIF, IFNULL, ...: "Unknown function");
+  * a Windows query reading a native family (text+keyword strings: prefetch-*, lnkfiles-*,
+    filesystem-*, evtxlogs-*) and a toolkit template family (keyword strings) must wrap
+    every use of a field mapped in both with a TO_ conversion, or ES|QL rejects the field as
+    "mapped as [2] incompatible types";
   * every query folder has a README.md, every query is in the catalog in hunting/README.md,
     every query ID a checklist names exists, and relative links in the pack's Markdown resolve.
 
@@ -61,6 +66,40 @@ CLR_FIELDS = {
     "kape.source_file", "kape.timestamp_source",
 }
 ALWAYS = {"_index", "@timestamp"}
+# ES|QL functions and operators-with-parentheses this pack may call (Elasticsearch 9.x). A name
+# outside this list fails on the cluster with "Unknown function [X]".
+ESQL_FUNCTIONS = {
+    # aggregates
+    "AVG", "COUNT", "COUNT_DISTINCT", "MAX", "MEDIAN", "MEDIAN_ABSOLUTE_DEVIATION", "MIN",
+    "PERCENTILE", "SAMPLE", "STD_DEV", "SUM", "TOP", "VALUES", "WEIGHTED_AVG",
+    # grouping
+    "BUCKET", "CATEGORIZE",
+    # conditional
+    "CASE", "COALESCE", "GREATEST", "LEAST",
+    # date and time
+    "DATE_DIFF", "DATE_EXTRACT", "DATE_FORMAT", "DATE_PARSE", "DATE_TRUNC", "DAY_NAME", "MONTH_NAME", "NOW",
+    # IP
+    "CIDR_MATCH", "IP_PREFIX",
+    # math
+    "ABS", "ACOS", "ASIN", "ATAN", "ATAN2", "CBRT", "CEIL", "COS", "COSH", "E", "EXP", "FLOOR", "HYPOT",
+    "LOG", "LOG10", "PI", "POW", "ROUND", "ROUND_TO", "SIGNUM", "SIN", "SINH", "SQRT", "TAN", "TANH", "TAU",
+    # string
+    "BIT_LENGTH", "BYTE_LENGTH", "CONCAT", "CONTAINS", "ENDS_WITH", "FROM_BASE64", "HASH", "LEFT", "LENGTH",
+    "LOCATE", "LTRIM", "MD5", "REPEAT", "REPLACE", "REVERSE", "RIGHT", "RTRIM", "SHA1", "SHA256", "SPACE",
+    "SPLIT", "STARTS_WITH", "SUBSTRING", "TO_BASE64", "TO_LOWER", "TO_UPPER", "TRIM",
+    # type conversion
+    "TO_BOOLEAN", "TO_CARTESIANPOINT", "TO_CARTESIANSHAPE", "TO_DATEPERIOD", "TO_DATETIME", "TO_DATE_NANOS",
+    "TO_DEGREES", "TO_DOUBLE", "TO_GEOPOINT", "TO_GEOSHAPE", "TO_INTEGER", "TO_IP", "TO_LONG", "TO_RADIANS",
+    "TO_STRING", "TO_TIMEDURATION", "TO_UNSIGNED_LONG", "TO_VERSION",
+    # multivalue
+    "MV_APPEND", "MV_AVG", "MV_CONCAT", "MV_CONTAINS", "MV_COUNT", "MV_DEDUPE", "MV_FIRST", "MV_LAST",
+    "MV_MAX", "MV_MEDIAN", "MV_MEDIAN_ABSOLUTE_DEVIATION", "MV_MIN", "MV_PERCENTILE",
+    "MV_PSERIES_WEIGHTED_SUM", "MV_SLICE", "MV_SORT", "MV_SUM", "MV_ZIP",
+    # full text
+    "KQL", "MATCH", "MATCH_PHRASE", "QSTR",
+    # keywords followed by "(" in this pack
+    "IN", "AND", "OR", "NOT", "WHERE", "BY", "LIKE", "RLIKE",
+}
 
 ID_RE = re.compile(r"^[A-Z0-9]{2,4}-\d{2}$")
 HEADER_RE = re.compile(r"^//\s*(?P<id>[A-Z0-9]{2,4}-\d{2})\s*\|\s*(?P<title>.+?)\s*$")
@@ -74,6 +113,7 @@ class Fields:
         self.prefixes: dict[str, set[str]] = {}
         self.linux: dict[str, tuple[set[str], set[str]]] = {}
         self.linux_types: dict[str, dict[str, str]] = {}
+        self.win_types: dict[str, dict[str, str]] = {}   # Windows family -> field -> keyword/text/...
 
     def add(self, family, name):
         self.exact.setdefault(family, set()).add(name)
@@ -135,6 +175,8 @@ def load_fields() -> Fields:
             fields.add(family, name)
         for p in prefix:
             fields.add_prefix(family, p)
+        fields.win_types[family] = {**leaf_types(common["template"]["mappings"]["properties"]),
+                                    **leaf_types(spec["template"]["mappings"].get("properties"))}
     for name in CLR_FIELDS:
         fields.add("clrusagelogs", name)
 
@@ -174,10 +216,14 @@ def load_fields() -> Fields:
         for row in csv.DictReader(fh):
             index, raw = row["index"].strip(), row["field"].strip()
             families = NATIVE_FAMILIES if index == "all four" else (index,)
+            toolkit_type = row["toolkit_type"].strip()
             for part in re.split(r"\s*,\s*|\s+/\s+", raw):
                 part = part.strip()
                 if not part:
                     continue
+                if toolkit_type.startswith("text") and "<" not in part and "*" not in part:
+                    for fam in families:
+                        fields.win_types.setdefault(fam, {})[part] = "text"
                 if "<" in part or part.endswith("*"):
                     prefix = re.split(r"[<*]", part, maxsplit=1)[0]
                     for fam in families:
@@ -294,6 +340,12 @@ def check_rlike(pattern, where, problems):
             problems.append(("warning", f"{where}: '{ch}' is a literal in Lucene RLIKE (patterns are always anchored)"))
 
 
+def all_uses_converted(name, body_nostr):
+    """True when every use of the field is the argument of a TO_ conversion function."""
+    uses = re.findall(r"(?<![\w.])(TO_[A-Z_]+\(\s*)?`?" + re.escape(name) + r"`?(?![\w.])", body_nostr)
+    return all(uses)
+
+
 def check_query(path: Path, fields: Fields, problems):
     raw = path.read_text(encoding="utf-8")
     lines = raw.splitlines()
@@ -330,6 +382,9 @@ def check_query(path: Path, fields: Fields, problems):
 
     body = strip_comments(raw)
     body_nostr = STRING_RE.sub('""', body)
+    for fn in sorted(set(re.findall(r"(?<![\w.`])([A-Za-z_][A-Za-z0-9_]*)\s*\(", BACKTICK_RE.sub(" ", body_nostr)))):
+        if fn.upper() not in ESQL_FUNCTIONS:
+            problems.append(("error", f"{path}: ES|QL has no function {fn}()"))
     fm = FROM_RE.search(body_nostr)
     if not fm:
         problems.append(("error", f"{path}: no FROM line"))
@@ -377,13 +432,17 @@ def check_query(path: Path, fields: Fields, problems):
                                               f"({optional}); the query fails on hosts without them"))
                 types = {fields.linux_types.get(f, {}).get(name) for f in checkable} - {None}
                 if len(types) > 1:
-                    bare_uses = re.findall(r"(?<![\w.])(TO_[A-Z_]+\(\s*)?`?" + re.escape(name) + r"`?(?![\w.])",
-                                           body_nostr)
-                    if any(not conv for conv in bare_uses):
+                    if not all_uses_converted(name, body_nostr):
                         problems.append(("error", f"{path}: '{name}' is {' / '.join(sorted(types))} in "
                                                   f"{', '.join(fams)}; wrap every use in a TO_ conversion"))
             elif not any(fields.known(f, name) for f in checkable):
                 problems.append(("error", f"{path}: unknown field '{name}' for {', '.join(fams)}"))
+            elif len(set(fams)) > 1:
+                # native (dynamic text+keyword) vs toolkit template (keyword) string fields
+                types = {fields.win_types.get(f, {}).get(name) for f in checkable} - {None}
+                if {"text", "keyword"} <= types and not all_uses_converted(name, body_nostr):
+                    problems.append(("error", f"{path}: '{name}' is {' / '.join(sorted(types))} in "
+                                              f"{', '.join(fams)}; wrap every use in a TO_ conversion"))
         # Raw parser column names (FullPath, KeyPath, Visit_Time, ...) are mixed-case and undotted.
         # ES|QL keywords and functions are upper case and EVAL names in this pack are lower case.
         bare = DOTTED_RE.sub(" ", BACKTICK_RE.sub(" ", body_nostr))
