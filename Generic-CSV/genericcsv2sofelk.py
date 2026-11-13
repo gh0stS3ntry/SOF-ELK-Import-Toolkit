@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""genericcsv2sofelk.py - load every CSV under a directory into genericcsv-<hostname>.
+"""genericcsv2sofelk.py - load every CSV and XLSX under a directory into genericcsv-<hostname>.
 
-For CSV exports that have no dedicated importer. The script walks the given folder
-recursively, reads each CSV's header row, and indexes one document per data row with
-the header names (sanitized for Elasticsearch) as field names:
+For CSV exports and Excel workbooks that have no dedicated importer. The script walks the
+given folder recursively, reads each CSV's header row (or each worksheet's first non-blank
+row), and indexes one document per data row with the header names (sanitized for
+Elasticsearch) as field names:
 
   * every CSV column is a keyword string, so files with different headers can share
     one index without type conflicts (see Generic-CSV/README.md);
   * log.file.path (ECS) holds the absolute path of the source CSV, and event.sequence
     its data-row number;
+  * .xlsx / .xlsm workbooks are read with zipfile + xml.etree (xlsx_reader.py, kept
+    beside this script): every worksheet is loaded, genericcsv.sheet_name and
+    genericcsv.sheet_row say where each row came from, and date-formatted cells become
+    "YYYY-MM-DD HH:MM:SS" text so that @timestamp detection works as for CSVs;
   * host.name, the flat `case` keyword and event.dataset=genericcsv are added like the
     other toolkit importers;
   * @timestamp comes from --timestamp-column, or from a date column found
@@ -19,7 +24,7 @@ the header names (sanitized for Elasticsearch) as field names:
     ../Windows/common/sof_elk_es_client.py.
 
 Standard library only. This importer is deliberately not called by
-SOF-ELK_ImportWrapper.py: point it at a folder of CSVs yourself.
+SOF-ELK_ImportWrapper.py: point it at a folder of CSVs and workbooks yourself.
 """
 from __future__ import annotations
 
@@ -33,6 +38,8 @@ import json
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 from urllib import error
 
@@ -44,6 +51,9 @@ TEMPLATE_NAME = f"sofelk-toolkit-{PREFIX}"
 # The retrying bulk client is shared with the Windows and AWS importers.
 sys.path.insert(0, str(HERE.parent / "Windows" / "common"))
 from sof_elk_es_client import EsClient, add_client_arguments, apply_client_arguments, resolve_index  # noqa: E402
+
+sys.path.insert(0, str(HERE))
+import xlsx_reader  # noqa: E402
 
 try:
     csv.field_size_limit(sys.maxsize)
@@ -165,6 +175,9 @@ def detect_encoding(path):
 class CsvFile:
     """One CSV: encoding, delimiter, header, and a fresh row iterator on each rows() call."""
 
+    sheet_name = None
+    kind = "csv"
+
     def __init__(self, path):
         self.path = path
         self.encoding = detect_encoding(path)
@@ -205,13 +218,76 @@ class CsvFile:
                 yield n, cells
 
 
-def find_csv_files(root, excludes):
+class XlsxSheet:
+    """One worksheet of an .xlsx workbook, with the same interface as CsvFile.
+
+    The header is the sheet's first non-blank row. Blank columns to the left of the header
+    (a table that starts in column B or C) are dropped; a data cell in such a column is
+    kept, after the header's columns, so it lands in genericcsv.extra_cells. rows() yields
+    (row_number, cells) where row_number counts non-blank data rows from 1 (as for CSVs)
+    and cells.excel_row is the row number Excel shows.
+    """
+
+    kind = "xlsx"
+
+    def __init__(self, workbook, sheet_name, part, state):
+        self.workbook = workbook
+        self.path = workbook.path
+        self.sheet_name = sheet_name
+        self.part = part
+        self.state = state
+        self.header, self.header_row = [], None
+        for row in workbook.iter_rows(part):
+            if any(c.strip() for c in row):
+                self.header, self.header_row = list(row), row.excel_row
+                break
+        while self.header and not self.header[-1].strip():
+            self.header.pop()
+        self.offset = 0
+        while self.offset < len(self.header) and not self.header[self.offset].strip():
+            self.offset += 1
+        self.header = self.header[self.offset:]
+        self.fields = sanitize_columns(self.header)
+
+    def _shift(self, row):
+        if not self.offset:
+            return row
+        out = xlsx_reader.Row(row[self.offset:])
+        out.excel_row = row.excel_row
+        left = [c for c in row[:self.offset] if c.strip()]
+        if left:
+            out.extend([""] * (len(self.fields) - len(out)))
+            out.extend(left)
+        return out
+
+    def rows(self):
+        n = 0
+        started = False
+        for row in self.workbook.iter_rows(self.part):
+            if not started:
+                started = row.excel_row == self.header_row
+                continue
+            if not any(c.strip() for c in row):
+                continue
+            n += 1
+            yield n, self._shift(row)
+
+
+def is_xlsx(path):
+    return path.name.lower().endswith(xlsx_reader.XLSX_SUFFIXES)
+
+
+def find_input_files(root, excludes):
+    """*.csv, *.xlsx and *.xlsm under root, sorted, minus --exclude matches and Excel lock files."""
     out = []
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames.sort(key=str.lower)
         for name in sorted(filenames, key=str.lower):
-            if not name.lower().endswith(".csv"):
+            low = name.lower()
+            if not (low.endswith(".csv") or low.endswith(xlsx_reader.XLSX_SUFFIXES)):
                 continue
+            if low.endswith(xlsx_reader.XLSX_SUFFIXES) and name.startswith("~$"):
+                continue    # Excel's owner/lock file for an open workbook
             path = Path(dirpath) / name
             rel = path.relative_to(root).as_posix()
             if any(fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(name, pat) for pat in excludes):
@@ -271,6 +347,11 @@ def make_doc(csvf, row_number, cells, *, abs_path, rel_path, hostname, case, ts_
     doc["log"] = {"file": {"path": abs_path}}
     meta = {"file_name": csvf.path.name, "relative_path": rel_path,
             "timestamp_source": csvf.fields[ts_index] if ts else "ingest_time"}
+    if csvf.sheet_name is not None:
+        meta["sheet_name"] = csvf.sheet_name
+        excel_row = getattr(cells, "excel_row", None)
+        if excel_row is not None:
+            meta["sheet_row"] = excel_row
     if extra:
         meta["extra_cells"] = extra
     doc["genericcsv"] = meta
@@ -279,8 +360,13 @@ def make_doc(csvf, row_number, cells, *, abs_path, rel_path, hostname, case, ts_
     return doc
 
 
-def doc_id(hostname, abs_path, row_number):
-    material = json.dumps([PREFIX, hostname, abs_path, row_number], ensure_ascii=False)
+def doc_id(hostname, abs_path, row_number, sheet_name=None):
+    """sha1 of host, path and row; a worksheet's name is added for XLSX rows only, so CSV
+    ids are the same as before XLSX support."""
+    parts = [PREFIX, hostname, abs_path, row_number]
+    if sheet_name is not None:
+        parts.append(sheet_name)
+    material = json.dumps(parts, ensure_ascii=False)
     return hashlib.sha1(material.encode("utf-8", "replace")).hexdigest()
 
 
@@ -364,9 +450,10 @@ class ES(EsClient):
 
 def build_parser():
     ap = argparse.ArgumentParser(
-        description="Import every CSV under a directory into genericcsv-<hostname>, with field"
-                    " names taken from each file's header row.")
-    ap.add_argument("directory", help="Folder searched recursively for *.csv files (a single .csv file also works)")
+        description="Import every CSV and XLSX worksheet under a directory into"
+                    " genericcsv-<hostname>, with field names taken from each file's header row.")
+    ap.add_argument("directory", help="Folder searched recursively for *.csv, *.xlsx and *.xlsm files"
+                                      " (a single file also works)")
     ap.add_argument("--hostname", required=True, help="Evidence host name; the index is genericcsv-<hostname>")
     ap.add_argument("--case", help="Optional case/incident ID added to every document as `case`")
     ap.add_argument("--index", help="Override the target index; must end in -<hostname>")
@@ -383,6 +470,9 @@ def build_parser():
     ap.add_argument("--exclude", action="append", default=[], metavar="GLOB",
                     help="Skip files whose name or relative path matches this glob (repeatable),"
                          " e.g. --exclude '*EvtxECmd*'")
+    ap.add_argument("--sheet", action="append", default=[], metavar="GLOB",
+                    help="Only load XLSX worksheets whose name matches this glob, case-insensitively"
+                         " (repeatable). Default: every worksheet.")
     ap.add_argument("--es", default="http://localhost:9200", help="Elasticsearch URL")
     ap.add_argument("--user", help="Elasticsearch username, if security is enabled")
     ap.add_argument("--password")
@@ -409,38 +499,71 @@ def main(argv=None):
 
     root = Path(args.directory).expanduser().resolve()
     if root.is_file():
-        files, root = ([root] if root.suffix.lower() == ".csv" else []), root.parent
+        ok = root.suffix.lower() == ".csv" or is_xlsx(root)
+        files, root = ([root] if ok else []), root.parent
     elif root.is_dir():
-        files = find_csv_files(root, args.exclude)
+        files = find_input_files(root, args.exclude)
     else:
         sys.exit(f"No such file or directory: {args.directory}")
     if not files:
-        sys.exit(f"No CSV files found under {root}")
+        sys.exit(f"No CSV or XLSX files found under {root}")
+    sheet_globs = [g.lower() for g in args.sheet]
 
-    # Pass 1: header, field names and timestamp column of every file.
+    # Pass 1: header, field names and timestamp column of every file (or worksheet).
     plans, columns, renamed = [], {}, {}
+    n_csv = n_xlsx = 0
     for path in files:
         rel = path.relative_to(root).as_posix()
-        try:
-            csvf = CsvFile(path)
-        except OSError as exc:
-            print(f"  ! {rel}: cannot read ({exc}); skipped", file=sys.stderr)
-            continue
-        if not csvf.header:
-            print(f"  - {rel}: empty file; skipped")
-            continue
-        ts_index = choose_timestamp(csvf, args.timestamp_column, not args.no_timestamp_detect,
-                                    default_tz, args.date_order)
-        for raw, field in zip(csvf.header, csvf.fields):
-            columns.setdefault(field, 0)
-            columns[field] += 1
-            if (raw or "").strip() != field:
-                renamed.setdefault(field, set()).add((raw or "").strip())
-        plans.append((csvf, rel, ts_index))
+        sources = []
+        if is_xlsx(path):
+            try:
+                book = xlsx_reader.Workbook(path)
+                for sheet_name, part, state in book.sheets:
+                    if sheet_globs and not any(fnmatch.fnmatchcase(sheet_name.lower(), g) for g in sheet_globs):
+                        continue
+                    sheet = XlsxSheet(book, sheet_name, part, state)
+                    label = f"{rel} [{sheet_name}]" + ("" if state == "visible" else f" ({state} sheet)")
+                    if not sheet.header:
+                        print(f"  - {label}: empty worksheet; skipped")
+                        continue
+                    sources.append((sheet, label))
+            except (OSError, xlsx_reader.XlsxError, zipfile.BadZipFile, ET.ParseError, KeyError) as exc:
+                print(f"  ! {rel}: cannot read workbook ({exc}); skipped", file=sys.stderr)
+                continue
+            if not book.sheets:
+                print(f"  - {rel}: no worksheets; skipped")
+            if sources:
+                n_xlsx += 1
+        else:
+            try:
+                csvf = CsvFile(path)
+            except OSError as exc:
+                print(f"  ! {rel}: cannot read ({exc}); skipped", file=sys.stderr)
+                continue
+            if not csvf.header:
+                print(f"  - {rel}: empty file; skipped")
+                continue
+            sources.append((csvf, rel))
+            n_csv += 1
+        for src, label in sources:
+            ts_index = choose_timestamp(src, args.timestamp_column, not args.no_timestamp_detect,
+                                        default_tz, args.date_order)
+            for raw, field in zip(src.header, src.fields):
+                columns.setdefault(field, 0)
+                columns[field] += 1
+                if (raw or "").strip() != field:
+                    renamed.setdefault(field, set()).add((raw or "").strip())
+            plans.append((src, rel, ts_index, label))
     if not plans:
-        sys.exit("No CSV file with a header row was found.")
+        sys.exit("No CSV file or worksheet with a header row was found.")
 
-    print(f"{len(plans)} CSV file(s) under {root} -> index '{index}' (host '{hostname}')")
+    what = []
+    if n_csv or not n_xlsx:
+        what.append(f"{n_csv} CSV file(s)")
+    if n_xlsx:
+        n_sheets = sum(1 for p in plans if p[0].kind == "xlsx")
+        what.append(f"{n_xlsx} XLSX workbook(s) ({n_sheets} worksheet(s))")
+    print(f"{' and '.join(what)} under {root} -> index '{index}' (host '{hostname}')")
     print(f"{len(columns)} distinct column(s) across all files, all mapped as keyword")
     if renamed:
         print("Header names changed to valid field names:")
@@ -450,7 +573,7 @@ def main(argv=None):
             print(f"  ... and {len(renamed) - 40} more (see --log-file)")
     partial = sorted(f for f, n in columns.items() if n < len(plans))
     if partial and len(plans) > 1:
-        print(f"{len(partial)} column(s) appear in only some files; documents from the other files"
+        print(f"{len(partial)} column(s) appear in only some files or sheets; documents from the others"
               " simply do not have them.")
 
     es = None
@@ -473,7 +596,7 @@ def main(argv=None):
     total = {"rows": 0, "ok": 0, "errors": 0, "updated": 0, "ingest_ts": 0, "extra": 0}
     samples, lines = [], []
     print()
-    for csvf, rel, ts_index in plans:
+    for csvf, rel, ts_index, label in plans:
         abs_path = str(csvf.path)
         rows = no_ts = 0
         try:
@@ -490,19 +613,20 @@ def main(argv=None):
                     if len(samples) < args.sample_docs:
                         samples.append(doc)
                     continue
-                lines.append(json.dumps({"index": {"_index": index, "_id": doc_id(hostname, abs_path, row_number)}}))
+                _id = doc_id(hostname, abs_path, row_number, csvf.sheet_name)
+                lines.append(json.dumps({"index": {"_index": index, "_id": _id}}))
                 lines.append(json.dumps(doc, ensure_ascii=False))
                 if len(lines) >= args.batch_size * 2:
                     es.send(lines, total)
-        except (OSError, csv.Error) as exc:
-            print(f"  ! {rel}: stopped after {rows} row(s): {exc}", file=sys.stderr)
+        except (OSError, csv.Error, zipfile.BadZipFile, ET.ParseError, KeyError) as exc:
+            print(f"  ! {label}: stopped after {rows} row(s): {exc}", file=sys.stderr)
         total["rows"] += rows
         total["ingest_ts"] += no_ts
         ts_note = (f"@timestamp <- {csvf.fields[ts_index]}" if ts_index is not None
                    else "@timestamp <- ingest time")
         if ts_index is not None and no_ts:
             ts_note += f" ({no_ts} row(s) without a usable value use the ingest time)"
-        print(f"  {rel}: {rows} row(s), {len(csvf.fields)} column(s), {ts_note}")
+        print(f"  {label}: {rows} row(s), {len(csvf.fields)} column(s), {ts_note}")
     if es is not None:
         es.send(lines, total)
 
