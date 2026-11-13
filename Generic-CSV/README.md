@@ -1,6 +1,6 @@
 # Generic CSV importer
 
-`genericcsv2sofelk.py` loads every CSV under a folder into SOF-ELK's Elasticsearch, for CSV exports that have no dedicated importer in `Windows/` or `AWS/`. Field names come from each file's header row. It uses only the Python standard library (3.9+) and the same retrying `_bulk` client as the other importers (`../Windows/common/sof_elk_es_client.py`), so keep `Generic-CSV/` and `Windows/` side by side.
+`genericcsv2sofelk.py` loads every CSV and every Excel workbook (`.xlsx`, `.xlsm`) under a folder into SOF-ELK's Elasticsearch, for exports that have no dedicated importer in `Windows/` or `AWS/`. Field names come from each file's header row, or each worksheet's first non-blank row. It uses only the Python standard library (3.9+) and the same retrying `_bulk` client as the other importers (`../Windows/common/sof_elk_es_client.py`), so keep `Generic-CSV/` and `Windows/` side by side. Workbooks are read by `xlsx_reader.py` (zipfile + xml.etree), which must stay beside the script.
 
 `SOF-ELK_ImportWrapper.py` does not call this script, because it would otherwise load every CSV that a dedicated importer already handles. Run it yourself, on a folder that holds only the CSVs you want here.
 
@@ -21,7 +21,7 @@ python3 Generic-CSV/genericcsv2sofelk.py /cases/IR-42/RD01/misc-csv --hostname R
 python3 SOF-ELK_CreateDataViews.py
 ```
 
-The folder is searched recursively for `*.csv` (any case). A single `.csv` file also works. Loading the same files again overwrites the earlier documents instead of duplicating them.
+The folder is searched recursively for `*.csv`, `*.xlsx` and `*.xlsm` (any case). A single file also works. Every worksheet of a workbook is loaded, as if it were its own CSV (see [Excel workbooks](#excel-workbooks-xlsx)). Loading the same files again overwrites the earlier documents instead of duplicating them.
 
 ## Document layout
 
@@ -41,8 +41,10 @@ Every data row becomes one document:
 | `genericcsv.relative_path` | path of the CSV relative to the folder given on the command line |
 | `genericcsv.timestamp_source` | the column `@timestamp` came from, or `ingest_time` |
 | `genericcsv.extra_cells` | cells beyond the header's last column, when a row has more cells than its header |
+| `genericcsv.sheet_name` | XLSX only: the worksheet the row came from |
+| `genericcsv.sheet_row` | XLSX only: the row number Excel shows for the row (`event.sequence` still counts data rows from 1) |
 
-The `_id` is a SHA-1 of the host name, `log.file.path` and the row number, so a re-run of the same files from the same path overwrites. Loading the same files from another path (for example another mount point) creates a second copy, because the path is part of the identity; delete the index first if you move the evidence.
+The `_id` is a SHA-1 of the host name, `log.file.path` and the row number (plus the worksheet name for XLSX rows), so a re-run of the same files from the same path overwrites. Loading the same files from another path (for example another mount point) creates a second copy, because the path is part of the identity; delete the index first if you move the evidence.
 
 ## Field names
 
@@ -94,11 +96,39 @@ FROM genericcsv-* METADATA _index
 - Leading blank lines and PowerShell `#TYPE` or W3C `#Fields` preamble lines are skipped.
 - Blank rows are skipped. Quoted cells may contain delimiters and line breaks.
 
+## Excel workbooks (XLSX)
+
+`.xlsx` and `.xlsm` files are read with the standard library only (`xlsx_reader.py`: `zipfile` plus streaming `xml.etree` parsing, so large sheets do not have to fit in memory). Each worksheet is treated like one CSV:
+
+- Every worksheet is loaded, in workbook order, hidden and very hidden sheets included (the run's summary marks them). Chart sheets and empty sheets are skipped. `--sheet GLOB` (repeatable, case-insensitive) loads only the matching sheet names, e.g. `--sheet 'Timeline*'`.
+- The header is the sheet's first non-blank row; rows above it are ignored. Blank columns left of the header (a table that starts in column B or C) are dropped. A value in such a column on a data row is kept in `genericcsv.extra_cells`.
+- `genericcsv.sheet_name` and `genericcsv.sheet_row` record where each row came from. `log.file.path`, `genericcsv.file_name` and `genericcsv.relative_path` are the workbook's.
+- Columns from all sheets and CSVs share the index the same way as columns from several CSVs (see [Mixed headers across files](#mixed-headers-across-files)). Filter one sheet with `genericcsv.sheet_name`.
+- Each sheet picks its own `@timestamp` column, as each CSV does.
+
+Cell values are stored as keyword text, the stored value rather than the displayed one:
+
+| Cell | Indexed as |
+|---|---|
+| text (shared, inline, rich text) | the text; Excel's `_xHHHH_` escapes for control characters are decoded |
+| number | the number as stored (`3`, `0.125`): percentage, currency and thousands formats are not applied |
+| date / time format (built-in or custom) | `2026-10-25 08:19:00` (`.048` when there are milliseconds), `2026-10-25` for a date-only format, `08:19:00` for a time-only format; the 1904 date system is honoured |
+| elapsed time (`[h]:mm:ss`) | the number of days, as stored |
+| boolean | `TRUE` / `FALSE` |
+| error | the error text (`#N/A`, `#DIV/0!`) |
+| formula | the result Excel last saved; a workbook written by a tool that never calculated it has none, so the cell is empty |
+
+Date cells carry no time zone, so they are read in `--assume-tz` (default UTC), like CSV times without a zone. A date stored as text in the sheet is parsed like a CSV value (`--date-order` applies).
+
+Watch for values that a spreadsheet already changed before it reached you: Excel and LibreOffice turn hex-looking strings such as `738093E8` into numbers, drop leading zeros, and cut cells at 32,767 characters. The importer cannot undo that; load the original CSV where you have it.
+
+Legacy `.xls` files and password-protected workbooks (both are OLE files, not zips) are reported and skipped: open them in Excel and save as an unprotected `.xlsx`. Excel's `~$name.xlsx` lock files are ignored.
+
 ## Options
 
 | Option | Meaning |
 |---|---|
-| `directory` | folder searched recursively for `*.csv`, or one CSV file |
+| `directory` | folder searched recursively for `*.csv`, `*.xlsx` and `*.xlsm`, or one such file |
 | `--hostname NAME` | evidence host (required); index `genericcsv-<hostname>` |
 | `--case ID` | case ID added to every document as `case` |
 | `--index NAME` | another index name; must end in `-<hostname>` |
@@ -107,6 +137,7 @@ FROM genericcsv-* METADATA _index
 | `--assume-tz OFFSET` | zone for times that carry none (default `Z`) |
 | `--date-order mdy\|dmy` | day/month order of spreadsheet-style dates |
 | `--exclude GLOB` | skip files whose name or relative path matches (repeatable), e.g. `--exclude '*EvtxECmd*'` |
+| `--sheet GLOB` | load only XLSX worksheets whose name matches (repeatable, case-insensitive); CSVs are not affected |
 | `--es URL` | Elasticsearch URL (default `http://localhost:9200`) |
 | `--user`, `--password`, `--insecure` | authentication and TLS, as for the other importers |
 | `--batch-size N` | documents per `_bulk` request (default 2000) |
@@ -121,4 +152,4 @@ An existing `genericcsv-*` index that this importer did not create is refused ra
 python3 Generic-CSV/tests/test_genericcsv.py -v
 ```
 
-The tests need no Elasticsearch. The importer was also run end to end against the toolkit's mock Elasticsearch, with the RD01 KAPE registry, Amcache and RBCmd CSVs.
+The tests need no Elasticsearch; they build small workbooks by hand with `zipfile`. The importer was also run end to end against the toolkit's mock Elasticsearch, with the RD01 KAPE registry, Amcache and RBCmd CSVs, and with the same CSVs converted to `.xlsx` by LibreOffice: the XLSX documents matched the CSV ones cell for cell, timestamps included, except where LibreOffice itself had changed a value.

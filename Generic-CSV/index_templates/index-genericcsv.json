@@ -100,6 +100,13 @@
             "extra_cells": {
               "type": "keyword",
               "ignore_above": 8191
+            },
+            "sheet_name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "sheet_row": {
+              "type": "long"
             }
           }
         }

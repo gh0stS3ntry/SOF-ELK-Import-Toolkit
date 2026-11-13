@@ -1,6 +1,6 @@
 # SOF-ELK Import Toolkit
 
-This package contains a recursive wrapper and seventeen standalone Python importers for Windows forensic artifacts, four importers for AWS logs (CloudTrail, VPC Flow Logs, ALB/ELB access logs and AWS WAF; see [`AWS/README.md`](AWS/README.md)), a generic CSV importer for any other CSV export ([`Generic-CSV/README.md`](Generic-CSV/README.md)), a generic JSON importer for any other JSON or JSON Lines export ([`Generic-JSON/README.md`](Generic-JSON/README.md)), Linux importers for the systemd journal, text syslog, auditd, the bodyfile, login records (wtmp, btmp, wtmpdb), package history, an accounts and persistence snapshot, web server logs, browser history and FTP logs in UAC collections and collected root filesystems ([`Linux/README.md`](Linux/README.md)), and an ES|QL hunting pack with checklists ([`hunting/`](hunting/README.md)), for loading forensic CSV and JSON exports directly into Elasticsearch indexes used by SOF-ELK without relying on Logstash or Filebeat. The importers do not run KAPE, NirSoft, or Eric Zimmerman tools; they ingest exports that those tools have already produced.
+This package contains a recursive wrapper and seventeen standalone Python importers for Windows forensic artifacts, four importers for AWS logs (CloudTrail, VPC Flow Logs, ALB/ELB access logs and AWS WAF; see [`AWS/README.md`](AWS/README.md)), a generic CSV importer for any other CSV export or Excel workbook ([`Generic-CSV/README.md`](Generic-CSV/README.md)), a generic JSON importer for any other JSON or JSON Lines export ([`Generic-JSON/README.md`](Generic-JSON/README.md)), Linux importers for the systemd journal, text syslog, auditd, the bodyfile, login records (wtmp, btmp, wtmpdb), package history, an accounts and persistence snapshot, web server logs, browser history and FTP logs in UAC collections and collected root filesystems ([`Linux/README.md`](Linux/README.md)), and an ES|QL hunting pack with checklists ([`hunting/`](hunting/README.md)), for loading forensic CSV and JSON exports directly into Elasticsearch indexes used by SOF-ELK without relying on Logstash or Filebeat. The importers do not run KAPE, NirSoft, or Eric Zimmerman tools; they ingest exports that those tools have already produced.
 
 ## Contents
 
@@ -57,6 +57,7 @@ sof_elk_all_importers/
 │   └── README.md
 ├── Generic-CSV
 │   ├── genericcsv2sofelk.py
+│   ├── xlsx_reader.py
 │   ├── index_templates/
 │   │   └── index-genericcsv.json
 │   ├── tests/
