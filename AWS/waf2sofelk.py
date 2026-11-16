@@ -46,7 +46,7 @@ import json
 import re
 import sys
 
-from sof_elk_aws_common import (AwsLog, any_time, canon, compact_json, csv_records, dig,
+from sof_elk_aws_common import (AwsLog, any_time, canon, compact_json, csv_records, dig, first_line,
                                 looks_like_csv_header, run, set_field, snake, to_int, valid_ip)
 
 WEBACL_RE = re.compile(r"^arn:aws[a-z-]*:waf(?:v2)?:([a-z0-9-]*):(\d{12}):(?:[a-z]+/)?webacl/([^/]+)/")
@@ -298,7 +298,7 @@ def parse(fh, ctx):
         chunk = fh.read(1 << 20)
         if first:
             first = False
-            line = chunk.lstrip("\ufeff").split("\n", 1)[0].rstrip("\r")
+            line = first_line(chunk)
             if is_csv_header(line):
                 yield from parse_csv(chunk.lstrip("\ufeff"), fh)
                 return
@@ -344,7 +344,7 @@ def detect(path, head):
     h = head[:65536]
     if '"webaclId"' in h and '"httpRequest"' in h:
         return True
-    first = h.lstrip("\ufeff").split("\n", 1)[0].rstrip("\r")
+    first = first_line(h)
     if not is_csv_header(first):
         return False
     lower = first.lower()

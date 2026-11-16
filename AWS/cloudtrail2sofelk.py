@@ -34,7 +34,7 @@ import json
 import re
 import sys
 
-from sof_elk_aws_common import (AwsLog, canon, compact_json, csv_records, dig, iso,
+from sof_elk_aws_common import (AwsLog, canon, compact_json, csv_records, dig, first_line, iso,
                                 looks_like_csv_header, run, set_field, snake, to_bool, to_int,
                                 valid_ip)
 
@@ -260,11 +260,11 @@ def records_from(obj, ctx):
 
 def parse(fh, ctx):
     head = fh.read(1 << 16)
-    if looks_like_csv_header(head.split("\n", 1)[0], [("eventname", "eventid", "cloudtrailevent", "message")]):
+    if looks_like_csv_header(first_line(head), [("eventname", "eventid", "cloudtrailevent", "message")]):
         yield from parse_csv(head, fh)
         return
-    first_line = head.split("\n", 1)[0]
-    stripped = TS_PREFIX_RE.sub("", first_line).strip()
+    first = first_line(head)
+    stripped = TS_PREFIX_RE.sub("", first).strip()
     line_mode = False
     if stripped:
         try:
@@ -341,7 +341,7 @@ def detect(path, head):
     h = head[:65536]
     if '"eventVersion"' in h and '"eventSource"' in h and '"eventName"' in h:
         return True
-    first = h.split("\n", 1)[0]
+    first = first_line(h)
     return looks_like_csv_header(first, [("eventname", "cloudtrailevent"), ("eventtime", "cloudtrailevent")]) or \
         (looks_like_csv_header(first, ["message"]) and "eventSource" in h)
 

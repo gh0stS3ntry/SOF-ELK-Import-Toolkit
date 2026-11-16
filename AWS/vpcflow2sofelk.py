@@ -36,8 +36,8 @@ import re
 import struct
 import sys
 
-from sof_elk_aws_common import (RAW_COLUMNS, AwsLog, canon, csv_reader, epoch_to_iso, iso,
-                                looks_like_csv_header, run, set_field, snake, to_int, valid_ip)
+from sof_elk_aws_common import (RAW_COLUMNS, AwsLog, canon, csv_reader, epoch_to_iso, first_line, iso,
+                                looks_like_csv_header, run, set_field, snake, split_row, to_int, valid_ip)
 
 DEFAULT_FIELDS = ("version account-id interface-id srcaddr dstaddr srcport dstport protocol "
                   "packets bytes start end action log-status").split()
@@ -203,7 +203,10 @@ def build(fields, values):
 
 def header_fields(line):
     """Field list if line is a VPC Flow header row (space or comma separated), else None."""
-    tokens = next(csv.reader([line])) if "," in line else line.split()
+    line = first_line(line)
+    tokens = split_row(line) if "," in line else line.split()
+    if tokens is None:
+        return None
     names = [t.strip().strip('"').lower().replace("_", "-") for t in tokens]
     if len(names) >= 3 and all(HEADER_TOKEN_RE.match(n) for n in names) \
             and sum(n in KNOWN_FIELDS for n in names) >= max(3, len(names) // 2):
@@ -230,7 +233,7 @@ def csv_columns(line):
 def messages(fh):
     """Yield raw record lines (str) or CSV rows ([(field, value)]) from a text, CSV or JSON file."""
     head = fh.read(1 << 16)
-    first = head.lstrip("\ufeff\r\n").split("\n", 1)[0].rstrip("\r")
+    first = first_line(head.lstrip("\ufeff\r\n"))
     columns = csv_columns(first) if not first.lstrip().startswith("{") else None
     if columns:
         reader = csv_reader(fh, head.lstrip("\ufeff\r\n"))
@@ -304,7 +307,10 @@ def parse(fh, ctx):
         if fields is None:
             fields = DEFAULT_FIELDS
         line = TS_PREFIX_RE.sub("", line)
-        values = next(csv.reader([line])) if is_csv else line.split()
+        values = split_row(line) if is_csv else line.split()
+        if values is None:
+            yield None, "unreadable CSV line"
+            continue
         values = [v.strip() for v in values]
         if len(values) != len(fields):
             yield None, f"{len(values)} values for {len(fields)} fields (use --fields for a custom format)"
@@ -319,7 +325,7 @@ def parse(fh, ctx):
 def detect(path, head):
     if "vpcflowlogs" in path.as_posix().lower():
         return True
-    first = head.lstrip("\ufeff\r\n ").split("\n", 1)[0].rstrip("\r")
+    first = first_line(head.lstrip("\ufeff\r\n "))
     if header_fields(first):
         return True
     columns = csv_columns(first)

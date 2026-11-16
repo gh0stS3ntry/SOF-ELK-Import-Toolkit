@@ -39,8 +39,8 @@ import re
 import sys
 from urllib.parse import urlsplit
 
-from sof_elk_aws_common import (RAW_COLUMNS, AwsLog, canon, csv_reader, iso, looks_like_csv_header,
-                                run, set_field, snake, to_float, to_int, valid_ip)
+from sof_elk_aws_common import (RAW_COLUMNS, AwsLog, canon, csv_reader, first_line, iso, looks_like_csv_header,
+                                run, set_field, snake, split_row, to_float, to_int, valid_ip)
 
 ALB_FIELDS = [
     "type", "time", "elb", "client:port", "target:port", "request_processing_time",
@@ -287,7 +287,8 @@ def parse_csv(head, fh):
 def is_csv_header(line):
     if not looks_like_csv_header(line, []) or classify(tokenize(line)) in ("alb", "classic"):
         return False
-    cols = {canon(c) for c in next(csv.reader([line], delimiter=max(",\t;|", key=line.count)))}
+    line = first_line(line)
+    cols = {canon(c) for c in split_row(line, max(",\t;|", key=line.count)) or []}
     if cols & RAW_COLUMNS:
         return True
     named = sum(1 for c in cols if c in CSV_FIELDS or c in CSV_PARTS)
@@ -296,7 +297,7 @@ def is_csv_header(line):
 
 def parse(fh, ctx):
     head = fh.read(1 << 16)
-    first = head.lstrip("\ufeff").split("\n", 1)[0].rstrip("\r")
+    first = first_line(head)
     if is_csv_header(first):
         yield from parse_csv(head.lstrip("\ufeff"), fh)
         return
@@ -329,16 +330,20 @@ def detect(path, head):
     p = path.as_posix().lower()
     if "elasticloadbalancing" in p and "/connectionlogs" not in p:
         return True
-    first = head.lstrip("\ufeff \r\n").split("\n", 1)[0].rstrip("\r")
+    first = first_line(head.lstrip("\ufeff \r\n"))
     if classify(tokenize(first)) in ("alb", "classic"):
         return True
     if is_csv_header(first):
-        cols = {canon(c) for c in next(csv.reader([first], delimiter=max(",\t;|", key=first.count)))}
+        delim = max(",\t;|", key=first.count)
+        cols = {canon(c) for c in split_row(first, delim) or []}
         if not cols & RAW_COLUMNS:
             return True
-        return any(classify(tokenize(line)) in ("alb", "classic")
-                   for row in csv.reader(head.splitlines()[1:6], delimiter=max(",\t;|", key=first.count))
-                   for line in row)
+        try:
+            return any(classify(tokenize(line)) in ("alb", "classic")
+                       for row in csv.reader(head.splitlines()[1:6], delimiter=delim)
+                       for line in row)
+        except csv.Error:
+            return False
     return False
 
 
