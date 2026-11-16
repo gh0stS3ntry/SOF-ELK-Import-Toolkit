@@ -9,37 +9,45 @@ The four AWS importers in [`AWS/`](../../AWS/) share one engine (`AWS/sof_elk_aw
 | Index template `sofelk-toolkit-aws-vpcflow` (priority 200) | `AWS/index_templates/index-aws-vpcflow.json` | `aws-vpcflow-*` ([fields](aws-vpcflow.md)) |
 | No index template: the importer creates each index with this mapping | `AWS/index_templates/index-httpdlog.json` | `httpdlog-<source>`, ALB/ELB access logs ([fields](aws-alb.md)) |
 | Index template `sofelk-toolkit-aws-waf` (priority 200) | `AWS/index_templates/index-aws-waf.json` | `aws-waf-*` ([fields](aws-waf.md)) |
+| Index template `sofelk-toolkit-aws-route53` (priority 200) | `AWS/index_templates/index-aws-route53.json` | `aws-route53-*`, Route 53 Resolver query logs ([fields](aws-route53.md)) |
+| Index template `sofelk-toolkit-aws-securityhub` (priority 200) | `AWS/index_templates/index-aws-securityhub.json` | `aws-securityhub-*`, Security Hub findings ([fields](aws-securityhub.md)) |
+| No index template: the importer creates each index with this mapping | `AWS/index_templates/index-kubernetes.json` | `kubernetes-<source>`, EKS audit logs ([fields](aws-eks.md)) |
 
 ## Index names
 
 One index per evidence source, `<prefix>-<source>`, where `<source>` is the `--source` label given on the command line (usually the AWS account ID, or a name such as `prod`), normalised the same way host names are: lower case, runs of other characters replaced by `-`. Examples: `aws-cloudtrail-123456789012`, `aws-vpcflow-prod`. `--index` may change the prefix but must still end in `-<source>`.
 
-ALB/ELB access logs are the exception: they go to SOF-ELK's web access log family, `httpdlog-<source>` (for example `httpdlog-123456789012`), so they sit next to IIS, NGINX and Apache access logs and one `FROM httpdlog-*` query hunts across all of them; `event.dataset` (`aws.alb`, `aws.elb_classic`) tells them apart. No toolkit index template is installed for `httpdlog-*`, because one at priority 200 would also take over SOF-ELK's own `httpdlog-YYYY.MM` indexes and change their mapping. Instead the importer creates each `httpdlog-<source>` index itself with the mapping in `AWS/index_templates/index-httpdlog.json`, using SOF-ELK's types for the shared web fields (`http.response.status_code` is `short`, as in SOF-ELK's `httpdlog` template). A `--source` that looks like a month (`2026.10`) is refused, so the name cannot clash with SOF-ELK's monthly indexes.
+ALB/ELB access logs and EKS audit logs are the exceptions. EKS audit logs go to SOF-ELK's Kubernetes family, `kubernetes-<source>`, handled the same way as `httpdlog-<source>` below ([aws-eks.md](aws-eks.md)). ALB/ELB access logs they go to SOF-ELK's web access log family, `httpdlog-<source>` (for example `httpdlog-123456789012`), so they sit next to IIS, NGINX and Apache access logs and one `FROM httpdlog-*` query hunts across all of them; `event.dataset` (`aws.alb`, `aws.elb_classic`) tells them apart. No toolkit index template is installed for `httpdlog-*`, because one at priority 200 would also take over SOF-ELK's own `httpdlog-YYYY.MM` indexes and change their mapping. Instead the importer creates each `httpdlog-<source>` index itself with the mapping in `AWS/index_templates/index-httpdlog.json`, using SOF-ELK's types for the shared web fields (`http.response.status_code` is `short`, as in SOF-ELK's `httpdlog` template). A `--source` that looks like a month (`2026.10`) is refused, so the name cannot clash with SOF-ELK's monthly indexes.
 
-The CloudTrail, VPC Flow and WAF prefixes start with `aws-`, so SOF-ELK's stock `aws-*` Data View shows them together, and each has its own Data View (`aws-cloudtrail-*`, ...) from `SOF-ELK_CreateDataViews.py`. SOF-ELK's own `aws` index template (pattern `aws-*`, priority 0) is overridden by the toolkit templates (priority 200) for these names. SOF-ELK's Logstash pipeline writes CloudTrail to `aws-YYYY.MM`, VPC Flow to `netflow-YYYY.MM` and ELB logs to `httpdlog-YYYY.MM`; the toolkit indexes use the same field names, so queries carry over. The ALB indexes share SOF-ELK's `httpdlog-*` pattern and Data View; the others are separate index families.
+The CloudTrail, VPC Flow, WAF, Route 53 and Security Hub prefixes start with `aws-`, so SOF-ELK's stock `aws-*` Data View shows them together, and each has its own Data View (`aws-cloudtrail-*`, ...) from `SOF-ELK_CreateDataViews.py`. SOF-ELK's own `aws` index template (pattern `aws-*`, priority 0) is overridden by the toolkit templates (priority 200) for these names. SOF-ELK's Logstash pipeline writes CloudTrail to `aws-YYYY.MM`, VPC Flow to `netflow-YYYY.MM` and ELB logs to `httpdlog-YYYY.MM`; the toolkit indexes use the same field names, so queries carry over. The ALB indexes share SOF-ELK's `httpdlog-*` pattern and Data View; the others are separate index families.
 
 ## Fields every AWS document has
 
 | Field | Type | Content |
 |---|---|---|
-| `@timestamp` | date | the record's own event time (CloudTrail `eventTime`, flow `start`, ALB `time`, WAF `timestamp`) |
+| `@timestamp` | date | the record's own event time (CloudTrail `eventTime`, flow `start`, ALB `time`, WAF `timestamp`, Route 53 `query_timestamp`, Security Hub `UpdatedAt`, EKS `requestReceivedTimestamp`) |
 | `labels.evidence_source` | keyword | the `--source` label |
 | `case` | keyword | `--case`, when given |
-| `event.dataset` | keyword | `aws.cloudtrail`, `aws.vpcflow`, `aws.alb`, `aws.elb_classic`, `aws.waf` |
+| `event.dataset` | keyword | `aws.cloudtrail`, `aws.vpcflow`, `aws.alb`, `aws.elb_classic`, `aws.waf`, `aws.route53`, `aws.securityhub`, `aws.eks_audit` |
 | `event.kind`, `event.category`, `event.action`, `event.outcome` | keyword | ECS categorisation where it applies (see each log type) |
 | `cloud.provider` | keyword | `aws` |
 | `cloud.account.id`, `cloud.region` | keyword | from the record; otherwise from an `AWSLogs/<account>/<service>/<region>/` path |
 | `cloud.availability_zone` | keyword | VPC Flow `az-id` |
 | `log.file.path` | keyword | input file, relative to the folder given on the command line |
 | `log.offset` | long | record position within that file |
+| `aws.securitylake.*` | keyword / integer | only for records loaded from an Amazon Security Lake export: OCSF class, version and source ([aws-securitylake.md](aws-securitylake.md#fields-added-to-every-security-lake-document)) |
 
 Strings are keyword (`ignore_above` 1024, or 8191 for long values); JSON objects kept whole (CloudTrail `requestParameters`, WAF headers and rule lists) are keyword with a `.text` (`match_only_text`) sub-field. The root mapping is `dynamic: false`: a field the template does not define is kept in `_source` but not indexed. Fields the parser does not know go to `<namespace>.unmapped.*` (dynamic, keyword), and values that do not fit their type go to `<namespace>.malformed` as `name=value` text.
 
 ## Document IDs and re-runs
 
-CloudTrail documents use the record's `eventID`, so the same event loaded from two files (an S3 copy and a CloudWatch export) is stored once. VPC Flow and ALB documents use the record line, numbered when the identical line occurs more than once; WAF documents use web ACL + request ID + timestamp. Loading the same files again overwrites instead of duplicating.
+CloudTrail documents use the record's `eventID`, so the same event loaded from two files (an S3 copy and a CloudWatch export) is stored once. VPC Flow and ALB documents use the record line, numbered when the identical line occurs more than once; WAF documents use web ACL + request ID + timestamp; Route 53 documents use the query's time, name, type, source address and port, VPC and response code; Security Hub documents use product ARN + finding ID + `UpdatedAt` (so each update of a finding is kept); EKS audit documents use `auditID` + `stage`. A record loaded from an Amazon Security Lake export gets the same ID as the native record, so loading both stores it once. Loading the same files again overwrites instead of duplicating.
 
 The ID of a VPC Flow or ALB record read from CSV is built from its column values, not from the original log line, so loading both the native log and a CSV conversion of it into the same index stores each record twice. Load one or the other. CloudTrail (by `eventID`) and WAF (by request ID) do not have this problem.
+
+## Amazon Security Lake input
+
+Every importer except ALB also reads Amazon Security Lake (OCSF) exports, as JSON or Athena CSV, and maps each record back to its native fields; an export holding several sources is shared out between the importers. See [aws-securitylake.md](aws-securitylake.md). Security Lake's own Parquet files are not read.
 
 ## CSV input
 

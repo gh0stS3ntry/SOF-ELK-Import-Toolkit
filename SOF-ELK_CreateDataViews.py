@@ -31,6 +31,8 @@ Create the Kibana Data Views used with the SOF-ELK direct-import toolkit.
   aws-cloudtrail-*    AWS/cloudtrail2sofelk.py (CloudTrail)
   aws-vpcflow-*       AWS/vpcflow2sofelk.py (VPC Flow Logs)
   aws-waf-*           AWS/waf2sofelk.py (AWS WAF)
+  aws-route53-*       AWS/route53resolver2sofelk.py (Route 53 Resolver query logs)
+  aws-securityhub-*   AWS/securityhub2sofelk.py (Security Hub findings, ASFF)
   genericcsv-*        Generic-CSV/genericcsv2sofelk.py (any CSV or XLSX, fields from its header)
   genericjson-*       Generic-JSON/genericjson2sofelk.py (any JSON, fields from its keys)
   auditd-*            Linux/auditd2sofelk.py (Linux audit log, one document per event)
@@ -43,7 +45,8 @@ filesystem-*, evtxlogs-*, lnkfiles-* and prefetch-* come from SOF-ELK's set in
 step 1. The toolkit's AWS indexes get their own, narrower patterns so they do not
 mix with SOF-ELK's aws-* (Logstash CloudTrail output, aws-YYYY.MM). ALB/ELB access
 logs from AWS/alb2sofelk.py go to httpdlog-<source>, which SOF-ELK's httpdlog-*
-Data View covers. The Linux journal and text syslog go to logstash-<hostname>, which
+Data View covers, and EKS audit logs from AWS/eksaudit2sofelk.py go to
+kubernetes-<source>, which SOF-ELK's kubernetes-* Data View covers. The Linux journal and text syslog go to logstash-<hostname>, which
 SOF-ELK's logstash-* Data View covers.
 
 Standard library only.
@@ -80,6 +83,8 @@ DATA_VIEWS = [
     ("aws-cloudtrail", "aws-cloudtrail-*"),
     ("aws-vpcflow", "aws-vpcflow-*"),
     ("aws-waf", "aws-waf-*"),
+    ("aws-route53", "aws-route53-*"),
+    ("aws-securityhub", "aws-securityhub-*"),
     ("genericcsv", "genericcsv-*"),
     ("genericjson", "genericjson-*"),
     ("auditd", "auditd-*"),

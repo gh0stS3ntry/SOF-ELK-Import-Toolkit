@@ -37,6 +37,7 @@ import sys
 from sof_elk_aws_common import (AwsLog, canon, compact_json, csv_records, dig, first_line, iso,
                                 looks_like_csv_header, run, set_field, snake, to_bool, to_int,
                                 valid_ip)
+import sof_elk_ocsf as ocsf
 
 # requestParameters keys copied to aws.cloudtrail.request_parameters.<snake_case> (keyword).
 # Everything else stays searchable in aws.cloudtrail.flattened.request_parameters.
@@ -346,10 +347,21 @@ def detect(path, head):
         (looks_like_csv_header(first, ["message"]) and "eventSource" in h)
 
 
+def from_ocsf(r):
+    """Amazon Security Lake (OCSF API Activity from CloudTrail) -> the same document as the native event."""
+    rec = ocsf.to_cloudtrail(r)
+    if not (rec.get("eventName") or rec.get("eventID")) or not rec.get("eventTime"):
+        return None, "Security Lake CloudTrail record without api.operation / metadata.uid and time"
+    return rec.get("eventID") or compact_json(rec), build(rec)
+
+
 LOG = AwsLog(
     prefix="aws-cloudtrail", namespace="aws.cloudtrail", title="AWS CloudTrail",
     dataset="aws.cloudtrail", detect=detect, parse=parse, use_occurrence=False,
+    ocsf=("cloudtrail", from_ocsf),
     describe=[
+        "Amazon Security Lake exports (OCSF API Activity from CloudTrail management, S3 and Lambda"
+        " data events): JSON or Athena CSV",
         "CloudTrail S3 delivery files ({\"Records\": [...]}, .json or .json.gz)",
         "Event history download: JSON, or CSV (with or without the 'CloudTrail event' column)",
         "CSV conversions: Athena/CloudTrail Lake results, flattened (userIdentity.arn) or raw-JSON column",

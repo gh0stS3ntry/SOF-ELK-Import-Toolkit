@@ -9,7 +9,8 @@ What it does:
    `case` field is the case name (upper/lower case ignored), as written by the importers'
    --case option.
 2. Groups them into evidence hosts by the <prefix>-<hostname> index suffix (host.name
-   gives the display name). AWS indexes (aws-cloudtrail-*, aws-vpcflow-*, aws-waf-*, and
+   gives the display name). AWS indexes (aws-cloudtrail-*, aws-vpcflow-*, aws-waf-*,
+   aws-route53-*, aws-securityhub-*, kubernetes-* loaded by AWS/eksaudit2sofelk.py, and
    httpdlog-* loaded by AWS/alb2sofelk.py) are grouped into one "AWS" target that runs the
    three AWS checklists without a role prompt.
 3. Asks the role of each other host (or takes it from --role), and picks the checklists:
@@ -101,7 +102,8 @@ WINDOWS_FAMILIES = frozenset({
     "recentfilecache", "sqlitedb", "sum"})
 LINUX_FAMILIES = frozenset({"logstash", "auditd", "bodyfile", "wtmp", "packages", "linuxconfig"})
 SHARED_FAMILIES = frozenset({"browsinghistory", "httpdlog", "genericcsv", "genericjson"})
-AWS_FAMILIES = frozenset({"aws-cloudtrail", "aws-vpcflow", "aws-waf"})
+AWS_FAMILIES = frozenset({"aws-cloudtrail", "aws-vpcflow", "aws-waf", "aws-route53", "aws-securityhub",
+                          "kubernetes"})
 KNOWN_FAMILIES = sorted(WINDOWS_FAMILIES | LINUX_FAMILIES | SHARED_FAMILIES | AWS_FAMILIES,
                         key=len, reverse=True)
 # SOF-ELK's own Logstash indexes (logstash-2026.10, httpdlog-2026.10.31) are not per host.
@@ -153,6 +155,9 @@ FAMILY_SOURCE = {
     "aws-cloudtrail": ("LOG", "AWS CloudTrail"),
     "aws-vpcflow": ("LOG", "AWS VPC Flow Log"),
     "aws-waf": ("LOG", "AWS WAF Log"),
+    "aws-route53": ("LOG", "AWS Route 53 Resolver"),
+    "aws-securityhub": ("LOG", "AWS Security Hub"),
+    "kubernetes": ("LOG", "EKS Audit Log"),
 }
 # Columns that name the user, the evidence file and the inode, most specific first.
 USER_COLUMNS = ("user.name", "winlog.user.name", "source.user.name", "aws.cloudtrail.user_identity.arn",

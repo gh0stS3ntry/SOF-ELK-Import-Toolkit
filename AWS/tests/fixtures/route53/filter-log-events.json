@@ -1,0 +1,9 @@
+{
+  "events": [
+    {
+      "timestamp": 1792458000000,
+      "message": "{\"version\": \"1.100000\", \"account_id\": \"111122223333\", \"region\": \"us-east-1\", \"vpc_id\": \"vpc-0abc\", \"query_timestamp\": \"2026-10-20T01:00:06Z\", \"query_name\": \"c2.badexample.co.uk.\", \"query_type\": \"A\", \"query_class\": \"IN\", \"rcode\": \"NOERROR\", \"answers\": [{\"Rdata\": \"198.51.100.66\", \"Type\": \"A\", \"Class\": \"IN\"}], \"srcaddr\": \"10.0.1.15\", \"srcport\": \"53412\", \"transport\": \"UDP\", \"srcids\": {\"instance\": \"i-0123456789abcdef0\"}}",
+      "logStreamName": "vpc-0abc_rqlc-1"
+    }
+  ]
+}

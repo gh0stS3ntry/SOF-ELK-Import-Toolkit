@@ -379,7 +379,8 @@ function Copy-IndexTemplates([string]$SourceRoot, [string]$Destination) {
     #             (as the importers name them when they install them)
     # Exclude lists files the importers deliberately never install as index
     # templates: AWS index-httpdlog.json would override SOF-ELK's httpdlog-*
-    # template, so alb2sofelk.py only uses it to create its own index. Linux
+    # template, so alb2sofelk.py only uses it to create its own index, and
+    # index-kubernetes.json likewise SOF-ELK's kubernetes-* (eksaudit2sofelk.py). Linux
     # index-logstash.json and index-httpdlog.json are the same for SOF-ELK's
     # logstash-* and httpdlog-* (the Linux importers create logstash-<hostname>
     # and httpdlog-<hostname> with them). Linux browser history uses
@@ -391,7 +392,7 @@ function Copy-IndexTemplates([string]$SourceRoot, [string]$Destination) {
         @{ Dir = 'sof-elk-templates\component_templates'; ComponentPrefix = ''; IndexPrefix = '' },
         @{ Dir = 'sof-elk-templates\index_templates'; ComponentPrefix = ''; IndexPrefix = '' },
         @{ Dir = 'Windows\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
-        @{ Dir = 'AWS\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-httpdlog.json') },
+        @{ Dir = 'AWS\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-httpdlog.json', 'index-kubernetes.json') },
         @{ Dir = 'Generic-CSV\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
         @{ Dir = 'Generic-JSON\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
         @{ Dir = 'Linux\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-logstash.json', 'index-httpdlog.json') }

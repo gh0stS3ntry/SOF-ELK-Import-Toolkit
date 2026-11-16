@@ -1,0 +1,379 @@
+[
+  {
+    "accountid": "111122223333",
+    "region": "ap-southeast-1",
+    "asl_version": "2_0",
+    "activity_id": 2,
+    "activity_name": "Read",
+    "category_uid": 6,
+    "category_name": "Application Activity",
+    "class_uid": 6003,
+    "class_name": "API Activity",
+    "type_uid": 600302,
+    "severity": "Informational",
+    "actor": {
+      "user": {
+        "type": "AssumedRole",
+        "uid": "arn:aws:sts::111122223333:assumed-role/AWSServiceRoleForFMS/AWSFirewallManager",
+        "uid_alt": "AROAEXAMPLE:AWSFirewallManager",
+        "credential_uid": "ASIAEXAMPLEKEY1",
+        "account": {
+          "uid": "111122223333"
+        }
+      },
+      "session": {
+        "issuer": "arn:aws:iam::111122223333:role/aws-service-role/fms.amazonaws.com/AWSServiceRoleForFMS",
+        "is_mfa": false,
+        "created_time": 1792457940000
+      },
+      "invoked_by": "fms.amazonaws.com"
+    },
+    "api": {
+      "operation": "DescribeSecurityGroups",
+      "service": {
+        "name": "ec2.amazonaws.com"
+      },
+      "request": {
+        "data": "{\"maxResults\":1000,\"securityGroupSet\":{},\"filterSet\":{}}",
+        "uid": "07be41f1-594c-4333-b704-0950cd3a45ae"
+      }
+    },
+    "cloud": {
+      "region": "ap-southeast-1",
+      "provider": "AWS"
+    },
+    "metadata": {
+      "product": {
+        "version": "1.11",
+        "name": "CloudTrail",
+        "vendor_name": "AWS",
+        "feature": {
+          "name": "Management"
+        }
+      },
+      "uid": "10bee927-2572-4691-bdfa-7bec17c1794e",
+      "version": "1.1.0",
+      "event_code": "AwsApiCall"
+    },
+    "src_endpoint": {
+      "ip": null,
+      "domain": "fms.amazonaws.com"
+    },
+    "http_request": {
+      "user_agent": "fms.amazonaws.com"
+    },
+    "status": "Success",
+    "time": 1792458000000,
+    "time_dt": "2026-10-20 01:00:00.000000",
+    "unmapped": {
+      "managementEvent": "true",
+      "readOnly": "true",
+      "recipientAccountId": "111122223333",
+      "userIdentity.sessionContext.sessionIssuer.userName": "AWSServiceRoleForFMS"
+    }
+  },
+  {
+    "accountid": "111122223333",
+    "region": "us-east-1",
+    "asl_version": "2_0",
+    "class_uid": 4001,
+    "class_name": "Network Activity",
+    "category_uid": 4,
+    "activity_name": "Traffic",
+    "metadata": {
+      "product": {
+        "version": "5",
+        "name": "Amazon VPC",
+        "vendor_name": "AWS"
+      },
+      "uid": null,
+      "version": "1.1.0"
+    },
+    "cloud": {
+      "account": {
+        "uid": "111122223333"
+      },
+      "region": "us-east-1",
+      "zone": "use1-az1"
+    },
+    "src_endpoint": {
+      "ip": "10.0.1.15",
+      "port": 49152,
+      "interface_uid": "eni-0a1b2c3d",
+      "vpc_uid": "vpc-0abc",
+      "subnet_uid": "subnet-0123",
+      "instance_uid": "i-0123456789abcdef0"
+    },
+    "dst_endpoint": {
+      "ip": "198.51.100.20",
+      "port": 443
+    },
+    "connection_info": {
+      "protocol_num": 6,
+      "tcp_flags": 19,
+      "direction": "Outbound",
+      "protocol_ver": "IPv4",
+      "boundary_id": 8
+    },
+    "traffic": {
+      "bytes": 52344,
+      "packets": 41
+    },
+    "start_time": 1792458000000,
+    "end_time": 1792458060000,
+    "action": "Allowed",
+    "action_id": 1,
+    "disposition": "Allowed",
+    "status_code": "OK",
+    "time": 1792458060000
+  },
+  {
+    "accountid": "111122223333",
+    "region": "us-east-1",
+    "asl_version": "2_0",
+    "class_uid": 4003,
+    "class_name": "DNS Activity",
+    "category_uid": 4,
+    "activity_name": "Query",
+    "metadata": {
+      "product": {
+        "version": "1.100000",
+        "name": "Route 53",
+        "vendor_name": "AWS"
+      },
+      "uid": null,
+      "version": "1.1.0"
+    },
+    "cloud": {
+      "account": {
+        "uid": "111122223333"
+      },
+      "region": "us-east-1"
+    },
+    "src_endpoint": {
+      "ip": "10.0.1.15",
+      "port": 53412,
+      "vpc_uid": "vpc-0abc",
+      "instance_uid": "i-0123456789abcdef0"
+    },
+    "query": {
+      "hostname": "c2.badexample.co.uk.",
+      "type": "A",
+      "class": "IN"
+    },
+    "answers": [
+      {
+        "rdata": "198.51.100.66",
+        "type": "A",
+        "class": "IN"
+      }
+    ],
+    "rcode": "NOERROR",
+    "rcode_id": 0,
+    "connection_info": {
+      "protocol_name": "UDP",
+      "direction": "Outbound"
+    },
+    "time": 1792458006000
+  },
+  {
+    "accountid": "111122223333",
+    "region": "us-east-1",
+    "asl_version": "2_0",
+    "class_uid": 2004,
+    "class_name": "Detection Finding",
+    "category_uid": 2,
+    "activity_name": "Create",
+    "severity": "High",
+    "status": "New",
+    "metadata": {
+      "product": {
+        "name": "GuardDuty",
+        "vendor_name": "Amazon",
+        "uid": "arn:aws:securityhub:us-east-1::product/aws/guardduty"
+      },
+      "version": "1.1.0"
+    },
+    "finding_info": {
+      "uid": "arn:aws:guardduty:us-east-1:111122223333:detector/abc/finding/f1",
+      "title": "EC2 instance i-0123456789abcdef0 is communicating with a known C2 server",
+      "desc": "The EC2 instance queried a domain associated with command and control.",
+      "types": [
+        "TTPs/Command and Control/Backdoor:EC2-C&CActivity.B!DNS"
+      ],
+      "created_time": 1792458008000,
+      "modified_time": 1792458009000,
+      "first_seen_time": 1792458006000,
+      "last_seen_time": 1792458006000,
+      "analytic": {
+        "uid": "arn:aws:guardduty:us-east-1:111122223333:detector/abc"
+      }
+    },
+    "cloud": {
+      "account": {
+        "uid": "111122223333"
+      },
+      "region": "us-east-1"
+    },
+    "resources": [
+      {
+        "uid": "arn:aws:ec2:us-east-1:111122223333:instance/i-0123456789abcdef0",
+        "type": "AwsEc2Instance",
+        "region": "us-east-1",
+        "cloud_partition": "aws"
+      }
+    ],
+    "remediation": {
+      "desc": "Isolate the instance.",
+      "references": [
+        "https://docs.aws.amazon.com/guardduty/"
+      ]
+    },
+    "time": 1792458009000,
+    "unmapped": {
+      "RecordState": "ACTIVE",
+      "Severity.Normalized": "70",
+      "ProductFields.aws/guardduty/service/count": "3"
+    }
+  },
+  {
+    "accountid": "111122223333",
+    "region": "us-east-1",
+    "asl_version": "2_0",
+    "class_uid": 6003,
+    "class_name": "API Activity",
+    "category_uid": 6,
+    "activity_name": "Create",
+    "metadata": {
+      "product": {
+        "version": "audit.k8s.io/v1",
+        "name": "Amazon EKS",
+        "vendor_name": "AWS"
+      },
+      "uid": "ocsf-eks-1",
+      "version": "1.1.0"
+    },
+    "api": {
+      "operation": "create",
+      "request": {
+        "uid": "a1b2c3d4-audit-1"
+      },
+      "response": {
+        "code": 201
+      }
+    },
+    "actor": {
+      "user": {
+        "name": "kubernetes-admin",
+        "uid": "aws-iam-authenticator:111122223333:AIDAEXAMPLE",
+        "groups": [
+          {
+            "name": "system:masters"
+          },
+          {
+            "name": "system:authenticated"
+          }
+        ]
+      }
+    },
+    "src_endpoint": {
+      "ip": "203.0.113.50"
+    },
+    "http_request": {
+      "user_agent": "kubectl/v1.30.0",
+      "url": {
+        "path": "/api/v1/namespaces/default/pods"
+      }
+    },
+    "resources": [
+      {
+        "type": "pods",
+        "name": "debug-shell",
+        "namespace": "default"
+      }
+    ],
+    "cloud": {
+      "account": {
+        "uid": "111122223333"
+      },
+      "region": "us-east-1"
+    },
+    "time": 1792458011000,
+    "start_time": 1792458011000,
+    "end_time": 1792458011050,
+    "unmapped": {
+      "stage": "ResponseComplete",
+      "level": "RequestResponse",
+      "apiVersion": "audit.k8s.io/v1",
+      "objectRef.apiVersion": "v1",
+      "annotations.authorization.k8s.io/decision": "allow",
+      "annotations.authorization.k8s.io/reason": ""
+    }
+  },
+  {
+    "accountid": "111122223333",
+    "region": "us-east-1",
+    "asl_version": "2_0",
+    "class_uid": 4002,
+    "class_name": "HTTP Activity",
+    "category_uid": 4,
+    "activity_name": "Get",
+    "metadata": {
+      "product": {
+        "name": "AWS WAF",
+        "vendor_name": "AWS",
+        "version": "1",
+        "feature": {
+          "uid": "arn:aws:wafv2:us-east-1:111122223333:regional/webacl/prod-acl/1234"
+        }
+      },
+      "version": "1.1.0",
+      "labels": [
+        "awswaf:managed:aws:sql-database:SQLi_QueryArguments"
+      ]
+    },
+    "src_endpoint": {
+      "ip": "203.0.113.77",
+      "location": {
+        "country": "NL"
+      }
+    },
+    "dst_endpoint": {
+      "svc_name": "ALB",
+      "uid": "111122223333-app/prod-alb/abc"
+    },
+    "http_request": {
+      "http_method": "GET",
+      "url": {
+        "path": "/search",
+        "query_string": "q=1%27%20OR%201=1--",
+        "hostname": "shop.example.com"
+      },
+      "version": "HTTP/1.1",
+      "uid": "1-abcdef-req",
+      "user_agent": "sqlmap/1.7",
+      "http_headers": [
+        {
+          "name": "Host",
+          "value": "shop.example.com"
+        },
+        {
+          "name": "User-Agent",
+          "value": "sqlmap/1.7"
+        }
+      ]
+    },
+    "firewall_rule": {
+      "uid": "AWS-AWSManagedRulesSQLiRuleSet",
+      "type": "MANAGED_RULE_GROUP"
+    },
+    "disposition": "Blocked",
+    "action": "Denied",
+    "time": 1792458005000,
+    "unmapped": {
+      "httpSourceName": "ALB",
+      "formatVersion": "1",
+      "terminatingRuleMatchDetails": "[{\"conditionType\":\"SQL_INJECTION\",\"location\":\"QUERY_STRING\",\"matchedData\":[\"OR\",\"1=1\"]}]"
+    }
+  }
+]

@@ -9,6 +9,7 @@ the same logs already converted to CSV (Athena results, Logs Insights and spread
 Elasticsearch (the indexes use dynamic: false).
 """
 import gzip
+import json
 import shutil
 import sys
 import tempfile
@@ -24,6 +25,10 @@ import cloudtrail2sofelk  # noqa: E402
 import sof_elk_aws_common as common  # noqa: E402
 import vpcflow2sofelk  # noqa: E402
 import waf2sofelk  # noqa: E402
+import eksaudit2sofelk  # noqa: E402
+import route53resolver2sofelk  # noqa: E402
+import securityhub2sofelk  # noqa: E402
+import sof_elk_ocsf as ocsf  # noqa: E402
 
 FIXTURES = HERE / "fixtures"
 
@@ -344,7 +349,9 @@ class OddLineEndingsTest(unittest.TestCase):
     """Binary files and bare-CR (classic Mac) line endings must not crash detection, and
     CR-only CSVs must parse exactly like their CRLF/LF originals."""
 
-    MODULES = {"cloudtrail": cloudtrail2sofelk, "vpcflow": vpcflow2sofelk, "alb": alb2sofelk, "waf": waf2sofelk}
+    MODULES = {"cloudtrail": cloudtrail2sofelk, "vpcflow": vpcflow2sofelk, "alb": alb2sofelk, "waf": waf2sofelk,
+               "route53": route53resolver2sofelk, "securityhub": securityhub2sofelk, "eks": eksaudit2sofelk,
+               "securitylake": None}
 
     def records(self, module, path):
         args = types.SimpleNamespace(case=None, fields=None)
@@ -361,15 +368,20 @@ class OddLineEndingsTest(unittest.TestCase):
                 for name, payload in ((f"junk{i}.bin", data), (f"junk{i}.gz", gzip.compress(data))):
                     f = Path(tmp) / name
                     f.write_bytes(payload)
-                    for module in self.MODULES.values():
+                    for module in filter(None, self.MODULES.values()):
                         self.assertIn(module.LOG.detect(f, common.head_text(f)), (True, False))
                         if module is not cloudtrail2sofelk:  # junk2 has CloudTrail CSV columns
                             self.assertFalse(module.LOG.detect(f, common.head_text(f)), (module.__name__, name))
 
     def test_cr_only_csv_parses_like_the_original(self):
         with tempfile.TemporaryDirectory() as tmp:
-            for folder, module in self.MODULES.items():
+            for folder, folder_module in self.MODULES.items():
                 for src in sorted((FIXTURES / folder / "csv").glob("*")):
+                    module = folder_module
+                    if module is None:  # Security Lake CSVs: the importer named in the file
+                        module = {"cloudtrail": cloudtrail2sofelk, "vpcflow": vpcflow2sofelk, "waf": waf2sofelk,
+                                  "route53": route53resolver2sofelk, "securityhub": securityhub2sofelk,
+                                  "eks": eksaudit2sofelk}[src.stem.split("_")[1]]
                     data = src.read_bytes().replace(b"\r\n", b"\n")
                     for suffix, payload in ((".csv", data.replace(b"\n", b"\r")),
                                             (".csv.gz", gzip.compress(data.replace(b"\n", b"\r")))):
@@ -380,7 +392,196 @@ class OddLineEndingsTest(unittest.TestCase):
                                          f"{folder}/{src.name}")
 
 
+class SecurityLakeTest(TemplateCheck):
+    """Amazon Security Lake (OCSF) exports: each importer loads its own source's records, maps
+    them to its existing schema, and skips the other sources with a note."""
+
+    MODULES = {"cloudtrail": cloudtrail2sofelk, "vpcflow": vpcflow2sofelk, "waf": waf2sofelk,
+               "route53": route53resolver2sofelk, "securityhub": securityhub2sofelk, "eks": eksaudit2sofelk}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.results = {}
+        for name, module in cls.MODULES.items():
+            out = parse_all(module, "securitylake") + parse_all(module, "securitylake/csv")
+            cls.results[name] = out
+
+    def docs(self, source, file_part=""):
+        return [doc for f, key, doc in self.results[source] if key is not None and file_part in f]
+
+    def test_templates(self):
+        for name, module in self.MODULES.items():
+            self.assert_mapped(module.LOG.prefix, self.results[name])
+
+    def test_every_source_recognised(self):
+        for name in self.MODULES:
+            self.assertTrue(self.docs(name), name)
+            for doc in self.docs(name):
+                self.assertEqual(doc["aws"]["securitylake"]["source"], name)
+        # the mixed array: one record per importer, the other five skipped with a pointer
+        for name in self.MODULES:
+            mixed = [(k, d) for f, k, d in self.results[name] if f == "mixed_sources_array.json"]
+            self.assertEqual(sum(1 for k, _ in mixed if k is not None), 1, name)
+            self.assertEqual(sum(1 for k, d in mixed if k is None and "loaded by" in d), 5, name)
+
+    def test_cloudtrail(self):
+        docs = {d["aws"]["cloudtrail"]["event_name"]: d for d in self.docs("cloudtrail", "cloudtrail_")}
+        fms = docs["DescribeSecurityGroups"]
+        ct = fms["aws"]["cloudtrail"]
+        self.assertEqual(fms["@timestamp"], "2026-10-20T01:00:00.000Z")
+        self.assertEqual(ct["shared_event_id"], "10bee927-2572-4691-bdfa-7bec17c1794e")
+        self.assertEqual(ct["user_identity"]["invoked_by"], "fms.amazonaws.com")
+        self.assertEqual(ct["user_identity"]["session_issuer"]["user_name"], "AWSServiceRoleForFMS")
+        self.assertIs(ct["read_only"], True)
+        self.assertEqual(fms["source"]["address"], "fms.amazonaws.com")
+        self.assertEqual(fms["cloud"]["account"]["id"], "111122223333")
+        fail = docs["CreateUser"]
+        self.assertEqual(fail["event"]["outcome"], "failure")
+        self.assertEqual(fail["aws"]["cloudtrail"]["request_parameters"]["user_name"], "backup-admin")
+        self.assertEqual(fail["source"]["ip"], "203.0.113.50")
+        get = docs["GetObject"]
+        self.assertEqual(get["aws"]["cloudtrail"]["request_parameters"]["bucket_name"], "finance-reports")
+        self.assertEqual(get["destination"]["bytes"], 48213)
+        self.assertIs(get["aws"]["cloudtrail"]["management_event"], False)
+        self.assertIn("Invoke", docs)
+        login = docs["ConsoleLogin"]
+        self.assertEqual(login["aws"]["cloudtrail"]["console_login"], "Failure")
+        self.assertEqual(login["event"]["outcome"], "failure")
+
+    def test_cloudtrail_csv_matches_json(self):
+        key = lambda d: (d["aws"]["cloudtrail"]["shared_event_id"], d["@timestamp"])
+        js = {key(d): d for d in self.docs("cloudtrail", "cloudtrail_management")}
+        for d in self.docs("cloudtrail", "athena_cloudtrail"):
+            j = js[key(d)]
+            for doc in (d, j):
+                doc.pop("log", None)
+            self.assertEqual(d, j)
+
+    def test_cloudtrail_id_matches_native(self):
+        """The OCSF event keeps eventID as its document key, like the native event."""
+        rec = json.loads((FIXTURES / "securitylake" / "cloudtrail_management.jsonl").read_text().splitlines()[0])
+        key, _ = cloudtrail2sofelk.from_ocsf(rec)
+        self.assertEqual(key, "10bee927-2572-4691-bdfa-7bec17c1794e")
+
+    def test_vpcflow(self):
+        docs = self.docs("vpcflow", "vpcflow.jsonl")
+        self.assertEqual(len(docs), 4)  # 2 records, plain + gzip; the NODATA record is skipped
+        out = next(d for d in docs if d["network"]["direction"] == "egress")
+        self.assertEqual(out["source"]["ip"], "10.0.1.15")
+        self.assertEqual(out["destination"]["port"], 443)
+        self.assertEqual(out["source"]["bytes"], 52344)
+        self.assertEqual(out["aws"]["vpcflow"]["action"], "ACCEPT")
+        self.assertEqual(out["netflow"]["flow_duration"], 60.0)
+        self.assertEqual(out["aws"]["vpcflow"]["interface_id"], "eni-0a1b2c3d")
+        self.assertEqual(out["network"]["tcp_flags"], ["ack", "syn", "fin"])
+        rej = next(d for d in docs if d["network"]["direction"] == "ingress")
+        self.assertEqual(rej["event"]["outcome"], "failure")
+        self.assertEqual(rej["destination"]["port"], 3389)
+
+    def test_waf(self):
+        doc = self.docs("waf", "waf.jsonl")[0]
+        self.assertEqual(doc["aws"]["waf"]["action"], "BLOCK")
+        self.assertEqual(doc["aws"]["waf"]["web_acl_name"], "prod-acl")
+        self.assertEqual(doc["source"]["ip"], "203.0.113.77")
+        self.assertEqual(doc["url"]["domain"], "shop.example.com")
+        self.assertEqual(doc["user_agent"]["original"], "sqlmap/1.7")
+        self.assertEqual(doc["aws"]["waf"]["terminating_rule_match"]["condition_type"], ["SQL_INJECTION"])
+
+    def test_route53(self):
+        doc = self.docs("route53", "route53.jsonl")[0]
+        self.assertEqual(doc["dns"]["question"]["name"], "c2.badexample.co.uk")
+        self.assertEqual(doc["dns"]["question"]["registered_domain"], "badexample.co.uk")
+        self.assertEqual(doc["dns"]["resolved_ip"], ["198.51.100.66"])
+        self.assertEqual(doc["aws"]["route53"]["instance"], "i-0123456789abcdef0")
+        blocked = [d for d in self.docs("route53", "route53.jsonl") if d["dns"]["response"]["code"] == "NXDOMAIN"][0]
+        self.assertEqual(blocked["aws"]["route53"]["firewall"]["rule_action"], "BLOCK")
+
+    def test_securityhub(self):
+        docs = {d["aws"]["securityhub"]["product_name"]: d for d in self.docs("securityhub", "securityhub.jsonl")}
+        gd = docs["GuardDuty"]["aws"]["securityhub"]
+        self.assertEqual(gd["severity"], {"label": "HIGH", "normalized": 70})
+        self.assertEqual(gd["workflow_status"], "NEW")
+        self.assertEqual(gd["resource"]["type"], ["AwsEc2Instance"])
+        self.assertEqual(docs["GuardDuty"]["@timestamp"], "2026-10-20T01:00:09.000Z")
+        ctl = docs["Security Hub"]
+        self.assertEqual(ctl["aws"]["securityhub"]["compliance"]["status"], "FAILED")
+        self.assertEqual(ctl["aws"]["securitylake"]["class_uid"], 2001)
+
+    def test_eks(self):
+        doc = self.docs("eks", "eks_audit.jsonl")[0]
+        self.assertEqual(doc["k8s"]["auditID"], "a1b2c3d4-audit-1")
+        self.assertEqual(doc["k8s"]["user"]["groups"], ["system:masters", "system:authenticated"])
+        self.assertEqual(doc["k8s"]["objectRef"]["resource"], "pods")
+        self.assertEqual(doc["k8s"]["annotations"]["authorization.k8s.io/decision"], "allow")
+        self.assertEqual(doc["http"]["request"]["method"], "CREATE")
+        self.assertEqual(doc["http"]["response"]["status_code"], 201)
+        self.assertEqual(doc["cloud"]["account"]["id"], "111122223333")
+
+    def test_source_of(self):
+        self.assertEqual(ocsf.source_of({"class_uid": 4001, "metadata": {}}), "vpcflow")
+        self.assertEqual(ocsf.source_of({"class_uid": 2004, "metadata": {"product": {"name": "Inspector"}}}),
+                         "securityhub")
+        self.assertEqual(ocsf.source_of({"class_uid": 6003, "metadata": {"product": {"name": "Amazon EKS"}}}), "eks")
+        self.assertIsNone(ocsf.source_of({"class_uid": 1001, "metadata": {"product": {"name": "Okta"}}}))
+        self.assertIsNone(ocsf.source_of({"eventName": "x"}))
+
+
+class NewNativeLogsTest(TemplateCheck):
+    """Native Route 53 Resolver, Security Hub (ASFF) and EKS audit logs."""
+
+    def test_route53(self):
+        out = parse_all(route53resolver2sofelk, "route53") + parse_all(route53resolver2sofelk, "route53/csv")
+        self.assert_mapped("aws-route53", out)
+        docs = [d for _, k, d in out if k]
+        self.assertEqual(len(docs), 10)  # 2 + 1 + 2 records, plain and gzip
+        fw = [d for d in docs if d.get("aws", {}).get("route53", {}).get("firewall")]
+        self.assertTrue(fw)
+        self.assertEqual(fw[0]["aws"]["route53"]["resolver_instance"], "rslvr-in-0abc")
+        self.assertEqual(fw[0]["event"]["type"], "denied")
+        for f in (FIXTURES / "vpcflow").glob("*"):
+            if f.is_file():
+                self.assertFalse(route53resolver2sofelk.LOG.detect(f, common.head_text(f)), f)
+        csv_file = FIXTURES / "route53" / "csv" / "athena_results.csv"
+        self.assertFalse(vpcflow2sofelk.LOG.detect(csv_file, common.head_text(csv_file)))
+
+    def test_securityhub(self):
+        out = parse_all(securityhub2sofelk, "securityhub")
+        self.assert_mapped("aws-securityhub", out)
+        docs = [d for _, k, d in out if k]
+        self.assertEqual(len(docs), 4)
+        doc = next(d for d in docs if d["@timestamp"] == "2026-10-20T01:00:09.000Z")
+        self.assertEqual(doc["source"]["ip"], "10.0.1.15")
+        self.assertEqual(doc["destination"]["ip"], "198.51.100.66")
+        self.assertEqual(doc["network"]["direction"], "egress")
+        self.assertEqual(doc["event"]["severity"], 70)
+        self.assertEqual(doc["message"], doc["aws"]["securityhub"]["title"])
+        keys = {k for _, k, _ in out if k}
+        self.assertEqual(len(keys), 2)  # one finding, two versions (UpdatedAt)
+
+    def test_eks(self):
+        out = parse_all(eksaudit2sofelk, "eks")
+        self.assert_mapped("kubernetes", out)
+        docs = [d for _, k, d in out if k]
+        self.assertEqual(len(docs), 4)
+        denied = next(d for d in docs if d["k8s"]["auditID"] == "a1b2c3d4-audit-2")
+        self.assertEqual(denied["event"]["outcome"], "failure")
+        self.assertEqual(denied["k8s"]["authorization_decision"], "forbid")
+        self.assertEqual(denied["user"]["name"], "system:anonymous")
+        created = next(d for d in docs if d["k8s"]["auditID"] == "a1b2c3d4-audit-1")
+        self.assertIn('"privileged":true', created["k8s"]["flattened"]["request_object"])
+        self.assertEqual(created["source"]["ip"], ["203.0.113.50"])
+        self.assertFalse(eksaudit2sofelk.LOG.index_template)
+
+
 class CommonTest(unittest.TestCase):
+    def test_struct_with_json_and_dotted_keys(self):
+        parsed = common.parse_struct('{operation=GetObject, request={data={"a":{"b":[1,2]},"c":"x, y=z"}, uid=r1}}')
+        self.assertEqual(parsed, {"operation": "GetObject", "request": {"data": '{"a":{"b":[1,2]},"c":"x, y=z"}', "uid": "r1"}})
+        self.assertEqual(common.parse_struct("{readOnly=true, userIdentity.sessionContext.sessionIssuer.userName=Admin,"
+                                             " annotations.authorization.k8s.io/decision=allow}"),
+                         {"readOnly": "true", "userIdentity.sessionContext.sessionIssuer.userName": "Admin",
+                          "annotations.authorization.k8s.io/decision": "allow"})
+
     def test_struct_text(self):
         self.assertEqual(common.parse_struct("{type=IAMUser, sessioncontext={attributes={mfaauthenticated=false}},"
                                              " invokedby=null}"),

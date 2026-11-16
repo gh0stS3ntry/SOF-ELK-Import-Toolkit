@@ -107,13 +107,66 @@
               }
             }
           }
+        },
+        "aws": {
+          "properties": {
+            "securitylake": {
+              "properties": {
+                "asl_version": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "ocsf_version": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "class_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "activity_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "severity": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "product_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "product_feature": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "event_day": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "source": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "class_uid": {
+                  "type": "integer"
+                },
+                "category_uid": {
+                  "type": "integer"
+                },
+                "type_uid": {
+                  "type": "long"
+                }
+              }
+            }
+          }
         }
       }
     }
   },
   "_meta": {
-    "description": "Fields shared by every SOF-ELK Import Toolkit AWS index: evidence source, case, provenance (log.file.path, log.offset) and ECS cloud.*",
+    "description": "Fields shared by every SOF-ELK Import Toolkit AWS index: evidence source, case, provenance (log.file.path, log.offset) and ECS cloud.*; aws.securitylake.* on documents built from Amazon Security Lake (OCSF) exports",
     "provider": "SOF-ELK-Import-Toolkit",
-    "version": 1
+    "version": 2
   }
 }

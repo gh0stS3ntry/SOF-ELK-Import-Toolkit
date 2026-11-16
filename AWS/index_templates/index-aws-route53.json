@@ -1,0 +1,184 @@
+{
+  "index_patterns": [
+    "aws-route53-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-aws-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "aws-route53",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "dns": {
+          "properties": {
+            "question": {
+              "properties": {
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "registered_domain": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "top_level_domain": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "subdomain": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "class": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "response": {
+              "properties": {
+                "code": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "answers": {
+              "properties": {
+                "data": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "class": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "ip": {
+                  "type": "ip"
+                }
+              }
+            },
+            "resolved_ip": {
+              "type": "ip"
+            },
+            "type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "integer"
+            }
+          }
+        },
+        "network": {
+          "properties": {
+            "transport": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "protocol": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "event": {
+          "properties": {
+            "type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "aws": {
+          "properties": {
+            "route53": {
+              "properties": {
+                "query_name": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "account_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "vpc_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "version": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "instance": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "resolver_instance": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "resolver_network_interface": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "firewall": {
+                  "properties": {
+                    "rule_action": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "rule_group_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "domain_list_id": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "protection": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    }
+                  }
+                },
+                "unmapped": {
+                  "type": "object",
+                  "dynamic": "true"
+                },
+                "malformed": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Amazon Route 53 Resolver query logs (AWS/route53resolver2sofelk.py); SOF-ELK 6014-passivedns.conf field names",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}

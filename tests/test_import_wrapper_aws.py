@@ -84,6 +84,18 @@ class AwsDiscoveryTests(unittest.TestCase):
         self.assertIn("aws-waf-logs-prod-1-2026-10-20-01-00-00-abc", {p.name for p in aws_files["AWS WAF"]})
         self.assertTrue(any(p.suffix == ".gz" for p in aws_files["AWS CloudTrail"]))
 
+    def test_security_lake_exports_go_to_every_source_importer(self):
+        sl = self.root / "securitylake"
+        shutil.copytree(FIXTURES / "securitylake", sl)
+        _, _, _, aws_files = w.discover(self.root, self.aws)
+        mixed = (sl / "mixed_sources_array.json").resolve()
+        claimed = sorted(label for label, files in aws_files.items() if mixed in files)
+        self.assertEqual(claimed, sorted(set(w.AWS_IMPORTERS) - {"AWS ALB/ELB"}))
+        single = (sl / "route53.jsonl").resolve()
+        self.assertEqual([label for label, files in aws_files.items() if single in files], ["AWS Route 53 Resolver"])
+        athena = (sl / "csv" / "athena_cloudtrail.csv").resolve()
+        self.assertEqual([label for label, files in aws_files.items() if athena in files], ["AWS CloudTrail"])
+
     def test_no_aws_detector_means_no_aws_files(self):
         _, _, _, aws_files = w.discover(self.root)
         self.assertFalse(any(aws_files.values()))
@@ -97,7 +109,7 @@ class AwsDiscoveryTests(unittest.TestCase):
             self.assertIn("AWSLogs/123456789012/vpcflowlogs/us-east-1/2026/10/20/export-000", rel)
             # The importer, run on the staged folder, must claim the same file again.
             f = staged / "AWSLogs" / "123456789012" / "vpcflowlogs" / "us-east-1" / "2026" / "10" / "20" / "export-000"
-            self.assertEqual(self.aws.classify(f), "AWS VPC Flow")
+            self.assertEqual(self.aws.classify(f), ["AWS VPC Flow"])
 
     def test_importer_command_line(self):
         args = argparse.Namespace(

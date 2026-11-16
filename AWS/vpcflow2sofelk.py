@@ -38,6 +38,7 @@ import sys
 
 from sof_elk_aws_common import (RAW_COLUMNS, AwsLog, canon, csv_reader, epoch_to_iso, first_line, iso,
                                 looks_like_csv_header, run, set_field, snake, split_row, to_int, valid_ip)
+import sof_elk_ocsf as ocsf
 
 DEFAULT_FIELDS = ("version account-id interface-id srcaddr dstaddr srcport dstport protocol "
                   "packets bytes start end action log-status").split()
@@ -329,6 +330,8 @@ def detect(path, head):
     if header_fields(first):
         return True
     columns = csv_columns(first)
+    if columns and columns != "raw" and any(canon(c) in ("queryname", "querytimestamp") for c, _ in columns):
+        return False  # Route 53 Resolver query logs share srcaddr / srcport / account_id / vpc_id
     if columns and (columns != "raw" or "eni-" in head[:65536]):
         return True
     sample = TS_PREFIX_RE.sub("", first).split()
@@ -343,10 +346,25 @@ def add_arguments(ap):
                          " header line (CloudWatch Logs). Default: the version 2 format")
 
 
+def from_ocsf(r):
+    """Amazon Security Lake (OCSF Network Activity from VPC Flow Logs) -> the native fields -> build()."""
+    fields = ocsf.to_vpcflow(r)
+    if "version" in fields and fields["version"].split(".")[0].isdigit() and \
+            set(fields["version"].split(".", 1)[-1]) <= {"0"}:
+        fields["version"] = fields["version"].split(".")[0]  # "2.0" -> "2"
+    names = list(fields)
+    values = [fields[n] for n in names]
+    doc, reason = build(names, values)
+    if doc is None:
+        return None, reason
+    return "\t".join(f"{n}={v}" for n, v in zip(names, values)), doc
+
+
 LOG = AwsLog(
     prefix="aws-vpcflow", namespace="aws.vpcflow", title="AWS VPC Flow", dataset="aws.vpcflow",
-    detect=detect, parse=parse, add_arguments=add_arguments,
+    detect=detect, parse=parse, add_arguments=add_arguments, ocsf=("vpcflow", from_ocsf),
     describe=[
+        "Amazon Security Lake exports (OCSF Network Activity 4001): JSON or Athena CSV",
         "S3 text delivery (.log / .log.gz) with its header line: any version or custom format",
         "CloudWatch Logs export lines (default v2 format, or --fields), timestamp prefix allowed",
         "`aws logs filter-log-events` JSON / CloudWatch subscription payloads",
