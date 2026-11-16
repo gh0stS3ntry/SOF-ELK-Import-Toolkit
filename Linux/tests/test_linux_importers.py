@@ -558,7 +558,7 @@ class WrapperDiscoveryTests(unittest.TestCase):
                 zf.writestr("[root]/etc/hostname", "db01\n")
             with zipfile.ZipFile(root / "other.zip", "w") as zf:
                 zf.writestr("notes.txt", "x")
-            json_files, csv_files, linux = wrapper.discover(root)
+            json_files, csv_files, linux, _aws = wrapper.discover(root)
             self.assertEqual(sorted(p.name for p in linux), ["uac-db01.zip", "uac-ubuntu"])
             self.assertFalse(any(csv_files.values()))
             self.assertFalse(any(json_files.values()))

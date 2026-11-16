@@ -132,7 +132,8 @@ Wrapper options:
 | `--case ID` | Optional incident/case ID passed to every importer and stored in each document's `case` field. |
 | `--local-tz +HH:MM` | Offset used to convert KAPE CSV columns marked `LOCAL`; without it, such columns are generally retained as text. Passed to every CSV importer except BrowsingHistoryView (which uses `--bhv-tz`) and the CLR usage-log importer (which has no LOCAL columns). |
 | `--bhv-tz +HH:MM\|UTC` | Offset for the computer that ran BrowsingHistoryView, or `UTC` if its GMT option was enabled. |
-| `--date-order dmy\|mdy\|ymd` | Optional BrowsingHistoryView regional date order where it cannot be inferred. |
+| `--date-order dmy\|mdy\|ymd` | Optional BrowsingHistoryView regional date order where it cannot be inferred. `dmy`/`mdy` is also passed to the AWS importers, for spreadsheet-style dates in AWS CSVs re-saved by Excel. |
+| `--vpc-fields 'version account-id ...'` | AWS VPC Flow custom log format for files without a header line (CloudWatch Logs exports); passed to `vpcflow2sofelk.py` as `--fields`. |
 | `--dry-run` | Validate and preview records without sending them to Elasticsearch. |
 | `--sample-docs N` | Number of transformed sample documents shown in dry-run mode. Passed to the four JSON importers only. |
 | `--max-retries N` | Retries for a failed Elasticsearch request or a rejected bulk item; default `5`, `0` disables retrying. Passed to every importer. |
@@ -141,6 +142,12 @@ Wrapper options:
 | `--log-file PATH` | Append every importer's command line, retries, per-batch bulk results, and item-level errors to this file. Passed to every importer. |
 
 **Linux (UAC) collections.** The wrapper also recognises UAC output, either a folder holding `uac.log` (with `[root]/`, `journal/`, `live_response/` or `bodyfile/` beside it) or a `.zip` with `uac.log` at its top, and runs `Linux/linux2sofelk.py` on each collection with the wrapper's host name, `--case`, Elasticsearch, retry, log and dry-run options. `--local-tz` is not passed: the Linux importers read the time zone from the evidence. A UAC collection is not searched for Windows exports. If a collection has binary journal files but no `journalctl -o json` export, that collection is reported as failed (exit status `3`) with the commands to make the export; see [`Linux/README.md`](Linux/README.md).
+
+**AWS logs.** The wrapper also finds AWS CloudTrail, VPC Flow, ALB/ELB access and WAF logs, plain or `.gz`, in their native formats or already converted to CSV (Athena, Logs Insights, Event history). Every file that no Windows importer claimed is checked with the AWS importers' own `detect()` signatures, so the wrapper selects exactly the files the importer would accept (CloudTrail digest files are skipped). A file goes to the first match in the order CloudTrail, WAF, ALB/ELB, VPC Flow. The wrapper's host name becomes each importer's `--source`, so the indexes are `aws-cloudtrail-<hostname>`, `aws-vpcflow-<hostname>`, `aws-waf-<hostname>` and `httpdlog-<hostname>`. `--case`, Elasticsearch, retry, log, `--sample-docs` and dry-run options are passed through; `--local-tz` is not (AWS times are UTC). AWS files are staged with their folder layout under the input directory, so the `AWSLogs/<account>/<service>/<region>/` S3 key still supplies the account and region, and `log.file.path` matches a direct run. See [`AWS/README.md`](AWS/README.md).
+
+```bash
+python3 SOF-ELK_ImportWrapper.py /cases/srizzile/aws sph --case srizzile --es http://192.168.76.1:9200
+```
 
 The wrapper stages selected inputs using links when supported (falling back as needed) so it can invoke importers with the correct basenames and source-detection behavior. The staging directory is temporary and is removed after the run. The wrapper itself should remain at the package root so that it can locate both importer subdirectories.
 

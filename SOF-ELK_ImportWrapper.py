@@ -6,10 +6,15 @@ Expected layout:
   Windows/csv_importers/<thirteen CSV importers and sof_elk_csv_bulk_common.py>
   Windows/json_importers/<four JSON importers and sof_elk_json_bulk_common.py>
   Linux/linux2sofelk.py (UAC collections: a folder holding uac.log, or a UAC .zip)
+  AWS/<cloudtrail|vpcflow|alb|waf>2sofelk.py (AWS logs, plain or .gz, native or CSV)
 
 A UAC collection is handed to Linux/linux2sofelk.py as a whole and its folder is not
 searched for Windows exports (its [root]/ copy of the host's files could hold CSVs that
 would otherwise be mistaken for KAPE output).
+
+AWS logs are recognised with the AWS importers' own detect() functions, run on every file
+that no Windows importer claimed, so the wrapper and the importer always agree on a file. The
+evidence host name becomes the importers' --source (aws-cloudtrail-<hostname>, ...).
 
 The wrapper only selects files and orchestrates the existing importers. It does not
 parse or index evidence itself.
@@ -56,6 +61,19 @@ CSV_IMPORTERS = {
 LINUX_LABEL = "Linux (UAC)"
 LINUX_IMPORTER = ("Linux", "linux2sofelk.py")
 UAC_MARKERS = {"[root]", "journal", "live_response", "bodyfile"}
+
+# AWS importers, in detection priority order: a file goes to the first one whose detect()
+# claims it. VPC Flow is last because its CSV signature is the broadest. Label -> (script,
+# index prefix).
+AWS_IMPORTERS = {
+    "AWS CloudTrail": ("cloudtrail2sofelk.py", "aws-cloudtrail"),
+    "AWS WAF": ("waf2sofelk.py", "aws-waf"),
+    "AWS ALB/ELB": ("alb2sofelk.py", "httpdlog"),
+    "AWS VPC Flow": ("vpcflow2sofelk.py", "aws-vpcflow"),
+}
+AWS_SUBDIR = "AWS"
+# AWS importers accept only these --date-order values.
+AWS_DATE_ORDERS = {"dmy", "mdy"}
 
 # CSV importers that do not accept --local-tz.
 NO_LOCAL_TZ = {"NirSoft BrowsingHistoryView", "ConvertUsageLogsTo-CSV"}
@@ -208,11 +226,58 @@ def is_uac_zip(path: Path) -> bool:
         return False
 
 
-def discover(root: Path) -> tuple[dict[str, list[Path]], dict[str, list[Path]], list[Path]]:
+class AwsDetector:
+    """The AWS importers' own detect() functions, imported from AWS/.
+
+    Importing (rather than copying the signatures) keeps the wrapper in step with the
+    importers. If AWS/ is missing or fails to import, AWS discovery is disabled with a warning.
+    """
+
+    def __init__(self, wrapper_dir: Path):
+        self.detectors: list[tuple[str, object]] = []
+        self.head_text = None
+        self.error = ""
+        aws_dir = wrapper_dir / AWS_SUBDIR
+        if not (aws_dir / "sof_elk_aws_common.py").is_file():
+            self.error = f"{aws_dir} not found"
+            return
+        import importlib
+        sys.path.insert(0, str(aws_dir))
+        try:
+            common = importlib.import_module("sof_elk_aws_common")
+            for label, (script, _prefix) in AWS_IMPORTERS.items():
+                module = importlib.import_module(Path(script).stem)
+                self.detectors.append((label, module.LOG.detect))
+            self.head_text = common.head_text
+        except Exception as exc:  # noqa: BLE001 - any import failure only disables AWS discovery
+            self.detectors = []
+            self.error = f"could not load the AWS importers: {exc}"
+
+    def classify(self, path: Path) -> str | None:
+        """Label of the first AWS importer that claims this file, else None. Staging keeps the
+        folder layout under the input root, so path-based signatures (AWSLogs/<account>/
+        vpcflowlogs/...) still hold when the importer checks the file again."""
+        if not self.detectors:
+            return None
+        head = self.head_text(path)
+        if not head:
+            return None
+        for label, detect in self.detectors:
+            try:
+                if detect(path, head):
+                    return label
+            except Exception:  # noqa: BLE001 - a detector crash on odd content means "not mine"
+                continue
+        return None
+
+
+def discover(root: Path, aws: AwsDetector | None = None
+             ) -> tuple[dict[str, list[Path]], dict[str, list[Path]], list[Path], dict[str, list[Path]]]:
     """Walk the tree once; return selected files for the four JSON and thirteen CSV importers,
-    and the UAC collections (folders and zips) for the Linux importers."""
+    the UAC collections (folders and zips) for the Linux importers, and AWS log files."""
     json_files = {name: [] for name in HYBRID_IMPORTERS}
     csv_files = {name: [] for name in CSV_IMPORTERS}
+    aws_files: dict[str, list[Path]] = {name: [] for name in AWS_IMPORTERS}
     linux: list[Path] = []
     # os.walk avoids materializing a list of every descendant path at once.
     for dirpath, dirnames, filenames in os.walk(root):
@@ -228,18 +293,27 @@ def discover(root: Path) -> tuple[dict[str, list[Path]], dict[str, list[Path]], 
             if lower.endswith(".zip") and is_uac_zip(path):
                 linux.append(path.resolve())
                 continue
+            claimed = False
             for importer, (_script, patterns, excludes) in HYBRID_IMPORTERS.items():
                 if has_json_pattern(path, patterns, excludes):
                     json_files[importer].append(path)
+                    claimed = True
             suffix = path.suffix.lower()
             if suffix in {".csv", ".txt", ".tsv"}:
                 header = read_csv_header(path)
                 for importer in classify_csv(path, header):
                     csv_files[importer].append(path)
-    for collection in (json_files, csv_files):
+                    claimed = True
+            # AWS logs have no fixed extension (Firehose WAF files have none), so every file a
+            # Windows importer did not claim is offered to the AWS detectors.
+            if not claimed and aws is not None and not filename.startswith("."):
+                label = aws.classify(path)
+                if label:
+                    aws_files[label].append(path)
+    for collection in (json_files, csv_files, aws_files):
         for key in collection:
             collection[key] = sorted(set(p.resolve() for p in collection[key]), key=lambda p: str(p).lower())
-    return json_files, csv_files, sorted(set(linux), key=lambda p: str(p).lower())
+    return json_files, csv_files, sorted(set(linux), key=lambda p: str(p).lower()), aws_files
 
 
 def locate_script(wrapper_dir: Path, subdir: str, script: str) -> Path | None:
@@ -277,15 +351,22 @@ class StagingArea:
         self.base = Path(self.temp.name)
         return self
 
-    def add(self, importer_key: str, files: list[Path]) -> Path:
+    def add(self, importer_key: str, files: list[Path], keep_tree_from: Path | None = None) -> Path:
+        """Stage files for one importer. With keep_tree_from, each file keeps its path relative
+        to that folder (AWS importers read the account, service and region from the
+        AWSLogs/<account>/<service>/<region>/ layout); otherwise each gets a numbered subdir."""
         assert self.base is not None
         dest = self.base / re.sub(r"[^A-Za-z0-9_-]+", "_", importer_key)
         dest.mkdir(parents=True, exist_ok=True)
         for i, source in enumerate(files):
-            # Preserve the original basename and avoid clashes by placing files in unique subdirs.
-            item_dir = dest / f"{i:08d}"
-            item_dir.mkdir(exist_ok=True)
-            target = item_dir / source.name
+            if keep_tree_from is not None:
+                target = dest / source.relative_to(keep_tree_from)
+                target.parent.mkdir(parents=True, exist_ok=True)
+            else:
+                # Preserve the original basename and avoid clashes by placing files in unique subdirs.
+                item_dir = dest / f"{i:08d}"
+                item_dir.mkdir(exist_ok=True)
+                target = item_dir / source.name
             try:
                 os.link(source, target)
             except OSError:
@@ -385,10 +466,57 @@ def run_linux(script_path: Path, evidence: Path, args: argparse.Namespace) -> in
     return result
 
 
+def run_aws(label: str, script_path: Path, input_dir: Path, file_count: int, args: argparse.Namespace) -> int:
+    """Run one AWS importer on its staged folder; the evidence host name is its --source."""
+    print("\n" + "=" * 76, flush=True)
+    print(f"[{label}] Starting import", flush=True)
+    print(f"[{label}] Script: {script_path}", flush=True)
+    print(f"[{label}] Selected input files: {file_count}", flush=True)
+    command = [sys.executable, str(script_path), str(input_dir), "--source", args.hostname, "--es", args.es]
+    if args.user:
+        command.extend(["--user", args.user])
+    if args.password is not None:
+        command.extend(["--password", args.password])
+    if args.insecure:
+        command.append("--insecure")
+    command.extend(["--batch-size", str(args.batch_size), "--max-retries", str(args.max_retries),
+                    "--retry-backoff", str(args.retry_backoff), "--timeout", str(args.timeout),
+                    "--sample-docs", str(args.sample_docs)])
+    if args.log_file:
+        command.extend(["--log-file", args.log_file])
+    if args.case:
+        command.extend(["--case", args.case])
+    if args.date_order in AWS_DATE_ORDERS:
+        command.extend(["--date-order", args.date_order])
+    if args.vpc_fields and script_path.name == AWS_IMPORTERS["AWS VPC Flow"][0]:
+        command.extend(["--fields", args.vpc_fields])
+    if args.dry_run:
+        command.append("--dry-run")
+    print(f"[{label}] Command: {command[0]} {Path(command[1]).name} <staged-input> --source {args.hostname}", flush=True)
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    try:
+        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, encoding="utf-8", errors="replace", bufsize=1, env=env)
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            print(line, end="" if line.endswith("\n") else "\n", flush=True)
+        result = proc.wait()
+    except OSError as exc:
+        print(f"[{label}] ERROR: could not start importer: {exc}", flush=True)
+        return 127
+    if result == 0:
+        print(f"[{label}] Completed successfully", flush=True)
+    else:
+        print(f"[{label}] ERROR: importer exited with status {result}", flush=True)
+    return result
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Recursively discover SOF-ELK forensic exports and invoke the matching CSV/JSON importers"
-                    " (and the Linux importers for UAC collections).",
+                    " (and the Linux importers for UAC collections, and the AWS importers for CloudTrail,"
+                    " VPC Flow, ALB/ELB and WAF logs).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("directory", help="Root directory to search recursively")
@@ -402,7 +530,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--case", help="Optional case/incident ID added to every document by every importer")
     parser.add_argument("--local-tz", help="UTC offset for *LOCAL timestamp fields in KAPE CSVs, e.g. +08:00")
     parser.add_argument("--bhv-tz", help="Timezone offset for NirSoft BrowsingHistoryView, e.g. +08:00 or UTC")
-    parser.add_argument("--date-order", choices=("dmy", "mdy", "ymd"), help="Force BrowsingHistoryView regional date order")
+    parser.add_argument("--date-order", choices=("dmy", "mdy", "ymd"),
+                        help="Regional date order: forced for BrowsingHistoryView, and passed to the AWS importers"
+                             " (dmy/mdy only) for spreadsheet-style dates in CSVs re-saved by Excel")
+    parser.add_argument("--vpc-fields", metavar="'version account-id ...'",
+                        help="AWS VPC Flow custom log format for files without a header line (passed as --fields)")
     parser.add_argument("--dry-run", action="store_true", help="Pass dry-run mode to every importer")
     parser.add_argument("--sample-docs", type=int, default=2, help="Sample documents per JSON importer in dry-run mode")
     parser.add_argument("--max-retries", type=int, default=5,
@@ -432,7 +564,10 @@ def main() -> int:
     wrapper_dir = Path(__file__).resolve().parent
     print(f"SOF-ELK Import Wrapper\nInput directory: {root}\nHostname: {args.hostname}\nElasticsearch: {args.es}", flush=True)
     print("Scanning directory tree and checking file signatures...", flush=True)
-    json_files, csv_files, linux_collections = discover(root)
+    aws = AwsDetector(wrapper_dir)
+    if aws.error:
+        print(f"WARNING: AWS log discovery is off: {aws.error}", flush=True)
+    json_files, csv_files, linux_collections, aws_files = discover(root, aws)
 
     todo: list[tuple[str, str, str, list[Path], list[str] | None, bool]] = []
     failed: list[tuple[str, int]] = []
@@ -463,7 +598,14 @@ def main() -> int:
     for path in linux_collections:
         print(f"    {path}", flush=True)
     total_files += len(linux_collections)
-    if not todo and not linux_collections:
+    for label in AWS_IMPORTERS:
+        print(f"  {label}: {len(aws_files[label])} file(s)", flush=True)
+        total_files += len(aws_files[label])
+    aws_todo = [label for label in AWS_IMPORTERS if aws_files[label]]
+    if aws_todo:
+        print(f"  AWS logs load into <prefix>-{args.hostname} indexes (the host name is the AWS importers' --source)",
+              flush=True)
+    if not todo and not linux_collections and not aws_todo:
         print("No eligible input files found (or all candidates were skipped).", flush=True)
         if not total_files:
             return 1
@@ -482,6 +624,19 @@ def main() -> int:
                 continue
             staged_dir = staging.add(label, files)
             code = run_one(label, script_path, staged_dir, args, staging, extra=extra, is_json=is_json)
+            if code == 0:
+                success += 1
+            else:
+                failed.append((label, code))
+        for label in aws_todo:
+            script = AWS_IMPORTERS[label][0]
+            script_path = locate_script(wrapper_dir, AWS_SUBDIR, script)
+            if script_path is None:
+                print(f"[{label}] ERROR: could not locate importer {script} under {wrapper_dir}", flush=True)
+                failed.append((label, 127))
+                continue
+            staged_dir = staging.add(label, aws_files[label], keep_tree_from=root)
+            code = run_aws(label, script_path, staged_dir, len(aws_files[label]), args)
             if code == 0:
                 success += 1
             else:

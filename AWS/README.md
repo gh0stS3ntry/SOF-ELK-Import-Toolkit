@@ -23,6 +23,9 @@ python3 AWS/vpcflow2sofelk.py    /cases/IR-42/AWSLogs/123456789012/vpcflowlogs -
 python3 AWS/alb2sofelk.py        /cases/IR-42/AWSLogs/123456789012/elasticloadbalancing --source 123456789012
 python3 AWS/waf2sofelk.py        /cases/IR-42/waf --source 123456789012
 
+# Or let the wrapper find every AWS log type in one folder; the host name is the --source
+python3 SOF-ELK_ImportWrapper.py /cases/IR-42/aws 123456789012 --case IR-42
+
 # Kibana Data Views (aws-cloudtrail-*, aws-vpcflow-*, aws-waf-*), once; ALB logs use SOF-ELK's stock httpdlog-* view
 python3 SOF-ELK_CreateDataViews.py
 ```
@@ -85,6 +88,7 @@ All four importers share these options; `vpcflow2sofelk.py` adds `--fields`.
 
 ```bash
 python3 AWS/tests/test_aws_importers.py -v
+python3 tests/test_import_wrapper_aws.py -v   # wrapper discovery and command lines
 ```
 
 The tests need no Elasticsearch. They parse every fixture in `tests/fixtures/<log>/` (native formats) and `tests/fixtures/<log>/csv/` (CSV conversions), plain and gzip-compressed, and check every document against its index template so that no field is silently dropped by the `dynamic: false` mapping. The fixtures are synthetic and dated 2026-10-20.
