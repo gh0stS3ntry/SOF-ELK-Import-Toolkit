@@ -340,6 +340,46 @@ class WafCsvTest(TemplateCheck):
         self.assert_mapped("aws-waf", self.results)
 
 
+class OddLineEndingsTest(unittest.TestCase):
+    """Binary files and bare-CR (classic Mac) line endings must not crash detection, and
+    CR-only CSVs must parse exactly like their CRLF/LF originals."""
+
+    MODULES = {"cloudtrail": cloudtrail2sofelk, "vpcflow": vpcflow2sofelk, "alb": alb2sofelk, "waf": waf2sofelk}
+
+    def records(self, module, path):
+        args = types.SimpleNamespace(case=None, fields=None)
+        ctx = common.Context(args, path, path.name)
+        with common.open_text(path) as fh:
+            return [doc for key, doc in module.LOG.parse(fh, ctx) if key is not None]
+
+    def test_binary_files_are_not_detected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            junk = [b'\x89PNG\r\x1a\n,abc"x\rdef,' + bytes(range(256)) * 8,
+                    b'a,b\r"c,d\re' + bytes(range(256)) * 8,
+                    b'eventName,eventTime\r"x\ry",' + b"\x00\xff" * 100]
+            for i, data in enumerate(junk):
+                for name, payload in ((f"junk{i}.bin", data), (f"junk{i}.gz", gzip.compress(data))):
+                    f = Path(tmp) / name
+                    f.write_bytes(payload)
+                    for module in self.MODULES.values():
+                        self.assertIn(module.LOG.detect(f, common.head_text(f)), (True, False))
+                        if module is not cloudtrail2sofelk:  # junk2 has CloudTrail CSV columns
+                            self.assertFalse(module.LOG.detect(f, common.head_text(f)), (module.__name__, name))
+
+    def test_cr_only_csv_parses_like_the_original(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for folder, module in self.MODULES.items():
+                for src in sorted((FIXTURES / folder / "csv").glob("*")):
+                    data = src.read_bytes().replace(b"\r\n", b"\n")
+                    for suffix, payload in ((".csv", data.replace(b"\n", b"\r")),
+                                            (".csv.gz", gzip.compress(data.replace(b"\n", b"\r")))):
+                        f = Path(tmp) / (src.stem + "_mac" + suffix)
+                        f.write_bytes(payload)
+                        self.assertTrue(module.LOG.detect(f, common.head_text(f)), f"{folder}/{src.name}")
+                        self.assertEqual(len(self.records(module, f)), len(self.records(module, src)),
+                                         f"{folder}/{src.name}")
+
+
 class CommonTest(unittest.TestCase):
     def test_struct_text(self):
         self.assertEqual(common.parse_struct("{type=IAMUser, sessioncontext={attributes={mfaauthenticated=false}},"

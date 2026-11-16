@@ -28,6 +28,7 @@ import ipaddress
 import json
 import re
 import sys
+import zlib
 from pathlib import Path
 from urllib import error
 
@@ -237,13 +238,28 @@ def path_cloud_hints(path):
 
 # --------------------------------------------------------------------------- file access
 
+def _cr_only(sample):
+    """True for text with classic Mac line endings (bare CR, no LF), e.g. some spreadsheet exports."""
+    return b"\r" in sample and b"\n" not in sample and b"\0" not in sample
+
+
 def open_text(path):
-    """Text handle for a plain or gzip file (detected by magic bytes, not the extension)."""
+    """Text handle for a plain or gzip file (detected by magic bytes, not the extension).
+
+    Line endings are kept as they are (newline=""), so the csv module sees quoted multi-line
+    cells intact; a file that uses bare CR line endings is read with universal newlines instead,
+    so its lines split like any other file's."""
     with open(path, "rb") as raw:
         magic = raw.read(2)
     if magic == GZIP_MAGIC:
-        return io.TextIOWrapper(gzip.open(path, "rb"), encoding="utf-8-sig", errors="replace", newline="")
-    return open(path, encoding="utf-8-sig", errors="replace", newline="")
+        with gzip.open(path, "rb") as gz:
+            sample = gz.read(65536)
+        newline = None if _cr_only(sample) else ""
+        return io.TextIOWrapper(gzip.open(path, "rb"), encoding="utf-8-sig", errors="replace", newline=newline)
+    with open(path, "rb") as raw:
+        sample = raw.read(65536)
+    newline = None if _cr_only(sample) else ""
+    return open(path, encoding="utf-8-sig", errors="replace", newline=newline)
 
 
 def head_text(path, size=65536):
@@ -251,8 +267,21 @@ def head_text(path, size=65536):
     try:
         with open_text(path) as fh:
             return fh.read(size)
-    except (OSError, EOFError, gzip.BadGzipFile):
+    except (OSError, EOFError, gzip.BadGzipFile, zlib.error):
         return ""
+
+
+def first_line(text):
+    """First line of text, whatever its line ending (CRLF, LF or a bare CR), without a BOM."""
+    return re.split(r"\r\n|\r|\n", text.lstrip("\ufeff"), maxsplit=1)[0]
+
+
+def split_row(line, delimiter=","):
+    """Cells of one delimited line, or None when the csv module cannot read it (binary data)."""
+    try:
+        return next(csv.reader([first_line(line)], delimiter=delimiter), [])
+    except csv.Error:
+        return None
 
 
 def find_files(paths):
@@ -304,13 +333,17 @@ def canon(name):
 
 def looks_like_csv_header(line, needed):
     """True if the first line of a file is a delimited header containing all `needed` names."""
+    line = first_line(line or "")
     if not line or line.lstrip().startswith(("{", "[")):
         return False
     delim = max(CSV_DELIMITERS, key=line.count)
     if line.count(delim) < 1:
         return False
-    cols = {canon(c) for c in next(csv.reader([line], delimiter=delim))}
-    cols |= {canon(c.replace("/", ".").rsplit(".", 1)[-1]) for c in next(csv.reader([line], delimiter=delim))}
+    cells = split_row(line, delim)
+    if cells is None:
+        return False
+    cols = {canon(c) for c in cells}
+    cols |= {canon(c.replace("/", ".").rsplit(".", 1)[-1]) for c in cells}
     return all(any(n in cols for n in (alt if isinstance(alt, tuple) else (alt,))) for alt in needed)
 
 
@@ -735,7 +768,11 @@ def run(log, description, argv=None):
 
     files, skipped_files = [], []
     for f in find_files(args.paths):
-        if log.detect(f, head_text(f)):
+        try:
+            mine = log.detect(f, head_text(f))
+        except Exception:  # noqa: BLE001 - content no detector can read is simply not this log type
+            mine = False
+        if mine:
             files.append(f)
         else:
             skipped_files.append(f)

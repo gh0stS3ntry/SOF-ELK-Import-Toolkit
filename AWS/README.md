@@ -30,7 +30,7 @@ python3 SOF-ELK_ImportWrapper.py /cases/IR-42/aws 123456789012 --case IR-42
 python3 SOF-ELK_CreateDataViews.py
 ```
 
-Each importer takes files or folders (searched recursively; `.gz` is read whether or not the name says so), keeps only the files that look like its log type, and reports the rest as skipped. `--source` is required: it names the index (`aws-cloudtrail-<source>`) and is stored in `labels.evidence_source`. Use the account ID, or a label such as `prod` when one account has several evidence sets. Loading the same files again overwrites instead of duplicating.
+Each importer takes files or folders (searched recursively; `.gz` is read whether or not the name says so), keeps only the files that look like its log type, and reports the rest as skipped. Other files in the folder, binary ones included, are skipped rather than stopping the run, and CSVs with classic Mac (bare CR) line endings are read like any other. `--source` is required: it names the index (`aws-cloudtrail-<source>`) and is stored in `labels.evidence_source`. Use the account ID, or a label such as `prod` when one account has several evidence sets. Loading the same files again overwrites instead of duplicating.
 
 The first run installs the component template `sofelk-toolkit-aws-common` and the index template for the log type (priority 200, so it wins over SOF-ELK's `aws-*` template). An existing index that was not made with the toolkit's template is refused rather than mixed.
 
