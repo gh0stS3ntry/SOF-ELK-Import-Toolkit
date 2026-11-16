@@ -1,0 +1,258 @@
+{
+  "index_patterns": [
+    "kubernetes-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-aws-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "kubernetes",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            }
+          }
+        },
+        "http": {
+          "properties": {
+            "request": {
+              "properties": {
+                "method": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "response": {
+              "properties": {
+                "status_code": {
+                  "type": "short"
+                }
+              }
+            }
+          }
+        },
+        "url": {
+          "properties": {
+            "path": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            }
+          }
+        },
+        "user_agent": {
+          "properties": {
+            "original": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        "user": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "kubernetes": {
+          "properties": {
+            "namespace": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "k8s": {
+          "properties": {
+            "kind": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "apiVersion": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "level": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "auditID": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "stage": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "user": {
+              "properties": {
+                "username": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "uid": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "groups": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "impersonatedUser": {
+              "properties": {
+                "username": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "groups": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "objectRef": {
+              "properties": {
+                "resource": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "namespace": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "apiGroup": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "apiVersion": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "subresource": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "uid": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "resourceVersion": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            },
+            "responseStatus": {
+              "properties": {
+                "status": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "reason": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "message": {
+                  "type": "keyword",
+                  "ignore_above": 8191,
+                  "fields": {
+                    "text": {
+                      "type": "match_only_text"
+                    }
+                  }
+                }
+              }
+            },
+            "authorization_decision": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "authorization_reason": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "requestReceivedTimestamp": {
+              "type": "date"
+            },
+            "stageTimestamp": {
+              "type": "date"
+            },
+            "annotations": {
+              "type": "object",
+              "dynamic": "true"
+            },
+            "unmapped": {
+              "type": "object",
+              "dynamic": "true"
+            },
+            "malformed": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "flattened": {
+              "properties": {
+                "request_object": {
+                  "type": "keyword",
+                  "ignore_above": 8191,
+                  "fields": {
+                    "text": {
+                      "type": "match_only_text"
+                    }
+                  }
+                },
+                "response_object": {
+                  "type": "keyword",
+                  "ignore_above": 8191,
+                  "fields": {
+                    "text": {
+                      "type": "match_only_text"
+                    }
+                  }
+                },
+                "user_extra": {
+                  "type": "keyword",
+                  "ignore_above": 8191,
+                  "fields": {
+                    "text": {
+                      "type": "match_only_text"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Amazon EKS audit logs (AWS/eksaudit2sofelk.py). Not installed as an index template: the importer creates kubernetes-<source> with this mapping, so SOF-ELK's own kubernetes-YYYY.MM indexes keep their template. Field names follow SOF-ELK 6952-kubernetes.conf.",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  }
+}

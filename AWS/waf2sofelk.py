@@ -46,6 +46,7 @@ import json
 import re
 import sys
 
+import sof_elk_ocsf as ocsf
 from sof_elk_aws_common import (AwsLog, any_time, canon, compact_json, csv_records, dig, first_line,
                                 looks_like_csv_header, run, set_field, snake, to_int, valid_ip)
 
@@ -351,10 +352,19 @@ def detect(path, head):
     return "webaclid" in lower or ("webaclId" in h and "httpRequest" in h)
 
 
+def from_ocsf(r):
+    """Amazon Security Lake (OCSF HTTP Activity from AWS WAF) -> the native record -> build()."""
+    rec = ocsf.to_waf(r)
+    if not rec.get("httpRequest"):
+        return None, "Security Lake WAF record without an HTTP request"
+    return record_key(rec), build(rec)
+
+
 LOG = AwsLog(
     prefix="aws-waf", namespace="aws.waf", title="AWS WAF", dataset="aws.waf",
-    detect=detect, parse=parse,
+    detect=detect, parse=parse, ocsf=("waf", from_ocsf),
     describe=[
+        "Amazon Security Lake exports (OCSF HTTP Activity 4002): JSON or Athena CSV",
         "S3 / Kinesis Data Firehose delivery: JSON objects, one per line or concatenated (.gz fine)",
         "CloudWatch Logs exports (timestamp-prefixed lines allowed)",
         "`aws logs filter-log-events` / subscription JSON ({\"events\"|\"logEvents\": [...]})",

@@ -40,6 +40,9 @@ COMMON_COMPONENT = "sofelk-toolkit-aws-common"
 sys.path.insert(0, str(AWS_DIR.parent / "Windows" / "common"))
 from sof_elk_es_client import EsClient, add_client_arguments, apply_client_arguments, resolve_index  # noqa: E402
 
+sys.path.insert(0, str(AWS_DIR))
+import sof_elk_ocsf as ocsf  # noqa: E402
+
 try:
     import csv
     csv.field_size_limit(sys.maxsize)
@@ -387,7 +390,24 @@ def parse_struct(text):
     return value if pos == len(text) else None
 
 
-KEY_RE = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_@-]*)=")
+# Struct keys are column names; map keys (OCSF `unmapped`) can be native dotted paths such as
+# userIdentity.sessionContext.sessionIssuer.userName or annotations.authorization.k8s.io/decision.
+KEY_RE = re.compile(r"\s*([A-Za-z_@][A-Za-z0-9_@.:/\[\]-]*)=")
+_JSON_DECODER = json.JSONDecoder()
+
+
+def _embedded_json(t, i):
+    """A JSON string value inside struct text ({data={"maxResults":1000}, uid=...}) -> (text, end).
+
+    Athena prints a varchar that holds JSON as it is, so a value starting with {" or [" is read
+    as JSON and kept as its text (the OCSF field is a string). None if it is not valid JSON."""
+    if i + 1 >= len(t) or t[i + 1] != '"':
+        return None
+    try:
+        _, end = _JSON_DECODER.raw_decode(t, i)
+    except ValueError:
+        return None
+    return t[i:end], end
 
 
 def _struct_value(t, i):
@@ -398,7 +418,11 @@ def _struct_value(t, i):
             if not m:
                 raise ValueError("struct key expected")
             key, i = m.group(1), m.end()
-            out[key], i = _struct_value(t, i) if i < len(t) and t[i] in "{[" else _struct_scalar(t, i, "}")
+            embedded = _embedded_json(t, i) if i < len(t) and t[i] in "{[" else None
+            if embedded:
+                out[key], i = embedded
+            else:
+                out[key], i = _struct_value(t, i) if i < len(t) and t[i] in "{[" else _struct_scalar(t, i, "}")
             if i < len(t) and t[i] == ",":
                 i += 1
         return out, i + 1
@@ -517,6 +541,168 @@ def _index_lists(obj):
     return out
 
 
+# --------------------------------------------------------------------------- streamed JSON
+
+TS_PREFIX_JSON_RE = re.compile(r"\s*\d{4}-\d{2}-\d{2}T[\d:.]+Z?\s+(?=[{\[])")
+
+
+def iter_json(fh, head=""):
+    """JSON values from a file, read in chunks: one per line (JSON Lines), concatenated with no
+    separator (Firehose), or a single document; CloudWatch Logs export lines may start with a
+    timestamp. Yields each decoded value, or None for text that is not JSON (up to the next line)."""
+    buffer, done = head, False
+    pos = 0
+    while True:
+        if not done:
+            chunk = fh.read(1 << 20)
+            done = not chunk
+            buffer = buffer[pos:] + chunk
+            pos = 0
+        while True:
+            while pos < len(buffer) and (buffer[pos].isspace() or buffer[pos] == "\ufeff"):
+                pos += 1
+            if pos >= len(buffer):
+                break
+            m = TS_PREFIX_JSON_RE.match(buffer, pos)
+            if m:
+                pos = m.end()
+            try:
+                obj, end = _JSON_DECODER.raw_decode(buffer, pos)
+            except ValueError:
+                nl = buffer.find("\n", pos)
+                if not done and (nl < 0 or len(buffer) - pos < (1 << 24)):
+                    break  # maybe an incomplete value: read more
+                yield None
+                pos = len(buffer) if nl < 0 else nl + 1
+                continue
+            yield obj
+            pos = end
+        if done:
+            return
+
+
+def cloudwatch_messages(obj):
+    """`aws logs filter-log-events` output / subscription payload -> decoded messages, else None."""
+    if isinstance(obj, dict):
+        events = obj.get("events") or obj.get("logEvents")
+        if isinstance(events, list) and events and all(isinstance(e, dict) and "message" in e for e in events):
+            out = []
+            for ev in events:
+                try:
+                    out.append(json.loads(ev["message"]))
+                except (TypeError, ValueError):
+                    out.append(None)
+            return out
+    return None
+
+
+# --------------------------------------------------------------------------- Security Lake (OCSF)
+
+def _ocsf_walk(obj):
+    """OCSF records inside one decoded JSON value (a record, a list, or a wrapper object)."""
+    if isinstance(obj, list):
+        for item in obj:
+            yield from _ocsf_walk(item)
+    elif ocsf.is_ocsf(obj):
+        yield obj
+    elif isinstance(obj, dict):
+        lists = [v for k, v in obj.items() if isinstance(v, list) and k.lower() in
+                 ("records", "data", "items", "events", "results", "findings")]
+        if lists:
+            for items in lists:
+                yield from _ocsf_walk(items)
+        else:
+            yield None
+    else:
+        yield None
+
+
+def _ocsf_csv_row(row):
+    rec = {}
+    for col, value in row.items():
+        if not col or not isinstance(value, str):
+            continue
+        decoded = decode_cell(value)
+        if decoded is None:
+            continue
+        path = [p for p in col.strip().lstrip("\ufeff").split(".") if p]
+        node = rec
+        for part in path[:-1]:
+            node = node.setdefault(part, {}) if isinstance(node.get(part, {}), dict) else {}
+        if path:
+            node.setdefault(path[-1], decoded)
+    return rec
+
+
+def _json_values(text, final=True):
+    """Decode JSON values one after another (JSON Lines, concatenated objects, or the items of a
+    top-level array). Yields (value or None for a bad line, end position)."""
+    pos, n = 0, len(text)
+    in_array = False
+    while pos < n:
+        while pos < n and (text[pos].isspace() or (in_array and text[pos] == ",")):
+            pos += 1
+        if pos >= n:
+            break
+        if text[pos] == "[" and not in_array and pos == len(text) - len(text.lstrip()):
+            in_array, pos = True, pos + 1
+            continue
+        if in_array and text[pos] == "]":
+            pos += 1
+            in_array = False
+            continue
+        try:
+            obj, end = _JSON_DECODER.raw_decode(text, pos)
+        except ValueError:
+            if not final:
+                return
+            nl = text.find("\n", pos)
+            yield None, (n if nl < 0 else nl + 1)
+            pos = n if nl < 0 else nl + 1
+            continue
+        yield obj, end
+        pos = end
+
+
+def ocsf_head_records(head):
+    """The complete OCSF records at the start of a file (for detection)."""
+    s = head.lstrip("\ufeff")
+    if s.lstrip()[:1] in ("{", "["):
+        for obj, _ in _json_values(s, final=False):
+            for rec in _ocsf_walk(obj):
+                if rec is not None:
+                    yield rec
+        return
+    cut = max(s.rfind("\n"), s.rfind("\r"))
+    body = s if cut < 0 else s[:cut]
+    try:
+        rows = list(csv.DictReader(io.StringIO(body, newline=""),
+                                   delimiter=max(CSV_DELIMITERS, key=first_line(body).count)))
+    except csv.Error:
+        return
+    for row in rows:
+        rec = _ocsf_csv_row(row)
+        if ocsf.is_ocsf(rec):
+            yield rec
+
+
+def ocsf_records(fh):
+    """Every OCSF record in a file: JSON Lines, concatenated JSON, a JSON array (or an object
+    holding one), or CSV with OCSF columns (Athena results: struct text or JSON cells). Yields
+    None for a value that is not an OCSF record."""
+    head = fh.read(1 << 16)
+    s = head.lstrip("\ufeff \t\r\n")
+    if s[:1] in ("{", "["):
+        text = s + fh.read()
+        for obj, _ in _json_values(text):
+            yield from _ocsf_walk(obj) if obj is not None else [None]
+        return
+    for row in csv_reader(fh, head.lstrip("\ufeff")):
+        rec = _ocsf_csv_row(row)
+        if rec:
+            yield rec if ocsf.is_ocsf(rec) else None
+
+
 # --------------------------------------------------------------------------- templates
 
 def _load_json(name):
@@ -600,22 +786,56 @@ class AwsLog:
     index_template  False when <prefix>-* is a SOF-ELK index family (httpdlog-*): installing a
                  toolkit index template there would take over SOF-ELK's own monthly indexes,
                  so each index is created with the template body directly instead
+    ocsf         (source, handler) to also read Amazon Security Lake exports: source is the
+                 sof_elk_ocsf source name ("cloudtrail", ...), handler(ocsf_record) returns
+                 (id_key, doc) or (None, skip reason). detect() and parse() then accept OCSF files
+                 holding records of that source; records of other sources are skipped with a
+                 note naming the importer that loads them.
     """
 
     def __init__(self, prefix, namespace, title, dataset, detect, parse, describe=(),
-                 add_arguments=None, use_occurrence=True, index_template=True):
+                 add_arguments=None, use_occurrence=True, index_template=True, ocsf=None):
         self.prefix = prefix
         self.namespace = namespace
         self.title = title
         self.dataset = dataset
-        self.detect = detect
-        self.parse = parse
+        self.native_detect = detect
+        self.native_parse = parse
+        self.ocsf_source, self.ocsf_handler = ocsf if ocsf else (None, None)
         self.describe = list(describe)
         self.add_arguments = add_arguments
         # Content-keyed records (VPC Flow, ALB) can legitimately repeat; number repeats so each
         # copy is kept while a re-run of the same files still overwrites instead of duplicating.
         self.use_occurrence = use_occurrence
         self.index_template = index_template
+
+    def detect(self, path, head):
+        if ocsf.head_is_ocsf(head):
+            return bool(self.ocsf_source) and self.ocsf_source in ocsf.head_sources(head, ocsf_head_records)
+        return self.native_detect(path, head)
+
+    def parse(self, fh, ctx):
+        head = fh.read(1 << 16)
+        fh.seek(0)
+        if self.ocsf_source and ocsf.head_is_ocsf(head):
+            yield from self.parse_ocsf(fh, ctx)
+        else:
+            yield from self.native_parse(fh, ctx)
+
+    def parse_ocsf(self, fh, ctx):
+        for rec in ocsf_records(fh):
+            if rec is None:
+                yield None, "not an OCSF (Security Lake) record"
+                continue
+            src = ocsf.source_of(rec)
+            if src != self.ocsf_source:
+                yield None, (f"Security Lake {ocsf.SOURCE_TITLES[src]} record (loaded by {ocsf.SOURCE_SCRIPTS[src]})"
+                             if src else "OCSF record from a source no AWS importer loads")
+                continue
+            key, doc = self.ocsf_handler(rec)
+            if key is not None:
+                doc.setdefault("aws", {})["securitylake"] = ocsf.provenance(rec, src)
+            yield key, doc
 
 
 class Context:

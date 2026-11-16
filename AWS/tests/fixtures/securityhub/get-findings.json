@@ -1,0 +1,51 @@
+{
+  "Findings": [
+    {
+      "SchemaVersion": "2018-10-08",
+      "Id": "arn:aws:guardduty:us-east-1:111122223333:detector/abc/finding/f1",
+      "ProductArn": "arn:aws:securityhub:us-east-1::product/aws/guardduty",
+      "ProductName": "GuardDuty",
+      "CompanyName": "Amazon",
+      "Region": "us-east-1",
+      "GeneratorId": "arn:aws:guardduty:us-east-1:111122223333:detector/abc",
+      "AwsAccountId": "111122223333",
+      "Types": [
+        "TTPs/Command and Control/Backdoor:EC2-C&CActivity.B!DNS"
+      ],
+      "FirstObservedAt": "2026-10-20T01:00:06.000Z",
+      "LastObservedAt": "2026-10-20T01:00:06.000Z",
+      "CreatedAt": "2026-10-20T01:00:08.000Z",
+      "UpdatedAt": "2026-10-20T01:00:09.000Z",
+      "Severity": {
+        "Label": "HIGH",
+        "Normalized": 70,
+        "Original": "8"
+      },
+      "Title": "EC2 instance i-0123456789abcdef0 is communicating with a known C2 server",
+      "Description": "The EC2 instance queried a domain associated with command and control.",
+      "ProductFields": {
+        "aws/guardduty/service/count": "3"
+      },
+      "Resources": [
+        {
+          "Type": "AwsEc2Instance",
+          "Id": "arn:aws:ec2:us-east-1:111122223333:instance/i-0123456789abcdef0",
+          "Partition": "aws",
+          "Region": "us-east-1"
+        }
+      ],
+      "Network": {
+        "Direction": "OUT",
+        "Protocol": "UDP",
+        "SourceIpV4": "10.0.1.15",
+        "SourcePort": 53412,
+        "DestinationIpV4": "198.51.100.66",
+        "DestinationPort": 53
+      },
+      "Workflow": {
+        "Status": "NEW"
+      },
+      "RecordState": "ACTIVE"
+    }
+  ]
+}

@@ -6,7 +6,8 @@ Expected layout:
   Windows/csv_importers/<thirteen CSV importers and sof_elk_csv_bulk_common.py>
   Windows/json_importers/<four JSON importers and sof_elk_json_bulk_common.py>
   Linux/linux2sofelk.py (UAC collections: a folder holding uac.log, or a UAC .zip)
-  AWS/<cloudtrail|vpcflow|alb|waf>2sofelk.py (AWS logs, plain or .gz, native or CSV)
+  AWS/<cloudtrail|vpcflow|alb|waf|route53resolver|securityhub|eksaudit>2sofelk.py
+      (AWS logs, plain or .gz, native, CSV or Amazon Security Lake OCSF exports)
 
 A UAC collection is handed to Linux/linux2sofelk.py as a whole and its folder is not
 searched for Windows exports (its [root]/ copy of the host's files could hold CSVs that
@@ -14,7 +15,9 @@ would otherwise be mistaken for KAPE output).
 
 AWS logs are recognised with the AWS importers' own detect() functions, run on every file
 that no Windows importer claimed, so the wrapper and the importer always agree on a file. The
-evidence host name becomes the importers' --source (aws-cloudtrail-<hostname>, ...).
+evidence host name becomes the importers' --source (aws-cloudtrail-<hostname>, ...). A native
+or CSV file goes to the first importer that claims it; an Amazon Security Lake export goes to
+every importer whose source occurs in it, and each importer loads only its own records.
 
 The wrapper only selects files and orchestrates the existing importers. It does not
 parse or index evidence itself.
@@ -62,12 +65,16 @@ LINUX_LABEL = "Linux (UAC)"
 LINUX_IMPORTER = ("Linux", "linux2sofelk.py")
 UAC_MARKERS = {"[root]", "journal", "live_response", "bodyfile"}
 
-# AWS importers, in detection priority order: a file goes to the first one whose detect()
-# claims it. VPC Flow is last because its CSV signature is the broadest. Label -> (script,
-# index prefix).
+# AWS importers, in detection priority order: a native log file goes to the first one whose
+# detect() claims it (VPC Flow is last because its CSV signature is the broadest). An Amazon
+# Security Lake (OCSF) export can hold several sources, so it goes to every importer whose
+# source it holds, and each loads only its own records. Label -> (script, index prefix).
 AWS_IMPORTERS = {
     "AWS CloudTrail": ("cloudtrail2sofelk.py", "aws-cloudtrail"),
     "AWS WAF": ("waf2sofelk.py", "aws-waf"),
+    "AWS Security Hub": ("securityhub2sofelk.py", "aws-securityhub"),
+    "AWS EKS audit": ("eksaudit2sofelk.py", "kubernetes"),
+    "AWS Route 53 Resolver": ("route53resolver2sofelk.py", "aws-route53"),
     "AWS ALB/ELB": ("alb2sofelk.py", "httpdlog"),
     "AWS VPC Flow": ("vpcflow2sofelk.py", "aws-vpcflow"),
 }
@@ -249,26 +256,35 @@ class AwsDetector:
                 module = importlib.import_module(Path(script).stem)
                 self.detectors.append((label, module.LOG.detect))
             self.head_text = common.head_text
+            self.is_ocsf = common.ocsf.head_is_ocsf
         except Exception as exc:  # noqa: BLE001 - any import failure only disables AWS discovery
             self.detectors = []
             self.error = f"could not load the AWS importers: {exc}"
 
-    def classify(self, path: Path) -> str | None:
-        """Label of the first AWS importer that claims this file, else None. Staging keeps the
-        folder layout under the input root, so path-based signatures (AWSLogs/<account>/
+    def classify(self, path: Path) -> list[str]:
+        """Labels of the AWS importers that should load this file: the first that claims a
+        native log, or every one whose source a Security Lake (OCSF) export holds. Staging keeps
+        the folder layout under the input root, so path-based signatures (AWSLogs/<account>/
         vpcflowlogs/...) still hold when the importer checks the file again."""
         if not self.detectors:
-            return None
+            return []
         head = self.head_text(path)
         if not head:
-            return None
+            return []
+        try:
+            many = bool(self.is_ocsf(head))
+        except Exception:  # noqa: BLE001
+            many = False
+        labels = []
         for label, detect in self.detectors:
             try:
                 if detect(path, head):
-                    return label
+                    labels.append(label)
+                    if not many:
+                        break
             except Exception:  # noqa: BLE001 - a detector crash on odd content means "not mine"
                 continue
-        return None
+        return labels
 
 
 def discover(root: Path, aws: AwsDetector | None = None
@@ -307,8 +323,7 @@ def discover(root: Path, aws: AwsDetector | None = None
             # AWS logs have no fixed extension (Firehose WAF files have none), so every file a
             # Windows importer did not claim is offered to the AWS detectors.
             if not claimed and aws is not None and not filename.startswith("."):
-                label = aws.classify(path)
-                if label:
+                for label in aws.classify(path):
                     aws_files[label].append(path)
     for collection in (json_files, csv_files, aws_files):
         for key in collection:

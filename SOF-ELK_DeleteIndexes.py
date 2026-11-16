@@ -57,7 +57,8 @@ TOOLKIT_PREFIXES = frozenset({
     # Windows/json_importers
     "filesystem", "evtxlogs", "lnkfiles", "prefetch",
     # AWS (httpdlog also holds Linux/httpd2sofelk.py web server logs)
-    "aws-cloudtrail", "aws-vpcflow", "aws-waf", "httpdlog",
+    "aws-cloudtrail", "aws-vpcflow", "aws-waf", "aws-route53", "aws-securityhub", "httpdlog",
+    "kubernetes",
     # Generic-CSV and Generic-JSON
     "genericcsv", "genericjson",
     # Linux (journal, text syslog and vsftpd share SOF-ELK's logstash family; web logs go to
