@@ -10,7 +10,7 @@
     "mappings": {
       "_meta": {
         "toolkit_schema": "httpdlog",
-        "toolkit_schema_version": 1
+        "toolkit_schema_version": 2
       },
       "properties": {
         "aws": {
@@ -144,6 +144,77 @@
                   "dynamic": "true"
                 }
               }
+            },
+            "cloudfront": {
+              "properties": {
+                "distribution_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "distribution_domain": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "edge_location": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "edge_result_type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "edge_response_result_type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "edge_detailed_result_type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "request_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "fle_status": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "fle_encrypted_fields": {
+                  "type": "integer"
+                },
+                "time_taken": {
+                  "properties": {
+                    "sec": {
+                      "type": "double"
+                    }
+                  }
+                },
+                "time_to_first_byte": {
+                  "properties": {
+                    "sec": {
+                      "type": "double"
+                    }
+                  }
+                },
+                "range_start": {
+                  "type": "long"
+                },
+                "range_end": {
+                  "type": "long"
+                },
+                "x_forwarded_for": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "malformed": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "unmapped": {
+                  "type": "object",
+                  "dynamic": "true"
+                }
+              }
             }
           }
         },
@@ -191,6 +262,14 @@
                 "method": {
                   "type": "keyword",
                   "ignore_above": 1024
+                },
+                "referrer": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "cookie": {
+                  "type": "keyword",
+                  "ignore_above": 8191
                 }
               }
             },
@@ -198,6 +277,17 @@
               "properties": {
                 "status_code": {
                   "type": "short"
+                },
+                "mime_type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "body": {
+                  "properties": {
+                    "bytes": {
+                      "type": "long"
+                    }
+                  }
                 }
               }
             }
@@ -273,13 +363,27 @@
               "ignore_above": 8191
             }
           }
+        },
+        "xff": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            }
+          }
+        },
+        "event": {
+          "properties": {
+            "duration": {
+              "type": "long"
+            }
+          }
         }
       }
     }
   },
   "_meta": {
-    "description": "Explicit schema for web access logs in httpdlog-<source> indexes, written by alb2sofelk.py (AWS Application and Classic Load Balancer access logs): SOF-ELK 6100-httpd.conf/8004-postprocess-httpd.conf field names (http.*, url.*, source/destination.*, user_agent.*, tls.*, backend.*, aws.elb.*). Not installed as an index template, because SOF-ELK's own httpdlog-* template must keep governing its httpdlog-YYYY.MM indexes; the importer creates each httpdlog-<source> index with this body instead.",
+    "description": "Explicit schema for web access logs in httpdlog-<source> indexes, written by alb2sofelk.py (AWS Application and Classic Load Balancer access logs) and cloudfrontaccess2sofelk.py (Amazon CloudFront standard access logs): SOF-ELK 6100-httpd.conf/8004-postprocess-httpd.conf field names (http.*, url.*, source/destination.*, user_agent.*, tls.*, backend.*, aws.elb.*, aws.cloudfront.*, xff.*). Not installed as an index template, because SOF-ELK's own httpdlog-* template must keep governing its httpdlog-YYYY.MM indexes; the importer creates each httpdlog-<source> index with this body instead.",
     "provider": "SOF-ELK-Import-Toolkit",
-    "version": 1
+    "version": 2
   }
 }

@@ -5,7 +5,7 @@
 | Tactic | TA0003 Persistence |
 | ATT&CK | T1505.003 Web Shell |
 | Indexes | `httpdlog-*` |
-| Needs | web access logs: ALB or Classic ELB (`alb2sofelk.py`), or other web servers in `httpdlog-*` |
+| Needs | web access logs: ALB or Classic ELB (`alb2sofelk.py`), CloudFront (`cloudfrontaccess2sofelk.py`), or other web servers in `httpdlog-*` |
 | Applies to | internet-facing applications: behind an ALB or ELB, or on IIS/NGINX/Apache |
 
 **What it finds.** Script pages (`.php`, `.jsp`, `.aspx` and similar) that answered 2xx to at most three distinct clients. Scored: POST requests +2, a single client +1, ten or more requests +1, the script sits in an upload, image, cache or static folder +2.

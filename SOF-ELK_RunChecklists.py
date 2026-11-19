@@ -11,7 +11,8 @@ What it does:
 2. Groups them into evidence hosts by the <prefix>-<hostname> index suffix (host.name
    gives the display name). AWS indexes (aws-cloudtrail-*, aws-vpcflow-*, aws-waf-*,
    aws-route53-*, aws-securityhub-*, kubernetes-* loaded by AWS/eksaudit2sofelk.py, and
-   httpdlog-* loaded by AWS/alb2sofelk.py) are grouped into one "AWS" target that runs the
+   httpdlog-* loaded by AWS/alb2sofelk.py or
+   AWS/cloudfrontaccess2sofelk.py) are grouped into one "AWS" target that runs the
    three AWS checklists without a role prompt.
 3. Asks the role of each other host (or takes it from --role), and picks the checklists:
    the Windows or Linux baseline plus the role's checklist from hunting/checklists/.

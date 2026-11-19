@@ -6,7 +6,7 @@ Expected layout:
   Windows/csv_importers/<thirteen CSV importers and sof_elk_csv_bulk_common.py>
   Windows/json_importers/<four JSON importers and sof_elk_json_bulk_common.py>
   Linux/linux2sofelk.py (UAC collections: a folder holding uac.log, or a UAC .zip)
-  AWS/<cloudtrail|vpcflow|alb|waf|route53resolver|securityhub|eksaudit>2sofelk.py
+  AWS/<cloudtrail|vpcflow|alb|cloudfrontaccess|waf|route53resolver|securityhub|eksaudit>2sofelk.py
       (AWS logs, plain or .gz, native, CSV or Amazon Security Lake OCSF exports)
 
 A UAC collection is handed to Linux/linux2sofelk.py as a whole and its folder is not
@@ -75,6 +75,7 @@ AWS_IMPORTERS = {
     "AWS Security Hub": ("securityhub2sofelk.py", "aws-securityhub"),
     "AWS EKS audit": ("eksaudit2sofelk.py", "kubernetes"),
     "AWS Route 53 Resolver": ("route53resolver2sofelk.py", "aws-route53"),
+    "AWS CloudFront access": ("cloudfrontaccess2sofelk.py", "httpdlog"),
     "AWS ALB/ELB": ("alb2sofelk.py", "httpdlog"),
     "AWS VPC Flow": ("vpcflow2sofelk.py", "aws-vpcflow"),
 }
@@ -531,7 +532,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Recursively discover SOF-ELK forensic exports and invoke the matching CSV/JSON importers"
                     " (and the Linux importers for UAC collections, and the AWS importers for CloudTrail,"
-                    " VPC Flow, ALB/ELB and WAF logs).",
+                    " VPC Flow, ALB/ELB, CloudFront, WAF, Route 53 Resolver, Security Hub and EKS audit logs).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("directory", help="Root directory to search recursively")

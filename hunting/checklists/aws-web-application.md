@@ -1,6 +1,6 @@
 # Checklist: AWS web application (ALB and WAF)
 
-Internet-facing applications behind an Application Load Balancer or Classic ELB and protected by AWS WAF (`aws-waf-*`). ALB logs are loaded into `httpdlog-<source>`, next to any IIS, NGINX or Apache access logs in `httpdlog-*`, so rows 2.1, 3.1 and 3.2 hunt across all web front ends at once. Run [the account checklist](aws-account-control-plane.md) for the account as well. The usual questions: was the application exploited, did a web shell or stolen session follow, and how much data left through the front door.
+Internet-facing applications behind an Application Load Balancer, Classic ELB or CloudFront distribution and protected by AWS WAF (`aws-waf-*`). ALB and CloudFront access logs are loaded into `httpdlog-<source>`, next to any IIS, NGINX or Apache access logs in `httpdlog-*`, so rows 2.1, 3.1 and 3.2 hunt across all web front ends at once. Run [the account checklist](aws-account-control-plane.md) for the account as well. The usual questions: was the application exploited, did a web shell or stolen session follow, and how much data left through the front door.
 
 ## 1. Application profile
 
@@ -28,6 +28,6 @@ Internet-facing applications behind an Application Load Balancer or Classic ELB 
 ## Not covered by these queries
 
 - Application logs on the targets (web server access and error logs, framework logs): the request body is not in ALB logs, and WAF logs carry headers but not the body.
-- CloudFront and API Gateway access logs are not loaded by this toolkit. WAF logs from CloudFront or API Gateway web ACLs are (`http_source_name` says which).
-- The ALB `client:port` is the real client only when nothing sits in front of the load balancer; behind CloudFront or another proxy, use the WAF `xff.ip` or the proxy's own logs.
+- API Gateway access logs and CloudFront real-time logs are not loaded by this toolkit. CloudFront standard access logs are (`cloudfrontaccess2sofelk.py`, `event.dataset` `aws.cloudfront`), and so are WAF logs from CloudFront or API Gateway web ACLs (`http_source_name` says which).
+- The ALB `client:port` is the real client only when nothing sits in front of the load balancer; behind CloudFront or another proxy, use the WAF `xff.ip` or the proxy's own logs (for CloudFront, `source.ip` in its access logs is the viewer).
 - Network Load Balancer access logs and ALB connection logs are skipped by the importer.

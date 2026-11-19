@@ -21,6 +21,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
 import alb2sofelk  # noqa: E402
+import cloudfrontaccess2sofelk  # noqa: E402
 import cloudtrail2sofelk  # noqa: E402
 import sof_elk_aws_common as common  # noqa: E402
 import vpcflow2sofelk  # noqa: E402
@@ -185,6 +186,117 @@ class AlbTest(TemplateCheck):
         doc = next(d for d in self.docs if d["event"]["dataset"] == "aws.elb_classic")
         self.assertEqual(doc["aws"]["elb"]["name"], "classic-lb")
         self.assertEqual(doc["backend"]["ip"], "10.0.1.16")
+
+    def test_template(self):
+        self.assert_mapped("httpdlog", self.results)
+
+
+class CloudFrontTest(TemplateCheck):
+    @classmethod
+    def setUpClass(cls):
+        cls.results = parse_all(cloudfrontaccess2sofelk, "cloudfront")
+        cls.docs = [d for _, k, d in cls.results if k is not None]
+
+    def by_id(self, request_id):
+        return next(d for d in self.docs if d["aws"]["cloudfront"]["request_id"] == request_id)
+
+    def test_counts_plain_and_gzip(self):
+        self.assertEqual(len(self.docs), 2 * 7)
+        self.assertEqual([r for _, k, r in self.results if k is None], [])
+
+    def test_fields_from_header(self):
+        doc = self.by_id("rq2-Yy1_bc6cR==")
+        self.assertEqual(doc["@timestamp"], "2026-10-20T01:05:10.000Z")
+        self.assertEqual(doc["event"]["dataset"], "aws.cloudfront")
+        self.assertEqual(doc["source"]["ip"], "198.51.100.23")
+        self.assertEqual(doc["source"]["port"], 60001)
+        self.assertEqual(doc["http"]["request"]["method"], "POST")
+        self.assertEqual(doc["url"]["domain"], "www.example.com")
+        self.assertEqual(doc["url"]["path"], "/api/upload.jsp")
+        self.assertEqual(doc["url"]["query"], "cmd=whoami&x=%2E%2E%2F")
+        self.assertEqual(doc["url"]["original"], "https://www.example.com/api/upload.jsp?cmd=whoami&x=%2E%2E%2F")
+        self.assertEqual(doc["http"]["response"]["status_code"], 200)
+        self.assertEqual(doc["http"]["request"]["referrer"], "https://www.example.com/app/")
+        self.assertEqual(doc["destination"]["bytes"], 48211)
+        self.assertEqual(doc["source"]["bytes"], 5120)
+        self.assertEqual(doc["event"]["duration"], 415000000)
+        self.assertEqual(doc["xff"]["ip"], ["10.0.0.8", "10.0.0.9"])
+        self.assertEqual(doc["http"]["version"], "1.1")
+        self.assertEqual(doc["tls"]["protocol"], "TLSv1.2")
+        cf = doc["aws"]["cloudfront"]
+        self.assertEqual(cf["distribution_id"], "E2ABCDEF123456")
+        self.assertEqual(cf["distribution_domain"], "d111111abcdef8.cloudfront.net")
+        self.assertEqual(cf["edge_location"], "IAD89-C1")
+        self.assertEqual(cf["edge_result_type"], "Miss")
+
+    def test_user_agent_decoded(self):
+        self.assertEqual(self.by_id("rq1-Tx0_aZ5bQ==")["user_agent"]["original"], "Mozilla/5.0 (X11; Linux x86_64)")
+
+    def test_ipv6_and_ranges(self):
+        doc = self.by_id("rq3-Zz2_cd7dS==")
+        self.assertEqual(doc["source"]["ip"], "2001:db8::7")
+        self.assertEqual(doc["aws"]["cloudfront"]["range_end"], 15728639)
+        self.assertEqual(doc["url"]["extension"], "zip")
+
+    def test_aborted_request(self):
+        doc = self.by_id("rq4-Aa3_de8eT==")
+        self.assertEqual(doc["http"]["response"]["status_code"], 0)
+        self.assertNotIn("tls", doc)
+        self.assertEqual(doc["aws"]["cloudfront"]["edge_detailed_result_type"], "ClientCommError")
+
+    def test_old_layout_and_new_field(self):
+        old = self.by_id("rq5-Bb4_ef9fU==")
+        self.assertNotIn("port", old["source"])
+        self.assertEqual(old["http"]["version"], "1.1")
+        new = self.by_id("rq6-Cc5_fg0gV==")
+        self.assertEqual(new["aws"]["cloudfront"]["unmapped"]["c_country"], "GB")
+
+    def test_no_other_importer_claims_cloudfront(self):
+        others = [alb2sofelk, cloudtrail2sofelk, vpcflow2sofelk, waf2sofelk, eksaudit2sofelk,
+                  route53resolver2sofelk, securityhub2sofelk]
+        for f in sorted(FIXTURES.rglob("*")):
+            if not f.is_file():
+                continue
+            head = common.head_text(f)
+            is_cf = "cloudfront" in f.relative_to(FIXTURES).parts
+            self.assertEqual(bool(cloudfrontaccess2sofelk.LOG.detect(f, head)), is_cf, f)
+            if is_cf:
+                self.assertFalse(any(m.LOG.detect(f, head) for m in others), f)
+
+    def test_headerless(self):
+        doc = self.by_id("rq7-Dd6_gh1hW==")
+        self.assertEqual(doc["url"]["path"], "/admin/login.php")
+        self.assertNotIn("distribution_id", doc["aws"]["cloudfront"])
+
+    def test_template(self):
+        self.assert_mapped("httpdlog", self.results)
+
+
+class CloudFrontCsvTest(TemplateCheck):
+    @classmethod
+    def setUpClass(cls):
+        cls.results = parse_all(cloudfrontaccess2sofelk, "cloudfront/csv")
+        cls.docs = {d["aws"]["cloudfront"]["request_id"]: d for _, k, d in cls.results if k is not None}
+
+    def test_counts(self):
+        self.assertEqual(len([k for _, k, _ in self.results if k is not None]), 2 * 4)
+
+    def test_athena(self):
+        doc = self.docs["rq8-Ee7_hi2iX=="]
+        self.assertEqual(doc["source"]["ip"], "198.51.100.23")
+        self.assertEqual(doc["url"]["path"], "/api/upload.jsp")
+        self.assertEqual(doc["url"]["domain"], "www.example.com")
+        self.assertEqual(doc["http"]["response"]["status_code"], 200)
+        self.assertEqual(doc["aws"]["cloudfront"]["edge_location"], "IAD89-C1")
+        self.assertEqual(doc["event"]["duration"], 415000000)
+
+    def test_excel_dates(self):
+        self.assertEqual(self.docs["rq10-Gg9_jk4kZ=="]["@timestamp"], "2026-10-20T05:15:00.000Z")
+
+    def test_raw_line_column(self):
+        doc = self.docs["rq11-Hh0_kl5lA=="]
+        self.assertEqual(doc["url"]["path"], "/.env")
+        self.assertEqual(doc["@timestamp"], "2026-10-20T06:00:00.000Z")
 
     def test_template(self):
         self.assert_mapped("httpdlog", self.results)

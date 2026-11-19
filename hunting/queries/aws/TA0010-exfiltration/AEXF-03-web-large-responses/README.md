@@ -5,7 +5,7 @@
 | Tactic | TA0010 Exfiltration |
 | ATT&CK | T1530 Data from Cloud Storage, T1567 Exfiltration Over Web Service |
 | Indexes | `httpdlog-*` |
-| Needs | web access logs with response sizes: ALB or Classic ELB (`alb2sofelk.py`), or other web servers in `httpdlog-*` |
+| Needs | web access logs with response sizes: ALB or Classic ELB (`alb2sofelk.py`), CloudFront (`cloudfrontaccess2sofelk.py`), or other web servers in `httpdlog-*` |
 | Applies to | internet-facing applications: behind an ALB or ELB, or on IIS/NGINX/Apache |
 
 **What it finds.** Per client and index: megabytes sent back (`destination.bytes`, the response size, as in SOF-ELK's web log parsing), how many responses were 10 MB or larger and for which paths, compared with the median client of the same index.

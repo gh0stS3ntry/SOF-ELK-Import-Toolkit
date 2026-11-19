@@ -25,7 +25,8 @@ spec = importlib.util.spec_from_file_location("import_wrapper", ROOT / "SOF-ELK_
 w = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(w)
 
-EXPECTED = {"cloudtrail": "AWS CloudTrail", "waf": "AWS WAF", "alb": "AWS ALB/ELB", "vpcflow": "AWS VPC Flow"}
+EXPECTED = {"cloudtrail": "AWS CloudTrail", "waf": "AWS WAF", "alb": "AWS ALB/ELB", "vpcflow": "AWS VPC Flow",
+            "cloudfront": "AWS CloudFront access"}
 VPC_LINE = "2 123456789012 eni-0abc 10.0.0.5 10.0.0.9 443 50000 6 10 840 1760922000 1760922060 ACCEPT OK\n"
 
 
@@ -83,6 +84,10 @@ class AwsDiscoveryTests(unittest.TestCase):
         self.assertIn("export-000", {p.name for p in aws_files["AWS VPC Flow"]})
         self.assertIn("aws-waf-logs-prod-1-2026-10-20-01-00-00-abc", {p.name for p in aws_files["AWS WAF"]})
         self.assertTrue(any(p.suffix == ".gz" for p in aws_files["AWS CloudTrail"]))
+        # CloudFront files have no extension; their Athena CSV must not go to the ALB importer.
+        cf = {p.name for p in aws_files["AWS CloudFront access"]}
+        self.assertIn("E2ABCDEF123456.2026-10-20-01.a1b2c3d4", cf)
+        self.assertIn("athena_cloudfront_standard_logs.csv", cf)
 
     def test_security_lake_exports_go_to_every_source_importer(self):
         sl = self.root / "securitylake"
@@ -90,7 +95,7 @@ class AwsDiscoveryTests(unittest.TestCase):
         _, _, _, aws_files = w.discover(self.root, self.aws)
         mixed = (sl / "mixed_sources_array.json").resolve()
         claimed = sorted(label for label, files in aws_files.items() if mixed in files)
-        self.assertEqual(claimed, sorted(set(w.AWS_IMPORTERS) - {"AWS ALB/ELB"}))
+        self.assertEqual(claimed, sorted(set(w.AWS_IMPORTERS) - {"AWS ALB/ELB", "AWS CloudFront access"}))
         single = (sl / "route53.jsonl").resolve()
         self.assertEqual([label for label, files in aws_files.items() if single in files], ["AWS Route 53 Resolver"])
         athena = (sl / "csv" / "athena_cloudtrail.csv").resolve()

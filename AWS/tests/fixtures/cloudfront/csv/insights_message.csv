@@ -1,0 +1,2 @@
+@timestamp,@message
+2026-10-20 06:00:00.000,2026-10-20	06:00:00	SIN52-P1	0	203.0.113.7	GET	d111111abcdef8.cloudfront.net	/.env	000	-	Mozilla/5.0	-	-	Error	rq11-Hh0_kl5lA==	www.example.com	http	95	0.001	-	-	-	Error	HTTP/1.1	-	-	51300	-	ClientCommError	-	-	-	-
