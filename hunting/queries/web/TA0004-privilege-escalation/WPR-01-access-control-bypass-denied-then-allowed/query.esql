@@ -1,0 +1,75 @@
+// WPR-01 | Access-control bypass: protected paths answered 2xx after 401/403, through path-confusion tricks, another HTTP method or a different case, per client and path
+// Tactic: TA0004 Privilege Escalation | ATT&CK: T1190, T1078
+// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, Apache, nginx, lighttpd
+FROM httpdlog-* METADATA _index
+| WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
+| EVAL raw_path = COALESCE(url.path, "")
+| EVAL path = TO_LOWER(raw_path)
+| EVAL method = TO_UPPER(COALESCE(http.request.method, ""))
+| EVAL status = COALESCE(http.response.status_code, 0)
+// WSTG-CONF-13 path confusion and WSTG-ATHZ-02 bypass forms: path parameters, ..;/, encoded dots and slashes, doubled slashes, trailing dot or slash
+| EVAL f_trick = (path LIKE "*;*" AND path NOT LIKE "*;jsessionid=*") OR path LIKE "*..;/*" OR path LIKE "*/./*" OR path LIKE "*//*"
+    OR path LIKE "*%2e*" OR path LIKE "*%2f*" OR path LIKE "*%5c*" OR path LIKE "*%09*" OR path LIKE "*%20" OR path LIKE "*/."
+    OR path LIKE "*%23*" OR path LIKE "*%3f*" OR path LIKE "*%3b*"
+| EVAL f_case = raw_path != path AND path RLIKE ".*/(admin|administrator|manager|console|api/admin|internal|private|management|actuator|config|settings|users|debug).*"
+// one key per resource: path parameters, encodings and repeated slashes removed (Java regex in REPLACE)
+| EVAL base = REPLACE(path, ";[^/]*", "")
+| EVAL base = REPLACE(REPLACE(REPLACE(base, "%2e", "."), "%2f", "/"), "%5c", "/")
+| EVAL base = REPLACE(REPLACE(base, "/[.]/", "/"), "/{2,}", "/")
+// resolve one parent step left by a "..;/" trick (/public/..;/admin -> /admin), then trailing "/" or "/."
+| EVAL base = REPLACE(REPLACE(base, "/[^/]+/[.][.](/|$)", "/"), "^/[.][.](/|$)", "/")
+| EVAL base = REPLACE(base, "/[.]?$", "")
+| EVAL denied = status IN (401, 403)
+| EVAL ok = status >= 200 AND status < 300
+| EVAL deny_time = CASE(denied, @timestamp)
+| EVAL deny_one = CASE(denied, 1, 0)
+| INLINE STATS path_denials = SUM(deny_one), path_first_denial = MIN(deny_time) BY _index, base
+| WHERE path_denials > 0 AND (ok OR denied)
+| STATS
+    requests = COUNT(*),
+    denied_403 = COUNT(*) WHERE status == 403,
+    denied_401 = COUNT(*) WHERE status == 401,
+    ok_responses = COUNT(*) WHERE ok,
+    ok_with_trick = COUNT(*) WHERE ok AND f_trick,
+    ok_with_case = COUNT(*) WHERE ok AND f_case,
+    ok_odd_method = COUNT(*) WHERE ok AND NOT method IN ("GET", "POST"),
+    denied_methods = VALUES(method) WHERE denied,
+    ok_methods = VALUES(method) WHERE ok,
+    ok_forms = VALUES(raw_path) WHERE ok,
+    first_denied = MIN(deny_time),
+    last_ok = MAX(@timestamp) WHERE ok,
+    path_first_denial = MIN(path_first_denial),
+    user_agents = VALUES(user_agent.original),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, url.domain, base, source.ip
+| WHERE ok_responses > 0
+| EVAL ok_after_denial = last_ok > COALESCE(first_denied, path_first_denial)
+| EVAL score = CASE(ok_with_trick > 0, 3, 0) + CASE(ok_with_case > 0, 2, 0) + CASE(ok_odd_method > 0 AND denied_403 + denied_401 > 0, 3, 0)
+    + CASE(denied_403 > 0 AND ok_after_denial, 2, 0) + CASE(denied_403 == 0 AND denied_401 == 0 AND ok_after_denial, 1, 0)
+| WHERE score >= 2  // EDIT: 401 then 200 alone is the normal HTTP authentication handshake and scores 0
+| EVAL ok_forms = MV_SLICE(ok_forms, 0, 9), user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    score,
+    source.ip,
+    url.domain,
+    base,
+    requests,
+    denied_403,
+    denied_401,
+    ok_responses,
+    ok_with_trick,
+    ok_with_case,
+    ok_odd_method,
+    denied_methods,
+    ok_methods,
+    path_first_denial,
+    first_denied,
+    last_ok,
+    first_seen,
+    last_seen,
+    ok_forms,
+    user_agents
+| SORT score DESC, ok_responses DESC
+| LIMIT 1000

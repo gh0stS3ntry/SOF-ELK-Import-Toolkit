@@ -1,0 +1,60 @@
+// WPE-01 | Malicious uploads: executable, double-extension and active-content files requested from upload folders, and whether the requesting client used an upload endpoint first
+// Tactic: TA0003 Persistence | ATT&CK: T1505.003, T1608.002
+// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, Apache, nginx, lighttpd
+FROM httpdlog-* METADATA _index
+| WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
+| EVAL path = TO_LOWER(COALESCE(url.path, ""))
+| EVAL method = TO_UPPER(COALESCE(http.request.method, ""))
+| EVAL status = COALESCE(http.response.status_code, 0)
+// EDIT: add the application's own upload routes
+| EVAL f_upload_req = method IN ("POST", "PUT") AND path RLIKE ".*(upload|uploader|import|attach|avatar|filemanager|file-manager|elfinder|kcfinder|ckfinder|fckeditor|plupload|dropzone|async-upload|media/new|files/new).*"
+| EVAL up = CASE(f_upload_req, 1, 0)
+| EVAL up_time = CASE(f_upload_req, @timestamp)
+| INLINE STATS client_uploads = SUM(up), client_first_upload = MIN(up_time) BY _index, source.ip
+| EVAL f_upload_dir = path RLIKE ".*/(upload|uploads|uploaded|files|file|userfiles|user_files|attachments|attachment|avatars|avatar|media|images|image|img|documents|docs|tmp|temp|cache|static|assets|data|wp-content/uploads)/.*"
+// WSTG-BUSL-08 / BUSL-09: server-side executable extensions, double extensions and filter-bypass suffixes, active content served from upload folders
+| EVAL f_exec = path RLIKE ".*[.](php[0-9]?|phtml|phar|pht|phps|pgif|shtml|jsp|jspx|jspf|asp|aspx|ashx|asmx|asa|cer|cshtml|vbhtml|cfm|cgi|pl|py|rb|sh|war)"
+| EVAL f_double = path RLIKE ".*[.](php[0-9]?|phtml|phar|jsp|jspx|asp|aspx|ashx|asa|cer|cgi|pl|py|sh)[.;%].*"
+    OR path LIKE "*%00*" OR path LIKE "*::$data*"
+// active content counts only in folders that hold user uploads (static and asset folders serve HTML and SVG normally)
+| EVAL f_user_upload_dir = path RLIKE ".*/(upload|uploads|uploaded|userfiles|user_files|attachments|attachment|avatars|avatar)/.*"
+| EVAL f_active = (f_user_upload_dir AND path RLIKE ".*[.](svg|svgz|html|htm|xhtml|shtm|xml|swf)")
+    OR path RLIKE ".*/[.](htaccess|user[.]ini)"
+| WHERE f_upload_dir AND (f_exec OR f_double OR f_active)
+| EVAL ok = status >= 200 AND status < 300
+| STATS
+    requests = COUNT(*),
+    ok_responses = COUNT(*) WHERE ok,
+    posts = COUNT(*) WHERE method == "POST",
+    clients = COUNT_DISTINCT(source.ip),
+    uploading_clients = COUNT_DISTINCT(source.ip) WHERE client_uploads > 0,
+    earliest_upload_by_these_clients = MIN(client_first_upload),
+    client_ips = VALUES(source.ip),
+    queries = VALUES(url.query),
+    statuses = VALUES(status),
+    user_agents = VALUES(user_agent.original),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, url.domain, url.path, f_exec, f_double, f_active
+| EVAL score = CASE(f_exec, 3, 0) + CASE(f_double, 3, 0) + CASE(f_active, 1, 0) + CASE(ok_responses > 0, 2, 0)
+    + CASE(uploading_clients > 0, 2, 0) + CASE(posts > 0, 1, 0) + CASE(clients <= 2, 1, 0)
+| EVAL client_ips = MV_SLICE(client_ips, 0, 9), queries = MV_SLICE(queries, 0, 9), user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    score,
+    url.domain,
+    url.path,
+    requests,
+    ok_responses,
+    posts,
+    clients,
+    uploading_clients,
+    earliest_upload_by_these_clients,
+    first_seen,
+    last_seen,
+    client_ips,
+    statuses,
+    queries,
+    user_agents
+| SORT score DESC, ok_responses DESC
+| LIMIT 1000

@@ -1,0 +1,64 @@
+// WIA-03 | Malformed, desynced and smuggled requests: unparsed request lines, ALB desync classifications, CloudFront edge errors, 400/414/431/505 bursts, per client
+// Tactic: TA0001 Initial Access | ATT&CK: T1190, T1595.002
+// Indexes: httpdlog-* | Needs: web access logs; the aws.elb.* and aws.cloudfront.* columns are filled only for ALB/ELB and CloudFront logs
+FROM httpdlog-* METADATA _index
+| WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
+| EVAL status = COALESCE(http.response.status_code, 0)
+| EVAL version = TO_UPPER(COALESCE(http.version, ""))
+| EVAL f_unparsed = COALESCE(sof-elk.rawrequest, "") != ""
+| EVAL desync = COALESCE(aws.elb.classification, "")
+| EVAL f_desync = desync IN ("Ambiguous", "Severe")
+| EVAL f_cf_error = COALESCE(aws.cloudfront.edge_result_type, "") == "Error"
+| EVAL f_bad_status = status IN (400, 405, 408, 411, 413, 414, 431, 501, 505)
+| EVAL f_odd_version = version != "" AND NOT version IN ("1.0", "1.1", "2", "2.0", "3", "3.0", "HTTP/1.0", "HTTP/1.1", "HTTP/2", "HTTP/2.0", "HTTP/3")
+| WHERE f_unparsed OR f_desync OR f_cf_error OR f_bad_status OR f_odd_version
+| STATS
+    events = COUNT(*),
+    unparsed = COUNT(*) WHERE f_unparsed,
+    desync_severe = COUNT(*) WHERE desync == "Severe",
+    desync_ambiguous = COUNT(*) WHERE desync == "Ambiguous",
+    cloudfront_errors = COUNT(*) WHERE f_cf_error,
+    bad_status = COUNT(*) WHERE f_bad_status,
+    odd_version = COUNT(*) WHERE f_odd_version,
+    desync_reasons = VALUES(aws.elb.classification_reason),
+    elb_errors = VALUES(aws.elb.error.reason),
+    cf_detail = VALUES(aws.cloudfront.edge_detailed_result_type),
+    sample_raw = VALUES(sof-elk.rawrequest),
+    sample_urls = VALUES(url.original),
+    statuses = VALUES(status),
+    versions = VALUES(version),
+    methods = VALUES(http.request.method),
+    user_agents = VALUES(user_agent.original),
+    datasets = VALUES(event.dataset),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, source.ip
+| EVAL score = CASE(desync_severe > 0, 4, 0) + CASE(desync_ambiguous > 0, 2, 0) + CASE(unparsed > 0, 2, 0)
+    + CASE(odd_version > 0, 1, 0) + CASE(bad_status >= 20, 1, 0) + CASE(cloudfront_errors >= 20, 1, 0)
+| WHERE score > 0
+| EVAL sample_raw = MV_SLICE(sample_raw, 0, 9), sample_urls = MV_SLICE(sample_urls, 0, 9), user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    score,
+    source.ip,
+    events,
+    desync_severe,
+    desync_ambiguous,
+    unparsed,
+    odd_version,
+    bad_status,
+    cloudfront_errors,
+    first_seen,
+    last_seen,
+    desync_reasons,
+    elb_errors,
+    cf_detail,
+    statuses,
+    versions,
+    methods,
+    sample_raw,
+    sample_urls,
+    user_agents,
+    datasets
+| SORT score DESC, events DESC
+| LIMIT 1000

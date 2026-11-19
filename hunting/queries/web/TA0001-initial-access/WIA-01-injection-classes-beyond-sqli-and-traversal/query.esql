@@ -1,0 +1,142 @@
+// WIA-01 | Injection classes beyond SQLi and traversal (SSTI, SSRF and out-of-band callbacks, XXE, NoSQL/LDAP/XPath, deserialization, prototype pollution, CRLF, encoding evasion, file inclusion, open redirect, CSV, mass assignment), scored per client
+// Tactic: TA0001 Initial Access | ATT&CK: T1190, T1595.002
+// Indexes: httpdlog-* | Needs: web access logs with the query string (url.query): ALB/ELB, CloudFront, Apache, nginx, lighttpd
+FROM httpdlog-* METADATA _index
+| WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
+| EVAL req = TO_LOWER(CONCAT(COALESCE(url.path, ""), "?", COALESCE(url.query, "")))
+// WSTG-INJT-18 server-side template injection
+| EVAL f_ssti = req LIKE "*{{*" OR req LIKE "*%7b%7b*" OR req LIKE "*{%*" OR req LIKE "*%7b%25*" OR req LIKE "*${7*"
+    OR req LIKE "*%24%7b7*" OR req LIKE "*#{*" OR req LIKE "*%23%7b*" OR req LIKE "*<%=*" OR req LIKE "*%3c%25%3d*"
+    OR req LIKE "*__class__*" OR req LIKE "*__globals__*" OR req LIKE "*__builtins__*" OR req LIKE "*__mro__*"
+    OR req LIKE "*__subclasses__*" OR req LIKE "*freemarker.template*" OR req LIKE "*getruntime()*" OR req LIKE "*getruntime%28%29*"
+// WSTG-INJT-19 SSRF to internal and metadata addresses, non-HTTP schemes
+| EVAL f_ssrf = req LIKE "*://127.*" OR req LIKE "*%3a%2f%2f127.*" OR req LIKE "*://localhost*" OR req LIKE "*%3a%2f%2flocalhost*"
+    OR req LIKE "*://0.0.0.0*" OR req LIKE "*%3a%2f%2f0.0.0.0*" OR req LIKE "*://[::*" OR req LIKE "*%3a%2f%2f%5b%3a%3a*"
+    OR req LIKE "*://0x7f*" OR req LIKE "*://2130706433*" OR req LIKE "*169.254.169.254*" OR req LIKE "*metadata.google.internal*"
+    OR req LIKE "*/latest/meta-data*" OR req LIKE "*/computemetadata/*" OR req LIKE "*/metadata/instance*" OR req LIKE "*100.100.100.200*"
+    OR req LIKE "*gopher://*" OR req LIKE "*gopher%3a%2f%2f*" OR req LIKE "*dict://*" OR req LIKE "*dict%3a%2f%2f*"
+    OR req LIKE "*file://*" OR req LIKE "*file%3a%2f%2f*" OR req LIKE "*sftp://*" OR req LIKE "*tftp://*"
+// blind injection: out-of-band callback and request-capture domains used to confirm SSRF, XXE, SQLi and command injection
+| EVAL f_oast = req LIKE "*oast.*" OR req LIKE "*oastify.com*" OR req LIKE "*burpcollaborator*" OR req LIKE "*interact.sh*"
+    OR req LIKE "*interactsh*" OR req LIKE "*dnslog.cn*" OR req LIKE "*ceye.io*" OR req LIKE "*canarytokens*" OR req LIKE "*requestbin*"
+    OR req LIKE "*webhook.site*" OR req LIKE "*pipedream.net*" OR req LIKE "*ngrok*" OR req LIKE "*trycloudflare.com*"
+// WSTG-INJT-07 XML injection and XXE
+| EVAL f_xxe = req LIKE "*<!doctype*" OR req LIKE "*%3c!doctype*" OR req LIKE "*%3c%21doctype*" OR req LIKE "*<!entity*"
+    OR req LIKE "*%3c!entity*" OR req LIKE "*%3c%21entity*" OR req LIKE "*xi:include*" OR req LIKE "*xi%3ainclude*"
+    OR req LIKE "*<![cdata[*" OR req LIKE "*%3c!%5bcdata%5b*" OR req LIKE "*%3c%21%5bcdata%5b*"
+// WSTG-INJT-05.6 NoSQL, WSTG-INJT-06 LDAP, WSTG-INJT-09 XPath
+| EVAL f_query_inj = req LIKE "*[$ne]*" OR req LIKE "*%5b%24ne%5d*" OR req LIKE "*[$gt]*" OR req LIKE "*%5b%24gt%5d*"
+    OR req LIKE "*[$regex]*" OR req LIKE "*%5b%24regex%5d*" OR req LIKE "*[$nin]*" OR req LIKE "*%5b%24nin%5d*"
+    OR req LIKE "*$where*" OR req LIKE "*%24where*" OR req LIKE "*{%22$ne*" OR req LIKE "*%7b%22%24ne*"
+    OR req LIKE "*)(|*" OR req LIKE "*%29%28%7c*" OR req LIKE "*)(&*" OR req LIKE "*%29%28%26*" OR req LIKE "*)(uid=*"
+    OR req LIKE "*%29%28uid*" OR req LIKE "*)(cn=*" OR req LIKE "*%29%28cn*" OR req LIKE "*(objectclass=*" OR req LIKE "*%28objectclass*"
+    OR req LIKE "*count(/*" OR req LIKE "*count%28%2f*" OR req LIKE "*string-length(*" OR req LIKE "*string-length%28*"
+    OR req LIKE "*name(/*" OR req LIKE "*/child::*"
+// WSTG-INJT-23 insecure deserialization: Java, .NET, PHP, Python and JSON type gadgets
+| EVAL f_deser = req LIKE "*ro0ab*" OR req LIKE "*aced0005*" OR req LIKE "*aaeaaad/////*" OR req LIKE "*ysoserial*"
+    OR req LIKE "*o:?:%22*" OR req LIKE "*o:??:%22*" OR req LIKE "*o%3a?%3a%22*" OR req LIKE "*o%3a??%3a%22*"
+    OR req LIKE "*%22$type%22*" OR req LIKE "*%22%24type%22*" OR req LIKE "*%22@type%22*" OR req LIKE "*%22%40type%22*"
+    OR req LIKE "*!!python/*" OR req LIKE "*%21%21python%2f*" OR req LIKE "*objectdataprovider*"
+// WSTG-INJT-22 prototype pollution, WSTG-INJT-20 mass assignment
+| EVAL f_proto = req LIKE "*__proto__*" OR req LIKE "*constructor[prototype]*" OR req LIKE "*constructor%5bprototype%5d*"
+    OR req LIKE "*constructor.prototype*"
+| EVAL f_mass = req LIKE "*is_admin=*" OR req LIKE "*isadmin=*" OR req LIKE "*is_superuser=*" OR req LIKE "*role=admin*"
+    OR req LIKE "*roles=admin*" OR req LIKE "*%5brole%5d=admin*" OR req LIKE "*[role]=admin*" OR req LIKE "*is_staff=*"
+    OR req LIKE "*account_type=admin*" OR req LIKE "*user_type=admin*"
+// WSTG-INJT-15 response splitting and CRLF header injection
+| EVAL f_crlf = req LIKE "*%0d%0a*" OR req LIKE "*%0a%0d*" OR req LIKE "*%250d%250a*" OR req LIKE "*%e5%98%8a%e5%98%8d*"
+    OR req LIKE "*%0aset-cookie*" OR req LIKE "*%0alocation:*" OR req LIKE "*%0dset-cookie*"
+// WSTG-INJT-25 unicode normalization, double encoding, overlong UTF-8 and null bytes used to slip past filters
+| EVAL f_encoding = req LIKE "*%252e*" OR req LIKE "*%252f*" OR req LIKE "*%255c*" OR req LIKE "*%2500*" OR req LIKE "*%c0%ae*"
+    OR req LIKE "*%c0%af*" OR req LIKE "*%c1%9c*" OR req LIKE "*%c1%1c*" OR req LIKE "*%e0%80%af*" OR req LIKE "*%u002e*"
+    OR req LIKE "*%u002f*" OR req LIKE "*%u2215*" OR req LIKE "*%uff0e*" OR req LIKE "*%ef%bc%8e*" OR req LIKE "*%ef%bc%8f*"
+    OR req LIKE "*%00*"
+// WSTG-INJT-11.1 file inclusion: PHP and other stream wrappers, remote includes
+| EVAL f_include = req LIKE "*php://*" OR req LIKE "*php%3a%2f%2f*" OR req LIKE "*phar://*" OR req LIKE "*phar%3a%2f%2f*"
+    OR req LIKE "*zip://*" OR req LIKE "*expect://*" OR req LIKE "*data://*" OR req LIKE "*data%3a%2f%2f*"
+    OR req LIKE "*=data:text/html*" OR req LIKE "*=data%3atext%2fhtml*" OR req LIKE "*convert.base64-encode*"
+    OR req LIKE "*/proc/self/environ*" OR req LIKE "*/var/log/apache*" OR req LIKE "*/var/log/nginx*" OR req LIKE "*%2fvar%2flog%2f*"
+// WSTG-INJT-24 / WSTG-CLNT-04 open redirect: parameters that point off-site or at script
+| EVAL f_redirect = req LIKE "*=//*" OR req LIKE "*=%2f%2f*" OR req LIKE "*=/%5c*" OR req LIKE "*=%5c%5c*" OR req LIKE "*=/%09/*"
+    OR req LIKE "*=javascript:*" OR req LIKE "*=javascript%3a*" OR req LIKE "*=https:/%2f*"
+// WSTG-INJT-12 command injection forms not in AIA-04 / LIA-02, WSTG-INJT-13 format strings
+| EVAL f_cmd = req LIKE "*%60*" OR req LIKE "*`*" OR req LIKE "*$(*" OR req LIKE "*%24%28*" OR req LIKE "*whoami*"
+    OR req LIKE "*uname%20-a*" OR req LIKE "*;cat%20*" OR req LIKE "*%3bcat%20*" OR req LIKE "*%7ccat%20*" OR req LIKE "*%26%26cat%20*"
+    OR req LIKE "*/etc/shadow*" OR req LIKE "*nslookup%20*" OR req LIKE "*%7cnc%20*" OR req LIKE "*%3bnc%20*" OR req LIKE "*ping%20-c*"
+    OR req LIKE "*%25n%25n*" OR req LIKE "*%25s%25s%25s*" OR req LIKE "*%25x%25x%25x*" OR req LIKE "*%25p%25p*"
+// WSTG-INJT-21 CSV / formula injection stored through parameters
+| EVAL f_csv = req LIKE "*=%3dcmd*" OR req LIKE "*cmd%7c*" OR req LIKE "*cmd|*" OR req LIKE "*hyperlink(*"
+    OR req LIKE "*hyperlink%28*" OR req LIKE "*importxml*" OR req LIKE "*webservice(*" OR req LIKE "*webservice%28*"
+    OR req LIKE "*=%3ddde*" OR req LIKE "*dde(*" OR req LIKE "*dde%28*"
+| EVAL f_hit = f_ssti OR f_ssrf OR f_oast OR f_xxe OR f_query_inj OR f_deser OR f_proto OR f_mass OR f_crlf OR f_encoding
+    OR f_include OR f_redirect OR f_cmd OR f_csv
+| WHERE f_hit
+| EVAL status = COALESCE(http.response.status_code, 0)
+| EVAL ok = status >= 200 AND status < 300
+| STATS
+    hits = COUNT(*),
+    ssti = COUNT(*) WHERE f_ssti,
+    ssrf = COUNT(*) WHERE f_ssrf,
+    oast_callbacks = COUNT(*) WHERE f_oast,
+    xxe = COUNT(*) WHERE f_xxe,
+    nosql_ldap_xpath = COUNT(*) WHERE f_query_inj,
+    deserialization = COUNT(*) WHERE f_deser,
+    prototype_pollution = COUNT(*) WHERE f_proto,
+    mass_assignment = COUNT(*) WHERE f_mass,
+    crlf = COUNT(*) WHERE f_crlf,
+    encoding_evasion = COUNT(*) WHERE f_encoding,
+    file_inclusion = COUNT(*) WHERE f_include,
+    open_redirect = COUNT(*) WHERE f_redirect,
+    command_format = COUNT(*) WHERE f_cmd,
+    csv_formula = COUNT(*) WHERE f_csv,
+    hits_2xx = COUNT(*) WHERE ok,
+    hits_5xx = COUNT(*) WHERE status >= 500,
+    sample_2xx = VALUES(url.original) WHERE ok,
+    sample_other = VALUES(url.original) WHERE NOT ok,
+    statuses = VALUES(status),
+    user_agents = VALUES(user_agent.original),
+    domains = VALUES(url.domain),
+    datasets = VALUES(event.dataset),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, source.ip
+| EVAL classes = CASE(ssti > 0, 1, 0) + CASE(ssrf > 0, 1, 0) + CASE(oast_callbacks > 0, 1, 0) + CASE(xxe > 0, 1, 0)
+    + CASE(nosql_ldap_xpath > 0, 1, 0) + CASE(deserialization > 0, 1, 0) + CASE(prototype_pollution > 0, 1, 0)
+    + CASE(mass_assignment > 0, 1, 0) + CASE(crlf > 0, 1, 0) + CASE(encoding_evasion > 0, 1, 0) + CASE(file_inclusion > 0, 1, 0)
+    + CASE(open_redirect > 0, 1, 0) + CASE(command_format > 0, 1, 0) + CASE(csv_formula > 0, 1, 0)
+| EVAL score = classes + CASE(ssrf > 0 OR oast_callbacks > 0 OR deserialization > 0 OR ssti > 0 OR xxe > 0, 2, 0)
+    + CASE(hits_2xx > 0, 3, 0) + CASE(hits_5xx > 0, 1, 0) + CASE(hits >= 20, 1, 0)
+| EVAL sample_2xx = MV_SLICE(sample_2xx, 0, 19), sample_other = MV_SLICE(sample_other, 0, 9),
+    user_agents = MV_SLICE(user_agents, 0, 4), statuses = MV_SLICE(statuses, 0, 19)
+| KEEP
+    _index,
+    score,
+    source.ip,
+    hits,
+    classes,
+    hits_2xx,
+    hits_5xx,
+    ssti,
+    ssrf,
+    oast_callbacks,
+    xxe,
+    nosql_ldap_xpath,
+    deserialization,
+    prototype_pollution,
+    mass_assignment,
+    crlf,
+    encoding_evasion,
+    file_inclusion,
+    open_redirect,
+    command_format,
+    csv_formula,
+    first_seen,
+    last_seen,
+    statuses,
+    domains,
+    datasets,
+    user_agents,
+    sample_2xx,
+    sample_other
+| SORT score DESC, hits_2xx DESC, hits DESC
+| LIMIT 1000

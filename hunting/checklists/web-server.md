@@ -32,6 +32,6 @@ IIS (including SharePoint and the IIS side of Exchange; see also the [Exchange s
 
 ## Not covered by these queries
 
-- IIS, Apache and Tomcat access logs (`u_ex*.log`, `access_log`): the request that dropped or used the web shell. Review them separately and match the times from rows 2.1 to 2.3.
+- IIS and Tomcat access logs (`u_ex*.log`, `localhost_access_log`): the toolkit has no IIS or Tomcat importer yet, so review them separately and match the times from rows 2.1 to 2.3. Apache access logs from a Windows host can be loaded with `Linux/httpd2sofelk.py`, and anything in `httpdlog-*` is hunted by the [web access log checklist](web-access-logs.md), which the checklist runner adds to this role.
 - HTTPERR logs, Exchange `HttpProxy` and `MSExchange Management` logs.
 - WAF and reverse-proxy logs for the real client IP.

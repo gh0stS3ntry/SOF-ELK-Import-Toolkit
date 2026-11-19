@@ -17,6 +17,7 @@ Apache, nginx and lighttpd servers and the applications behind them (PHP, CMSs, 
 | 2.1 | Exploitation attempts and what got a 2xx | [LIA-02](../queries/linux/TA0001-initial-access/LIA-02-web-exploitation-on-linux-web-servers/) | 2.4 | Traversal, injection, upload and deserialisation probes answered with 200; scanner and `curl`/`wget`/`python-requests` user agents. |
 | 2.2 | Web shells | [LPE-07](../queries/linux/TA0003-persistence/LPE-07-web-shells-files-and-requests/) | 2.1.4 | Small, new scripts in the web root owned by the web server account and requested by one or two clients, mostly by POST. |
 | 2.3 | SSH and FTP logins used to upload or manage the site | [LIA-01](../queries/linux/TA0001-initial-access/LIA-01-remote-logins-from-public-addresses/), [LCA-01](../queries/linux/TA0006-credential-access/LCA-01-brute-force-and-password-spraying/) | 2.4.1 to 2.4.4 | Deploy or FTP accounts logging in from new addresses, brute force against them. |
+| 2.4 | Access-log checks derived from the OWASP WSTG: forced browsing, injection classes beyond row 2.1, method abuse, access-control bypass, malicious uploads, login and session attacks, ID enumeration, floods |  | 2.4 | Run the [web access log checklist](web-access-logs.md) after row 2.1; the checklist runner adds it to this role. |
 
 ## 3. After exploitation
 

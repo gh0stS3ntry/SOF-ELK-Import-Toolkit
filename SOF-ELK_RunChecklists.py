@@ -13,11 +13,12 @@ What it does:
    aws-route53-*, aws-securityhub-*, kubernetes-* loaded by AWS/eksaudit2sofelk.py, and
    httpdlog-* loaded by AWS/alb2sofelk.py or
    AWS/cloudfrontaccess2sofelk.py) are grouped into one "AWS" target that runs the
-   three AWS checklists without a role prompt. Generic-CSV and Generic-JSON indexes
+   three AWS checklists and the web access log checklist without a role prompt. Generic-CSV and Generic-JSON indexes
    (genericcsv-*, genericjson-*) are left out entirely: they have no fixed schema, so no
    checklist query reads them and they never make or join a host.
 3. Asks the role of each other host (or takes it from --role), and picks the checklists:
-   the Windows or Linux baseline plus the role's checklist from hunting/checklists/.
+   the Windows or Linux baseline plus the role's checklist from hunting/checklists/
+   (web server roles also get web-access-logs.md).
 4. Runs every query those checklists name through Elasticsearch's ES|QL _query API, in
    checklist order, ONCE per case (not once per host). The query's FROM line is rewritten
    to the case's own indexes of every host (so cross-host rarity columns such as
@@ -75,7 +76,10 @@ QUERIES = PACK / "queries"
 
 WINDOWS_BASELINE = "00-baseline-all-windows-hosts.md"
 LINUX_BASELINE = "linux-baseline-all-hosts.md"
-AWS_CHECKLISTS = ("aws-account-control-plane.md", "aws-web-application.md", "aws-vpc-network.md")
+# web-access-logs.md hunts every httpdlog-* index (ALB/ELB, CloudFront, Apache, nginx, lighttpd) with the
+# OWASP WSTG-derived checks; it runs after each web checklist (Windows, Linux and AWS).
+WEB_ACCESS_LOGS = "web-access-logs.md"
+AWS_CHECKLISTS = ("aws-account-control-plane.md", "aws-web-application.md", WEB_ACCESS_LOGS, "aws-vpc-network.md")
 
 # Role -> (platform, checklists run after the platform baseline). Container hosts have no
 # role: the Linux baseline's section 7 covers them on every Linux host. The pack's SSH jump
@@ -83,12 +87,12 @@ AWS_CHECKLISTS = ("aws-account-control-plane.md", "aws-web-application.md", "aws
 # Linux baseline; such hosts take the baseline plus whichever of these roles fits.
 ROLES = {
     "windows-end-user": ("windows", ("end-user-workstation.md",)),
-    "windows-web-server": ("windows", ("web-server.md",)),
+    "windows-web-server": ("windows", ("web-server.md", WEB_ACCESS_LOGS)),
     "windows-exchange-server": ("windows", ("exchange-server.md",)),
     "windows-database-server": ("windows", ("database-server.md",)),
     "windows-file-server": ("windows", ("file-server.md",)),
     "windows-domain-controller": ("windows", ("domain-controller.md",)),
-    "linux-web-server": ("linux", ("linux-web-server.md",)),
+    "linux-web-server": ("linux", ("linux-web-server.md", WEB_ACCESS_LOGS)),
     "linux-database-server": ("linux", ("linux-database-server.md",)),
     "linux-file-server": ("linux", ("linux-file-server.md",)),
     "linux-backup-server": ("linux", ("linux-backup-server.md",)),

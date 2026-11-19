@@ -1,0 +1,56 @@
+// WIA-02 | HTTP method abuse: PUT/DELETE/WebDAV writes that succeeded, TRACE/TRACK/DEBUG, unknown verbs and method-override parameters, per client and method
+// Tactic: TA0001 Initial Access | ATT&CK: T1190, T1505.003
+// Indexes: httpdlog-* | Needs: web access logs with the request method: ALB/ELB, CloudFront, Apache, nginx, lighttpd
+FROM httpdlog-* METADATA _index
+| WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
+| EVAL method = TO_UPPER(COALESCE(http.request.method, "(none)"))
+| EVAL req = TO_LOWER(CONCAT(COALESCE(url.path, ""), "?", COALESCE(url.query, "")))
+| EVAL f_override = req LIKE "*_method=*" OR req LIKE "*x-http-method*" OR req LIKE "*x-method-override*"
+// EDIT: an application whose REST API uses PUT, PATCH and DELETE fills this list; read those rows against the API's routes
+| WHERE NOT method IN ("GET", "POST", "HEAD", "OPTIONS") OR f_override
+| EVAL status = COALESCE(http.response.status_code, 0)
+| EVAL ok = status >= 200 AND status < 300
+| EVAL f_write = method IN ("PUT", "DELETE", "PATCH", "MOVE", "COPY", "MKCOL", "PROPPATCH", "LOCK")
+| EVAL f_webdav = method IN ("PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK", "SEARCH")
+| EVAL f_debug = method IN ("TRACE", "TRACK", "DEBUG", "CONNECT")
+| EVAL f_known = method IN ("GET", "POST", "HEAD", "OPTIONS", "PUT", "DELETE", "PATCH", "TRACE", "CONNECT", "QUERY",
+    "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK", "SEARCH", "TRACK", "DEBUG")
+| EVAL f_script = TO_LOWER(COALESCE(url.path, "")) RLIKE ".*[.](php[0-9]?|phtml|phar|jsp|jspx|asp|aspx|ashx|asmx|asa|cer|cshtml|cfm|cgi|pl|py|sh|war|htaccess|config)"
+| STATS
+    requests = COUNT(*),
+    ok_responses = COUNT(*) WHERE ok,
+    created = COUNT(*) WHERE status IN (201, 204),
+    script_writes_ok = COUNT(*) WHERE f_write AND f_script AND ok,
+    overrides = COUNT(*) WHERE f_override,
+    paths = COUNT_DISTINCT(url.path),
+    ok_paths = VALUES(url.path) WHERE ok,
+    sample_paths = VALUES(url.path),
+    statuses = VALUES(status),
+    user_agents = VALUES(user_agent.original),
+    datasets = VALUES(event.dataset),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, source.ip, method, f_write, f_webdav, f_debug, f_known
+| EVAL score = CASE(f_write AND ok_responses > 0, 3, 0) + CASE(script_writes_ok > 0, 3, 0) + CASE(f_webdav, 1, 0)
+    + CASE(f_debug AND ok_responses > 0, 2, CASE(f_debug, 1, 0)) + CASE(NOT f_known, 2, 0) + CASE(overrides > 0, 2, 0)
+| EVAL ok_paths = MV_SLICE(ok_paths, 0, 19), sample_paths = MV_SLICE(sample_paths, 0, 9), user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    score,
+    source.ip,
+    method,
+    requests,
+    ok_responses,
+    created,
+    script_writes_ok,
+    overrides,
+    paths,
+    first_seen,
+    last_seen,
+    statuses,
+    ok_paths,
+    sample_paths,
+    user_agents,
+    datasets
+| SORT score DESC, ok_responses DESC, requests DESC
+| LIMIT 1000

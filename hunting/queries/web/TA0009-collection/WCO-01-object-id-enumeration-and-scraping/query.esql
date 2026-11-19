@@ -1,0 +1,59 @@
+// WCO-01 | Object ID enumeration and scraping (IDOR / BOLA): one client walking many object IDs on the same endpoint, compared with the other clients of that endpoint
+// Tactic: TA0009 Collection | ATT&CK: T1213, T1119
+// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, Apache, nginx, lighttpd
+FROM httpdlog-* METADATA _index
+| WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
+| EVAL path = TO_LOWER(COALESCE(url.path, ""))
+| WHERE NOT path RLIKE ".*[.](css|js|mjs|png|jpg|jpeg|gif|svg|ico|webp|avif|woff|woff2|ttf|eot|map|mp4|webm)"
+| EVAL full = TO_LOWER(CONCAT(COALESCE(url.path, ""), "?", COALESCE(url.query, "")))
+// endpoint template: UUIDs, long hex IDs and numbers replaced, so /api/users/1017 and /api/users/1018 are one endpoint
+| EVAL template = REPLACE(path, "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "{uuid}")
+| EVAL template = REPLACE(template, "[0-9a-f]{24,}", "{hex}")
+| EVAL template = REPLACE(template, "[0-9]+", "{n}")
+| EVAL id_query = COALESCE(url.query, "") RLIKE ".*[0-9].*"
+| WHERE template != path OR id_query
+| EVAL method = TO_UPPER(COALESCE(http.request.method, ""))
+| EVAL status = COALESCE(http.response.status_code, 0)
+| STATS
+    requests = COUNT(*),
+    distinct_objects = COUNT_DISTINCT(full),
+    ok = COUNT(*) WHERE status >= 200 AND status < 300,
+    denied = COUNT(*) WHERE status IN (401, 403),
+    not_found = COUNT(*) WHERE status == 404,
+    bytes_sent = SUM(destination.bytes),
+    sample_objects = VALUES(url.original),
+    user_agents = VALUES(user_agent.original),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, url.domain, template, method, source.ip
+| INLINE STATS endpoint_clients = COUNT(*), median_objects = MEDIAN(distinct_objects) BY _index, url.domain, template, method
+| WHERE distinct_objects >= 50  // EDIT: objects one client must touch on one endpoint
+| EVAL ratio = ROUND(distinct_objects / GREATEST(median_objects, 1.0), 1)
+| EVAL minutes = GREATEST(DATE_DIFF("minute", first_seen, last_seen), 1)
+| EVAL per_minute = ROUND(requests / TO_DOUBLE(minutes), 1)
+| EVAL score = CASE(ratio >= 10, 2, 0) + CASE(ok >= 50, 2, 0) + CASE(denied > 0 AND ok > 0, 2, 0)
+    + CASE(not_found * 2 >= requests, 1, 0) + CASE(method IN ("PUT", "PATCH", "DELETE"), 2, 0) + CASE(per_minute >= 30, 1, 0)
+| EVAL sample_objects = MV_SLICE(sample_objects, 0, 19), user_agents = MV_SLICE(user_agents, 0, 4), mb_sent = ROUND(COALESCE(bytes_sent, 0) / 1048576.0, 1)
+| KEEP
+    _index,
+    score,
+    source.ip,
+    url.domain,
+    method,
+    template,
+    distinct_objects,
+    median_objects,
+    ratio,
+    endpoint_clients,
+    requests,
+    per_minute,
+    ok,
+    denied,
+    not_found,
+    mb_sent,
+    first_seen,
+    last_seen,
+    sample_objects,
+    user_agents
+| SORT score DESC, distinct_objects DESC
+| LIMIT 1000

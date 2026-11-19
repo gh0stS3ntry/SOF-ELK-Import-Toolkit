@@ -18,6 +18,7 @@ A first cut for each kind of host: what to establish about the host, and which q
 | [AWS account (CloudTrail)](aws-account-control-plane.md) | every AWS account in scope, from its CloudTrail logs |
 | [AWS web application (ALB and WAF)](aws-web-application.md) | internet-facing applications behind an ALB/ELB and AWS WAF |
 | [AWS network (VPC Flow Logs)](aws-vpc-network.md) | VPCs, subnets and interfaces with flow logs |
+| [Web access logs (OWASP WSTG)](web-access-logs.md) | every web server and web application whose access logs are in `httpdlog-*` (ALB/ELB, CloudFront, Apache, nginx, lighttpd); run with the Windows, Linux or AWS web checklist |
 | [Baseline: all Linux hosts](linux-baseline-all-hosts.md) | every Linux host |
 | [Linux web server](linux-web-server.md) | Apache, nginx and lighttpd servers and their applications |
 | [Linux database server](linux-database-server.md) | MySQL/MariaDB, PostgreSQL, MongoDB, Redis and Elasticsearch servers |
@@ -29,6 +30,8 @@ A first cut for each kind of host: what to establish about the host, and which q
 
 **AWS.** The three AWS checklists work per account and per application rather than per host, and do not need the Windows baseline. Run the account checklist for every account in scope, then the web and network checklists where those logs exist. The IR checklist is written for hosts, so their `IR ref` column points to the closest item (for example 2.4.1/2.4.2 for brute force, 2.4.7 for outbound transfers, 2.4.21 for logging stopped) and is blank where nothing fits.
 
+**Web access logs.** The [web access log checklist](web-access-logs.md) hunts all web access logs together with checks derived from the OWASP Web Security Testing Guide. `SOF-ELK_RunChecklists.py` runs it with the Windows web server, Linux web server and AWS checklists; its rows go to the host or AWS evidence source whose `httpdlog-*` index they came from.
+
 **Linux.** Run the Linux baseline on every Linux host, then the checklist for each role the host has (a host can have several, such as a web server that also runs its database). Their `IR ref` column is approximate for the same reason as the AWS checklists.
 
 **Format.** Each checklist is Markdown with numbered sections (`## 1. ...`) holding one table each, with the columns `#`, `Check`, `Queries`, `IR ref` and `What to look for`. [`build_checklist_xlsx.py`](../tools/build_checklist_xlsx.py) reads that layout, so keep it when editing, then rebuild the workbook:
@@ -38,4 +41,4 @@ pip install openpyxl
 python3 hunting/tools/build_checklist_xlsx.py
 ```
 
-**Not covered by the pack.** Memory analysis (IR 2.2), live-response output (IR 2.3: `netstat`, `net session`, `ipconfig /displaydns`), IIS/Apache access logs, SQL Server `ERRORLOG` and audit files, firewall/proxy/VPN logs, and email gateway logs are outside what this toolkit loads. The checklists list them where they matter so they are not forgotten.
+**Not covered by the pack.** Memory analysis (IR 2.2), live-response output (IR 2.3: `netstat`, `net session`, `ipconfig /displaydns`), IIS W3C access logs (no IIS importer yet; Apache, nginx, lighttpd, ALB and CloudFront logs are loaded and hunted by the [web access log checklist](web-access-logs.md)), SQL Server `ERRORLOG` and audit files, firewall/proxy/VPN logs, and email gateway logs are outside what this toolkit loads. The checklists list them where they matter so they are not forgotten.

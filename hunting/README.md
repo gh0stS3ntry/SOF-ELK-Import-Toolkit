@@ -7,6 +7,7 @@ A first-cut set of ES|QL queries for incident response on SOF-ELK, for data load
 | [`queries/windows/`](queries/windows/) | Windows hosts: event logs, `$MFT`/`$J`, registry, Amcache, ShimCache, SRUM, browser history, ... | the importers in [`Windows/`](../Windows/) |
 | [`queries/linux/`](queries/linux/) | Linux hosts: journal and syslog, auditd, bodyfile, wtmp/btmp, packages, accounts and persistence snapshot, web server logs, browser history, FTP logs | the importers in [`Linux/`](../Linux/); see [Linux evidence](#linux-evidence) below |
 | [`queries/aws/`](queries/aws/) | CloudTrail, VPC Flow Logs, ALB/ELB and CloudFront access logs and AWS WAF logs | the importers in [`AWS/`](../AWS/); see [AWS logs](#aws-logs) below |
+| [`queries/web/`](queries/web/) | Web access logs in `httpdlog-*` from any source (ALB/ELB, CloudFront, Apache, nginx, lighttpd), hunted together | `AWS/alb2sofelk.py`, `AWS/cloudfrontaccess2sofelk.py`, `Linux/httpd2sofelk.py`; see [Web access logs](#web-access-logs) below |
 
 The Windows pack is built from the queries used in an earlier engagement (RD01) and the IR checklist used to track it, rewritten for the toolkit's field names. It also covers sources RD01 did not have, such as Security 4688 and Sysmon process creation, network and WMI events. Every query passes the static checker below. None has been run against a live cluster as part of this change, so expect to adjust a few field names to what your data actually has.
 
@@ -68,6 +69,13 @@ The queries need Elasticsearch 9.x, because several use `INLINE STATS` and `STAT
 - Query IDs start with `L`: `LTRI` triage, `LIA` initial access, `LEX` execution, `LPE` persistence, `LPR` privilege escalation, `LCA` credential access, `LDI` discovery, `LLM` lateral movement, `LCO` collection, `LEXF` exfiltration, `LC2` command and control, `LIM` impact, `LDE` defense impairment.
 - The queries pass the static checker and Elastic's ES|QL grammar, and the command-line patterns were tried against the command lines of a real Kali UAC collection and the mail-log parsing against sample Postfix and Dovecot lines; they have not been run on a live cluster.
 
+## Web access logs
+
+- `queries/web/` holds checks that read every web access log in `httpdlog-*` at once, whatever loaded it: ALB/ELB (`event.dataset` `aws.alb` / `aws.elb_classic`), CloudFront (`aws.cloudfront`) and Apache, nginx and lighttpd (`apache.access`, `nginx.access`, ...). They use only SOF-ELK's web field names (`source.ip`, `http.request.method`, `url.path`, `url.query`, `url.original`, `http.response.status_code`, `user_agent.original`, `destination.bytes`) and skip error-log datasets (`*.error`). The few source-specific columns (ALB desync classification and CloudFront edge results in WIA-03, HTTP authentication user names in WCA-01) are read as empty where a source lacks them.
+- The checks are derived from the OWASP Web Security Testing Guide (WSTG): each README names the WSTG tests it covers. They add to, and do not repeat, AIA-04/LIA-02 (SQL injection, traversal, Log4Shell, scanner user agents, `.env`/`.git` probes), APE-03/LPE-07 (web shells) and AEXF-03/LEXF-03 (large responses).
+- Query IDs start with `W`: `WTRI` triage, `WIA` initial access, `WPE` persistence, `WPR` privilege escalation, `WCA` credential access, `WDI` discovery, `WCO` collection, `WIM` impact. Rows carry `_index`, so `SOF-ELK_RunChecklists.py` sends each row to the Linux host or AWS evidence source it came from.
+- Access logs carry no request bodies and few headers. Payloads sent by POST, header-based attacks (host header, cache poisoning, CORS) and client-side tests leave little or nothing here; the checklist lists them under "Not covered".
+
 ## Checking the pack
 
 ```
@@ -104,6 +112,7 @@ java -cp lucene-core-10.2.2.jar hunting/tools/LuceneRegexCheck.java hunting/quer
 | [AWS account (CloudTrail)](checklists/aws-account-control-plane.md) | every AWS account in scope |
 | [AWS web application (ALB and WAF)](checklists/aws-web-application.md) | applications behind an ALB/ELB and AWS WAF |
 | [AWS network (VPC Flow Logs)](checklists/aws-vpc-network.md) | VPCs, subnets and interfaces with flow logs |
+| [Web access logs (OWASP WSTG)](checklists/web-access-logs.md) | every web server and web application with access logs in `httpdlog-*`; run with the Windows, Linux and AWS web checklists |
 | [Baseline: all Linux hosts](checklists/linux-baseline-all-hosts.md) | every Linux host |
 | [Linux web server](checklists/linux-web-server.md) | Apache, nginx and lighttpd servers and their applications |
 | [Linux database server](checklists/linux-database-server.md) | MySQL/MariaDB, PostgreSQL, MongoDB, Redis and Elasticsearch servers |
@@ -117,7 +126,7 @@ java -cp lucene-core-10.2.2.jar hunting/tools/LuceneRegexCheck.java hunting/quer
 
 ## Catalog
 
-The Windows queries come first, then [AWS](#aws) and [Linux](#linux).
+The Windows queries come first, then [AWS](#aws), [Linux](#linux) and [Web access logs](#web-access-logs-1).
 
 ### Triage (run first)
 
@@ -509,3 +518,21 @@ The Linux queries, by tactic. Run LTRI-01 first: it shows which Linux index fami
 | [LDE-02](queries/linux/TA0112-defense-impairment/LDE-02-security-tools-and-logging-disabled/) | Security, logging and firewall tooling stopped, disabled, masked or removed, and SELinux, AppArmor and audit turned off | `logstash-*`, `auditd-*`, `packages-*`, `linuxconfig-*` | every Linux host |
 | [LDE-03](queries/linux/TA0112-defense-impairment/LDE-03-timestomping-and-clock-changes/) | Timestomping and clock changes: file times that contradict each other, touch commands, and system clock changes | `bodyfile-*`, `logstash-*`, `auditd-*` | every Linux host |
 | [LDE-04](queries/linux/TA0112-defense-impairment/LDE-04-hidden-masquerading-and-deleted-binaries/) | Hidden files and folders, binaries masquerading as kernel threads or system daemons, and processes running from deleted binaries | `bodyfile-*`, `logstash-*`, `auditd-*` | every Linux host |
+
+### Web access logs
+
+Checks that read every web access log in `httpdlog-*` together, derived from the OWASP Web Security Testing Guide. Run WTRI-01 first: it shows which sources were loaded and which fields they fill. The [web access log checklist](checklists/web-access-logs.md) orders them.
+
+| ID | Query | Indexes | Applies to |
+|---|---|---|---|
+| [WTRI-01](queries/web/00-triage/WTRI-01-web-log-coverage-and-fields/) | Web access log coverage per index and source: time range, status mix and which fields are filled | `httpdlog-*` | every web evidence source; run before the other web checks |
+| [WIA-01](queries/web/TA0001-initial-access/WIA-01-injection-classes-beyond-sqli-and-traversal/) | Injection classes beyond SQLi and traversal (SSTI, SSRF and out-of-band callbacks, XXE, NoSQL/LDAP/XPath, deserialization, prototype pollution, CRLF, encoding evasion, file inclusion, open redirect, CSV, mass assignment), scored per client | `httpdlog-*` | every internet-facing web application |
+| [WIA-02](queries/web/TA0001-initial-access/WIA-02-http-method-abuse-and-verb-tampering/) | HTTP method abuse: PUT/DELETE/WebDAV writes that succeeded, TRACE/TRACK/DEBUG, unknown verbs and method-override parameters, per client and method | `httpdlog-*` | every web server; IIS and Tomcat with WebDAV or PUT enabled first |
+| [WIA-03](queries/web/TA0001-initial-access/WIA-03-malformed-and-smuggled-requests/) | Malformed, desynced and smuggled requests: unparsed request lines, ALB desync classifications, CloudFront edge errors, 400/414/431/505 bursts, per client | `httpdlog-*` | applications behind an ALB, ELB or CloudFront first; any web server for unparsed request lines |
+| [WPE-01](queries/web/TA0003-persistence/WPE-01-malicious-uploads-and-the-files-requested-after/) | Malicious uploads: executable, double-extension and active-content files requested from upload folders, and whether the requesting client used an upload endpoint first | `httpdlog-*` | web applications that accept uploads (CMSs, ticketing, HR and document portals) |
+| [WPR-01](queries/web/TA0004-privilege-escalation/WPR-01-access-control-bypass-denied-then-allowed/) | Access-control bypass: protected paths answered 2xx after 401/403, through path-confusion tricks, another HTTP method or a different case, per client and path | `httpdlog-*` | web applications and reverse proxies that protect admin or internal paths |
+| [WCA-01](queries/web/TA0006-credential-access/WCA-01-login-brute-force-stuffing-and-reset-abuse/) | Login brute force, credential stuffing, account enumeration, password-reset and MFA code abuse against web sign-in endpoints, per client | `httpdlog-*` | every web application with its own sign-in, and servers using HTTP Basic/Digest authentication |
+| [WCA-02](queries/web/TA0006-credential-access/WCA-02-credentials-and-session-tokens-in-urls/) | Passwords, API keys, session IDs and JWTs in URLs, and the same token used from several clients (session hijacking) | `httpdlog-*` | every web application; legacy Java/PHP/ASP applications that put session IDs in URLs first |
+| [WDI-01](queries/web/TA0007-discovery/WDI-01-forced-browsing-backups-admin-and-api-docs/) | Forced browsing: 404 bursts, backup and source files, VCS and config files, admin and management consoles, API docs and GraphQL introspection, and which of them were served, per client | `httpdlog-*` | every internet-facing web application |
+| [WCO-01](queries/web/TA0009-collection/WCO-01-object-id-enumeration-and-scraping/) | Object ID enumeration and scraping (IDOR / BOLA): one client walking many object IDs on the same endpoint, compared with the other clients of that endpoint | `httpdlog-*` | web applications and APIs that address records by ID (accounts, orders, invoices, documents) |
+| [WIM-01](queries/web/TA0040-impact/WIM-01-request-floods-and-server-error-bursts/) | Request floods and server-error bursts per client and minute: application-layer DoS, ReDoS and fuzzing that breaks the application (5xx), rate limits hit (429) | `httpdlog-*` | every web application; outages and slowdowns the client reported first |

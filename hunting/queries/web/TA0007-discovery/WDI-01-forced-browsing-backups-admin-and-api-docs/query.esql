@@ -1,0 +1,87 @@
+// WDI-01 | Forced browsing: 404 bursts, backup and source files, VCS and config files, admin and management consoles, API docs and GraphQL introspection, and which of them were served, per client
+// Tactic: TA0007 Discovery | ATT&CK: T1595.003, T1083, T1552.001
+// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, Apache, nginx, lighttpd
+FROM httpdlog-* METADATA _index
+| WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
+| EVAL path = TO_LOWER(COALESCE(url.path, ""))
+| EVAL req = TO_LOWER(CONCAT(COALESCE(url.path, ""), "?", COALESCE(url.query, "")))
+| EVAL status = COALESCE(http.response.status_code, 0)
+| EVAL ok = status >= 200 AND status < 300
+// WSTG-CONF-04 old, backup and unreferenced files; WSTG-INFO-05 source maps
+| EVAL f_backup = path RLIKE ".*[.](bak|backup|old|orig|original|save|sav|swp|swo|tmp|temp|copy|dist|inc|src|dev|prev|[~][0-9]*)"
+    OR path RLIKE ".*[~]" OR path RLIKE ".*[.](sql|dump|sqlite|sqlite3|mdb|tfstate|tfvars|pem|key|p12|pfx|ppk|kdbx|jks|keystore)"
+    OR path RLIKE ".*/(backup|backups|bak|old|dump|db|database|www|site|web|htdocs|public_html)[.](zip|tar|tgz|gz|bz2|7z|rar)"
+    OR path RLIKE ".*[.](js|css)[.]map"
+// version control, IDE and deployment leftovers (.git and .env are already in AIA-04 / LIA-02)
+| EVAL f_config = path LIKE "*/.svn/*" OR path LIKE "*/.hg/*" OR path LIKE "*/.bzr/*" OR path LIKE "*/cvs/entries*"
+    OR path LIKE "*/.ds_store" OR path LIKE "*/.idea/*" OR path LIKE "*/.vscode/*" OR path LIKE "*/.htaccess" OR path LIKE "*/.htpasswd"
+    OR path LIKE "*/web.config" OR path LIKE "*/.npmrc" OR path LIKE "*/.dockerenv" OR path LIKE "*docker-compose*.y*ml"
+    OR path LIKE "*/.gitlab-ci.yml" OR path LIKE "*/.travis.yml" OR path LIKE "*/jenkinsfile" OR path LIKE "*/composer.json"
+    OR path LIKE "*/composer.lock" OR path LIKE "*/package.json" OR path LIKE "*/wp-config.php*" OR path LIKE "*/appsettings*.json"
+    OR path LIKE "*/application*.properties" OR path LIKE "*/application*.yml" OR path LIKE "*/settings.py" OR path LIKE "*/config.php*"
+    OR path LIKE "*/configuration.php*" OR path LIKE "*/.terraform/*" OR path LIKE "*/.kube/*" OR path LIKE "*/id_rsa*"
+    OR path LIKE "*/.bash_history" OR path LIKE "*/.mysql_history" OR path LIKE "*/.aws/credentials" OR path LIKE "*/web-inf/*"
+    OR path LIKE "*/meta-inf/*"
+// WSTG-CONF-05 admin, management and debug interfaces (Actuator and phpMyAdmin are already in AIA-04)
+| EVAL f_admin = path RLIKE ".*/(admin|administrator|admincp|adminpanel|backend|manager/html|host-manager|console|jmx-console|web-console|invoker|jenkins|script|asynchpeople|solr|kibana|_cat|_cluster|_nodes|portainer|rancher|kubernetes-dashboard|druid|nacos|adminer|pgadmin|webmin|cpanel|plesk|django-admin|elmah[.]axd|trace[.]axd|phpinfo[.]php|info[.]php|test[.]php|debug|_profiler|__debug__|telescope|horizon|heapdump|jolokia|hystrix|zabbix|grafana|nagios|setup|install|installer)(/.*)?"
+// WSTG-APIT-01 API reconnaissance, WSTG-APIT-99 GraphQL introspection, SOAP descriptors
+| EVAL f_api = req LIKE "*swagger*" OR req LIKE "*openapi*" OR req LIKE "*api-docs*" OR req LIKE "*apidocs*" OR req LIKE "*/redoc*"
+    OR req LIKE "*graphiql*" OR req LIKE "*/altair*" OR req LIKE "*/voyager*" OR req LIKE "*/playground*" OR req LIKE "*__schema*"
+    OR req LIKE "*introspectionquery*" OR req LIKE "*__type*" OR req LIKE "*\\?wsdl*" OR req LIKE "*\\?wadl*" OR req LIKE "*.wsdl"
+    OR req LIKE "*/application.wadl*" OR req LIKE "*\\?disco*"
+| EVAL f_hit = f_backup OR f_config OR f_admin OR f_api
+| EVAL minute = DATE_TRUNC(1 minute, @timestamp)
+| INLINE STATS per_minute = COUNT(*) BY _index, source.ip, minute
+| STATS
+    requests = COUNT(*),
+    distinct_paths = COUNT_DISTINCT(url.path),
+    not_found = COUNT(*) WHERE status == 404,
+    denied = COUNT(*) WHERE status IN (401, 403),
+    peak_per_minute = MAX(per_minute),
+    backup_hits = COUNT(*) WHERE f_backup,
+    backup_ok = COUNT(*) WHERE f_backup AND ok,
+    config_hits = COUNT(*) WHERE f_config,
+    config_ok = COUNT(*) WHERE f_config AND ok,
+    admin_hits = COUNT(*) WHERE f_admin,
+    admin_ok = COUNT(*) WHERE f_admin AND ok,
+    api_hits = COUNT(*) WHERE f_api,
+    api_ok = COUNT(*) WHERE f_api AND ok,
+    served = VALUES(url.path) WHERE f_hit AND ok,
+    served_bytes = SUM(destination.bytes) WHERE f_hit AND ok,
+    user_agents = VALUES(user_agent.original),
+    domains = VALUES(url.domain),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, source.ip
+| EVAL not_found_pct = ROUND(100.0 * not_found / requests, 1)
+| EVAL score = CASE(not_found >= 100, 2, CASE(not_found >= 30, 1, 0)) + CASE(peak_per_minute >= 60, 1, 0)
+    + CASE(backup_ok > 0, 3, CASE(backup_hits > 0, 1, 0)) + CASE(config_ok > 0, 3, CASE(config_hits > 0, 1, 0))
+    + CASE(admin_ok > 0, 2, CASE(admin_hits > 0, 1, 0)) + CASE(api_ok > 0, 1, 0)
+| WHERE score >= 2  // EDIT: lower to 1 for every client that touched one of these paths
+| EVAL served = MV_SLICE(served, 0, 29), user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    score,
+    source.ip,
+    requests,
+    distinct_paths,
+    not_found,
+    not_found_pct,
+    denied,
+    peak_per_minute,
+    backup_hits,
+    backup_ok,
+    config_hits,
+    config_ok,
+    admin_hits,
+    admin_ok,
+    api_hits,
+    api_ok,
+    served_bytes,
+    first_seen,
+    last_seen,
+    served,
+    domains,
+    user_agents
+| SORT score DESC, not_found DESC
+| LIMIT 1000

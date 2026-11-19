@@ -628,18 +628,18 @@ python3 SOF-ELK_RunChecklists.py IR-2026-042 ./IR-2026-042-hunt --es http://192.
 The two arguments are the case name (as given to the importers with `--case`; upper/lower case ignored) and the output directory (created if missing). The script then:
 
 1. Finds every index holding documents of the case, and groups them into hosts by the `<prefix>-<hostname>` suffix (`host.name` gives the folder name, such as `RD01`). SOF-ELK's own dated indexes (`logstash-2026.10`) are ignored. Generic-CSV and Generic-JSON indexes (`genericcsv-*`, `genericjson-*`) are ignored too: they have no fixed schema, so they never form or join a host and no checklist query reads them (the run lists them as ignored).
-2. Groups the AWS indexes (`aws-cloudtrail-*`, `aws-vpcflow-*`, `aws-waf-*`, and `httpdlog-*` loaded by `AWS/alb2sofelk.py` or `AWS/cloudfrontaccess2sofelk.py`) into one `AWS` target that runs the three AWS checklists without a prompt. A Linux web server's own `httpdlog-<host>` stays with that host.
+2. Groups the AWS indexes (`aws-cloudtrail-*`, `aws-vpcflow-*`, `aws-waf-*`, and `httpdlog-*` loaded by `AWS/alb2sofelk.py` or `AWS/cloudfrontaccess2sofelk.py`) into one `AWS` target that runs the three AWS checklists, plus the web access log checklist (`hunting/checklists/web-access-logs.md`), without a prompt. A Linux web server's own `httpdlog-<host>` stays with that host.
 3. Asks the role of every other host, by number or name. A host with several roles takes them comma-separated (`6,5` for a DC that is also a file server); `s` skips the host.
 
 | # | Role | Checklists run |
 |---|---|---|
 | 1 | `windows-end-user` | Windows baseline + end-user workstation |
-| 2 | `windows-web-server` | Windows baseline + web server |
+| 2 | `windows-web-server` | Windows baseline + web server + web access logs |
 | 3 | `windows-exchange-server` | Windows baseline + Exchange server |
 | 4 | `windows-database-server` | Windows baseline + database server |
 | 5 | `windows-file-server` | Windows baseline + file server |
 | 6 | `windows-domain-controller` | Windows baseline + domain controller |
-| 7 | `linux-web-server` | Linux baseline + Linux web server |
+| 7 | `linux-web-server` | Linux baseline + Linux web server + web access logs |
 | 8 | `linux-database-server` | Linux baseline + Linux database server |
 | 9 | `linux-file-server` | Linux baseline + Linux file server |
 | 10 | `linux-backup-server` | Linux baseline + Linux backup server |
