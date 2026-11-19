@@ -49,6 +49,12 @@ INDICES = {
     "httpdlog-111122223333": [doc(**{"labels.evidence_source": "111122223333", "cloud.provider": "aws"})],
     "logstash-2026.10": [doc()],                       # SOF-ELK dated index: ignored
     "amcache-other": [doc(case="IR-OTHER", **{"host.name": "OTHER"})],
+    # Generic indexes have no fixed schema: never a host, never in FROM, even when they
+    # share a host's suffix, are the only index of a name, or look like AWS.
+    "genericcsv-rd01": [doc(**{"host.name": "RD01-RENAMED"})] * 7,
+    "genericjson-rd01": [doc(**{"host.name": "RD01"})],
+    "genericcsv-lonely": [doc(**{"host.name": "LONELY", "host.os.type": "windows"})],
+    "genericjson-111122223333": [doc(**{"cloud.provider": "aws"})],
 }
 QUERIES = []        # every /_query body received
 FAIL_IDS = {"TRI-02"}
@@ -198,6 +204,12 @@ class RunnerTest(unittest.TestCase):
         self.assertIn("is not a role number or name", output)
         self.assertIn("ignoring logstash-2026.10", output)
         self.assertNotIn("amcache-other", output)
+        for index in ("genericcsv-rd01", "genericjson-rd01", "genericcsv-lonely", "genericjson-111122223333"):
+            self.assertIn(f"ignoring {index}: generic index", output)
+        self.assertNotIn("LONELY", "".join(answers.prompts))
+        self.assertTrue(QUERIES)
+        from_lines = [re.search(r"^FROM (.+?) METADATA", q["query"], re.M).group(1) for q in QUERIES]
+        self.assertFalse([f for f in from_lines if "generic" in f])
 
         # Folder per host, sub-folder per category, <ID>_<host>.csv.
         tri05 = read_csv(self.out / "RD01" / "00-triage" / "TRI-05_RD01.csv")
