@@ -13,7 +13,9 @@ What it does:
    aws-route53-*, aws-securityhub-*, kubernetes-* loaded by AWS/eksaudit2sofelk.py, and
    httpdlog-* loaded by AWS/alb2sofelk.py or
    AWS/cloudfrontaccess2sofelk.py) are grouped into one "AWS" target that runs the
-   three AWS checklists without a role prompt.
+   three AWS checklists without a role prompt. Generic-CSV and Generic-JSON indexes
+   (genericcsv-*, genericjson-*) are left out entirely: they have no fixed schema, so no
+   checklist query reads them and they never make or join a host.
 3. Asks the role of each other host (or takes it from --role), and picks the checklists:
    the Windows or Linux baseline plus the role's checklist from hunting/checklists/.
 4. Runs every query those checklists name through Elasticsearch's ES|QL _query API, in
@@ -102,10 +104,14 @@ WINDOWS_FAMILIES = frozenset({
     "jumplist", "shellbag", "recyclebin", "srum", "activitiescache", "clrusagelogs",
     "recentfilecache", "sqlitedb", "sum"})
 LINUX_FAMILIES = frozenset({"logstash", "auditd", "bodyfile", "wtmp", "packages", "linuxconfig"})
-SHARED_FAMILIES = frozenset({"browsinghistory", "httpdlog", "genericcsv", "genericjson"})
+SHARED_FAMILIES = frozenset({"browsinghistory", "httpdlog"})
+# Generic-CSV / Generic-JSON indexes hold whatever columns the loaded file had (no fixed
+# schema), so the checklists never read them: they are listed as ignored and never form,
+# join or rename a host, and are never put in a query's FROM.
+GENERIC_FAMILIES = frozenset({"genericcsv", "genericjson"})
 AWS_FAMILIES = frozenset({"aws-cloudtrail", "aws-vpcflow", "aws-waf", "aws-route53", "aws-securityhub",
                           "kubernetes"})
-KNOWN_FAMILIES = sorted(WINDOWS_FAMILIES | LINUX_FAMILIES | SHARED_FAMILIES | AWS_FAMILIES,
+KNOWN_FAMILIES = sorted(WINDOWS_FAMILIES | LINUX_FAMILIES | SHARED_FAMILIES | AWS_FAMILIES | GENERIC_FAMILIES,
                         key=len, reverse=True)
 # SOF-ELK's own Logstash indexes (logstash-2026.10, httpdlog-2026.10.31) are not per host.
 DATED_SUFFIX_RE = re.compile(r"^\d{4}\.\d{2}(\.\d{2})?$")
@@ -144,8 +150,6 @@ FAMILY_SOURCE = {
     "recentfilecache": ("LOG", "RecentFileCache"),
     "sqlitedb": ("LOG", "SQLite Database"),
     "sum": ("LOG", "User Access Logging (SUM)"),
-    "genericcsv": ("LOG", "Generic CSV"),
-    "genericjson": ("LOG", "Generic JSON"),
     "logstash": ("LOG", "Syslog/Journal"),
     "auditd": ("LOG", "Linux Audit"),
     "bodyfile": ("FILE", "Bodyfile"),
@@ -230,6 +234,11 @@ def load_query(folder: Path) -> Query:
     if not match:
         raise SystemExit(f"ERROR: {path} has no 'FROM ... METADATA _index' line")
     families = [family_of_pattern(p) for p in match.group("sources").split(",") if p.strip()]
+    generic = [f for f in families if f in GENERIC_FAMILIES or not f]
+    if generic:
+        raise SystemExit(f"ERROR: {path} reads {', '.join(f + '-*' if f else '*' for f in generic)}: checklist "
+                         "queries must name fixed-schema index families (generic and wildcard indexes "
+                         "are never read by the runner)")
     last = [ln for ln in text.splitlines() if ln.strip() and not ln.strip().startswith("//")][-1]
     limit = LIMIT_RE.match(last.strip())
     query = Query(qid=header.group("id"), title=header.group("title"), path=path,
@@ -386,6 +395,9 @@ def group_targets(client, case, counts):
         fam, suffix = split_index(index)
         if fam is None:
             skipped.append((index, "not a toolkit index family"))
+            continue
+        if fam in GENERIC_FAMILIES:
+            skipped.append((index, "generic index (no fixed schema), not read by the checklists"))
             continue
         if DATED_SUFFIX_RE.match(suffix):
             skipped.append((index, "SOF-ELK dated index, not a per-host index"))
