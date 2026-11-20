@@ -76,6 +76,13 @@ The queries need Elasticsearch 9.x, because several use `INLINE STATS` and `STAT
 - Query IDs start with `W`: `WTRI` triage, `WIA` initial access, `WPE` persistence, `WPR` privilege escalation, `WCA` credential access, `WDI` discovery, `WCO` collection, `WIM` impact. Rows carry `_index`, so `SOF-ELK_RunChecklists.py` sends each row to the Windows or Linux web server or AWS evidence source it came from.
 - Access logs carry no request bodies and few headers. Payloads sent by POST, header-based attacks (host header, cache poisoning, CORS) and client-side tests leave little or nothing here; the checklist lists them under "Not covered".
 
+## RMM tools (LOLRMM)
+
+- C2-10 to C2-15 (Windows) and LC2-05/LC2-06 (Linux) hunt for the remote monitoring and management (RMM) and remote-access tools in the [LOLRMM](https://lolrmm.io) catalog: their program names, install folders, services, scheduled tasks, registry keys, files, file hashes and vendor or relay domains, in every artifact the toolkit loads. C2-05 stays as the short hand-written list that also covers tunnels (ngrok, cloudflared, chisel) and matches Amcache product names.
+- These queries are **generated**. [`tools/lolrmm.py`](tools/lolrmm.py) reads LOLRMM's `rmm_tools.json`, keeps the indicators that are safe to hunt on (it drops generic names such as `agent.exe` or `setup.exe` unless the folder is known, extension-only globs, shared hosting domains and records LOLRMM marks `Detection: false`), stores them in [`intel/lolrmm/indicators.json`](intel/lolrmm/indicators.json) with the source file's SHA-256 in [`intel/lolrmm/source.json`](intel/lolrmm/source.json), and writes each `query.esql` from the templates in the script. Edit the templates, not the `.esql` files, then run `python3 hunting/tools/lolrmm.py --render-only`. See [`intel/lolrmm/README.md`](intel/lolrmm/README.md) for the monthly update.
+- The generated queries are long (up to about 140 KB) because the indicator lists are inline: paste them into Discover as they are, or let `SOF-ELK_RunChecklists.py` run them. Each query first reduces its rows (one row per distinct program, host name or path), or, for `$MFT` and registry rows, runs one Java regex over the names a pattern requires, and only then tests the full pattern lists, so the cost does not grow much with the catalog.
+- Every match is a lead, not a verdict: most RMM products are legitimate. Ask the client which RMM products they use; rows for any other one, for a copy in a user folder, for a renamed copy, or for commands an RMM program started come first.
+
 ## Checking the pack
 
 ```
@@ -277,6 +284,12 @@ The Windows queries come first, then [AWS](#aws), [Linux](#linux) and [Web acces
 | [C2-07](queries/windows/TA0011-command-and-control/C2-07-sysmon-network-connections/) | Network connections by process (Sysmon 3), scored | `evtxlogs-*` | all with Sysmon |
 | [C2-08](queries/windows/TA0011-command-and-control/C2-08-unique-urls/) | Unique URLs visited | `browsinghistory-*` | all where browsing history was collected |
 | [C2-09](queries/windows/TA0011-command-and-control/C2-09-browsing-pivot-named-accounts/) | Browsing history of named accounts (pivot) | `browsinghistory-*` | all (pivot, not first cut) |
+| [C2-10](queries/windows/TA0011-command-and-control/C2-10-lolrmm-rmm-process-execution/) | LOLRMM: RMM and remote-access tools in process creation (image, parent, PE original name, SHA-256) | `evtxlogs-*` | all with 4688 or Sysmon 1 |
+| [C2-11](queries/windows/TA0011-command-and-control/C2-11-lolrmm-rmm-execution-artifacts/) | LOLRMM: RMM tools in execution and install artifacts (Prefetch, Amcache, ShimCache, SRUM, BAM, UserAssist) | `prefetch-*`, `amcache-*`, `shimcache-*`, `srum-*`, `registry-*` | all |
+| [C2-12](queries/windows/TA0011-command-and-control/C2-12-lolrmm-rmm-services-and-tasks/) | LOLRMM: RMM services and scheduled tasks (7045, 4697, 4698, Task Scheduler, RECmd Services) | `evtxlogs-*`, `registry-*` | all |
+| [C2-13](queries/windows/TA0011-command-and-control/C2-13-lolrmm-rmm-domains-and-addresses/) | LOLRMM: RMM vendor and relay domains and addresses (DNS, Sysmon 3, BITS, command-line URLs, browser history) | `evtxlogs-*`, `browsinghistory-*` | all |
+| [C2-14](queries/windows/TA0011-command-and-control/C2-14-lolrmm-rmm-files-on-disk/) | LOLRMM: RMM install folders, programs, logs and config files on disk | `filesystem-*`, `evtxlogs-*` | all |
+| [C2-15](queries/windows/TA0011-command-and-control/C2-15-lolrmm-rmm-registry-keys/) | LOLRMM: RMM registry keys | `registry-*`, `evtxlogs-*` | all (Sysmon 12/13/14, or a RECmd batch that dumps the keys) |
 
 ### TA0040 Impact
 
@@ -504,6 +517,8 @@ The Linux queries, by tactic. Run LTRI-01 first: it shows which Linux index fami
 | [LC2-02](queries/linux/TA0011-command-and-control/LC2-02-outbound-destinations-firewall-audit-vpn/) | Outbound destinations from firewall logs, audited connections and VPN logs, rarest first | `logstash-*`, `auditd-*` | every Linux host with firewall logging, network auditing or a VPN client |
 | [LC2-03](queries/linux/TA0011-command-and-control/LC2-03-tool-and-payload-downloads/) | Tool and payload downloads: download commands, browser downloads, new executables and scripts in download and temp folders, files served to download tools | `logstash-*`, `auditd-*`, `linuxconfig-*`, `browsinghistory-*`, `bodyfile-*`, `httpdlog-*` | every Linux host |
 | [LC2-04](queries/linux/TA0011-command-and-control/LC2-04-hosts-resolver-and-proxy-settings/) | Hosts file entries, DNS resolvers, proxy settings and VPN profiles, with changes to them | `linuxconfig-*`, `bodyfile-*`, `logstash-*`, `auditd-*` | every Linux host |
+| [LC2-05](queries/linux/TA0011-command-and-control/LC2-05-lolrmm-rmm-tools-on-linux/) | LOLRMM: RMM and remote-access tools on Linux: programs run, files on disk, systemd units | `logstash-*`, `auditd-*`, `bodyfile-*`, `linuxconfig-*` | every Linux host |
+| [LC2-06](queries/linux/TA0011-command-and-control/LC2-06-lolrmm-rmm-domains-on-linux/) | LOLRMM: RMM vendor and relay domains in command lines, cron and unit lines, and browser history | `logstash-*`, `auditd-*`, `linuxconfig-*`, `browsinghistory-*` | every Linux host |
 
 #### Linux: TA0040 Impact
 

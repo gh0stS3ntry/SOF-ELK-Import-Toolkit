@@ -37,7 +37,7 @@ Laptops, desktops and VDI, and RDP/jump hosts that people use interactively. Run
 | # | Check | Queries | IR ref | What to look for |
 |---|---|---|---|---|
 | 4.1 | Per-user Run keys and Startup folder | [PE-01](../queries/windows/TA0003-persistence/PE-01-asep-registry-scoring/), [PE-12](../queries/windows/TA0003-persistence/PE-12-startup-folder/) | 2.1.2 | HKCU Run entries and Startup shortcuts pointing at `AppData`, `Temp` or `Downloads`. |
-| 4.2 | Remote-access tools | [C2-05](../queries/windows/TA0011-command-and-control/C2-05-remote-access-and-tunnel-tools/) | 2.1.3 | AnyDesk/ScreenConnect/TeamViewer installed by the user after a "support" call. |
+| 4.2 | Remote-access tools | [C2-05](../queries/windows/TA0011-command-and-control/C2-05-remote-access-and-tunnel-tools/), [C2-10](../queries/windows/TA0011-command-and-control/C2-10-lolrmm-rmm-process-execution/), [C2-11](../queries/windows/TA0011-command-and-control/C2-11-lolrmm-rmm-execution-artifacts/), [C2-13](../queries/windows/TA0011-command-and-control/C2-13-lolrmm-rmm-domains-and-addresses/) | 2.1.3 | AnyDesk/ScreenConnect/TeamViewer installed by the user after a "support" call: the download in the browser history (C2-13), the first run (C2-10/C2-11) and the account that ran it. |
 
 ## Not covered by these queries
 
