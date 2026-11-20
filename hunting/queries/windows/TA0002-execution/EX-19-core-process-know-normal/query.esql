@@ -1,0 +1,127 @@
+// EX-19 | Core Windows processes that break the SANS Hunt Evil "Know Normal" rules (Security 4688, Sysmon 1)
+// Tactic: TA0002 Execution | ATT&CK: T1036.005, T1055, T1543.003, T1574
+// Indexes: evtxlogs-* | Needs: Security 4688 (ParentProcessName: Windows 10 / Server 2016+) and/or Sysmon 1; System 12 (Kernel-General) for boot times
+FROM evtxlogs-* METADATA _index
+| EVAL eid = TO_STRING(winlog.event_id)
+| EVAL ch = TO_STRING(winlog.channel)
+| WHERE (ch == "Security" AND eid == "4688")
+     OR (ch == "Microsoft-Windows-Sysmon/Operational" AND eid == "1")
+     OR (ch == "System" AND eid == "12" AND TO_STRING(winlog.provider_name) == "Microsoft-Windows-Kernel-General")
+// every boot of the host (Kernel-General 12 = operating system started), attached to each process row
+| EVAL boot_ts = CASE(ch == "System", @timestamp, null)
+| INLINE STATS host_boots = VALUES(boot_ts) BY _index
+| WHERE ch != "System"
+| EVAL source = CASE(ch == "Security", "Security 4688", "Sysmon 1")
+| EVAL image = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.NewProcessName), TO_STRING(winlog.payload.event_data.Image), ""))
+| EVAL parent = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.ParentProcessName), TO_STRING(winlog.payload.event_data.ParentImage), ""))
+// 4688 has CommandLine only with command-line auditing on; EvtxECmd's ExecutableInfo then repeats it, otherwise holds the image
+| EVAL cmd = COALESCE(TO_STRING(winlog.payload.event_data.CommandLine), TO_STRING(kape.executable_info), "")
+| EVAL cmd_l = TO_LOWER(cmd)
+| EVAL image_name = REPLACE(image, "^.*\\\\", "")
+| EVAL parent_name = REPLACE(parent, "^.*\\\\", "")
+// a command line with arguments proves the host records command lines (needed before judging svchost.exe without -k)
+| EVAL f_has_args = cmd_l RLIKE ".*[.]exe[\"]?[ ]+[^ ].*"
+| INLINE STATS host_cmdlines = COUNT(*) WHERE f_has_args BY _index
+| EVAL f_core = image_name IN ("smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe", "services.exe", "lsass.exe", "lsaiso.exe", "svchost.exe", "taskhostw.exe", "runtimebroker.exe", "explorer.exe", "userinit.exe")
+| EVAL f_lsass_child = parent_name == "lsass.exe" AND image_name != "efsui.exe"
+| WHERE f_core OR f_lsass_child
+| EVAL image_dir = REPLACE(REPLACE(REPLACE(image, "\\\\[^\\\\]*$", ""), "^(%systemroot%|%windir%)", "c:\\\\windows"), "^(\\\\[?][?]\\\\|\\\\\\\\[?]\\\\)?(\\\\device\\\\harddiskvolume[0-9]+|[a-z]:)", "")
+// account of the new process: Sysmon User; 4688 TargetUser* (Windows 10+), else the creator (same token)
+| EVAL t_sid = COALESCE(TO_STRING(winlog.payload.event_data.TargetUserSid), "")
+| EVAL sid = CASE(t_sid != "" AND t_sid != "S-1-0-0" AND t_sid != "-", t_sid, COALESCE(TO_STRING(winlog.payload.event_data.SubjectUserSid), ""))
+| EVAL account = COALESCE(
+    TO_STRING(winlog.payload.event_data.User),
+    CASE(t_sid != "" AND t_sid != "S-1-0-0" AND t_sid != "-",
+      CONCAT(COALESCE(TO_STRING(winlog.payload.event_data.TargetDomainName), ""), "\\", COALESCE(TO_STRING(winlog.payload.event_data.TargetUserName), "")),
+      CONCAT(COALESCE(TO_STRING(winlog.payload.event_data.SubjectDomainName), ""), "\\", COALESCE(TO_STRING(winlog.payload.event_data.SubjectUserName), ""))),
+    "")
+| EVAL account_l = TO_LOWER(account)
+| EVAL f_user_known = sid != "" OR account_l RLIKE ".*[\\\\].+"
+| EVAL is_system = sid == "S-1-5-18" OR account_l RLIKE ".*[\\\\]system"
+| EVAL is_service = sid IN ("S-1-5-19", "S-1-5-20") OR account_l RLIKE ".*[\\\\](local service|network service)"
+// expected values from the poster
+| EVAL f_system_only = image_name IN ("smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe", "services.exe", "lsass.exe", "lsaiso.exe")
+| EVAL expected_parent = CASE(
+    image_name == "smss.exe", "System (master) or smss.exe (per-session child)",
+    image_name IN ("csrss.exe", "wininit.exe", "winlogon.exe"), "smss.exe (exited, so it shows as an orphan)",
+    image_name IN ("services.exe", "lsass.exe", "lsaiso.exe"), "wininit.exe",
+    image_name == "svchost.exe", "services.exe",
+    image_name IN ("taskhostw.exe", "runtimebroker.exe"), "svchost.exe",
+    image_name == "explorer.exe", "userinit.exe (exited, so it shows as an orphan)",
+    image_name == "userinit.exe", "winlogon.exe",
+    "")
+| EVAL f_parent_ok = CASE(
+    image_name == "smss.exe", parent_name IN ("", "system", "smss.exe"),
+    image_name IN ("csrss.exe", "wininit.exe", "winlogon.exe"), parent_name == "smss.exe",
+    image_name IN ("services.exe", "lsass.exe", "lsaiso.exe"), parent_name == "wininit.exe",
+    image_name == "svchost.exe", parent_name == "services.exe",
+    image_name IN ("taskhostw.exe", "runtimebroker.exe"), parent_name == "svchost.exe",
+    // explorer.exe restarts itself and is relaunched by DCOM (svchost) with /factory
+    image_name == "explorer.exe", parent_name IN ("userinit.exe", "explorer.exe", "svchost.exe", "winlogon.exe"),
+    image_name == "userinit.exe", parent_name == "winlogon.exe",
+    true)
+// 4688 on Windows 7 / Server 2012 R2 and older has no ParentProcessName: no parent verdict then
+| EVAL f_wrong_parent = f_core AND parent_name != "" AND NOT f_parent_ok
+| EVAL expected_path = CASE(
+    image_name == "explorer.exe", "%SystemRoot%\\explorer.exe",
+    image_name IN ("svchost.exe", "taskhostw.exe", "runtimebroker.exe"), "%SystemRoot%\\System32 (or SysWOW64)",
+    f_core, "%SystemRoot%\\System32",
+    "")
+| EVAL f_wrong_path = f_core AND CASE(
+    image_name == "explorer.exe", NOT image_dir RLIKE "\\\\windows(\\\\syswow64)?",
+    image_name IN ("svchost.exe", "taskhostw.exe", "runtimebroker.exe"), NOT image_dir RLIKE "\\\\windows\\\\(system32|syswow64)",
+    image_dir != "\\windows\\system32")
+| EVAL f_wrong_user = f_user_known AND (
+    (f_system_only AND NOT is_system)
+    OR (image_name == "explorer.exe" AND (is_system OR is_service)))
+| EVAL f_svchost_no_k = image_name == "svchost.exe" AND host_cmdlines > 0 AND NOT cmd_l RLIKE ".*[ ]-k[ ]+[^ ].*"
+// one instance per boot: wininit, services, lsass, lsaiso, and the master smss (the one not started by smss)
+| EVAL f_singleton = image_name IN ("wininit.exe", "services.exe", "lsass.exe", "lsaiso.exe")
+    OR (image_name == "smss.exe" AND parent_name != "smss.exe")
+| EVAL pre_score = CASE(f_wrong_path, 4, 0) + CASE(f_wrong_parent, 3, 0) + CASE(f_lsass_child, 4, 0)
+    + CASE(f_wrong_user, 3, 0) + CASE(f_svchost_no_k, 3, 0)
+| EVAL pre_reasons = CONCAT(
+    CASE(f_wrong_path, "not in its normal folder; ", ""),
+    CASE(f_wrong_parent, "unexpected parent; ", ""),
+    CASE(f_lsass_child, "child of lsass.exe; ", ""),
+    CASE(f_wrong_user, "unexpected account; ", ""),
+    CASE(f_svchost_no_k, "svchost.exe without -k service group; ", ""))
+// the boot each singleton belongs to: the latest Kernel-General 12 at or before it (rows are expanded per boot, singletons only)
+| EVAL boots = CASE(f_singleton, host_boots, null)
+| MV_EXPAND boots
+| STATS last_boot = MAX(boots) WHERE boots <= @timestamp
+  BY _index, ch, winlog.record_id, @timestamp, winlog.computer_name, source, image_name, image, expected_path, parent, expected_parent, account, sid, cmd, f_singleton, pre_score, pre_reasons
+| EVAL since_boot_s = DATE_DIFF("seconds", last_boot, @timestamp)
+| INLINE STATS instances_this_boot = COUNT(*) WHERE f_singleton BY _index, source, image_name, last_boot
+// boot-time instances start before the Security log and Sysmon are up, so most never get a 4688 / Sysmon 1:
+// any singleton logged minutes after boot, or a second one in the same boot, is worth a look
+| EVAL f_late_start = f_singleton AND COALESCE(since_boot_s, -1) > 300
+| EVAL f_extra_instance = f_singleton AND COALESCE(since_boot_s, -1) >= 0 AND COALESCE(instances_this_boot, 0) > 1
+| EVAL f_no_boot = f_singleton AND COALESCE(since_boot_s, -1) < 0
+| EVAL score = pre_score + CASE(f_late_start, 3, 0) + CASE(f_extra_instance, 3, 0) + CASE(f_no_boot, 1, 0)
+| WHERE score >= 3
+| EVAL reasons = REPLACE(CONCAT(pre_reasons,
+    CASE(f_late_start, "started more than 5 minutes after boot; ", ""),
+    CASE(f_extra_instance, "more than one instance in the same boot; ", ""),
+    CASE(f_no_boot, "no boot event (System 12) before it; ", "")
+  ), "; $", "")
+| KEEP
+    _index,
+    @timestamp,
+    winlog.computer_name,
+    source,
+    score,
+    reasons,
+    image_name,
+    image,
+    expected_path,
+    parent,
+    expected_parent,
+    account,
+    sid,
+    cmd,
+    last_boot,
+    since_boot_s,
+    instances_this_boot
+| SORT score DESC, @timestamp ASC
+| LIMIT 10000

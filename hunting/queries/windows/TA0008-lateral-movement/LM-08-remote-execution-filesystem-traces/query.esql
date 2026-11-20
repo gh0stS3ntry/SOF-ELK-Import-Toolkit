@@ -1,0 +1,65 @@
+// LM-08 | Remote execution traces in the $MFT: new user profiles, copied executables (modified before created), .mof files, WMI repository writes
+// Tactic: TA0008 Lateral Movement | ATT&CK: T1570, T1021.002, T1021.006, T1047, T1546.003
+// Indexes: filesystem-* | Needs: MFTECmd $MFT output
+FROM filesystem-* METADATA _index
+// $MFT rows only ($J rows carry update reasons), no alternate data stream rows
+| WHERE file.update_reasons IS NULL
+| WHERE NOT COALESCE(kape.mft.isads, false)
+| EVAL fname = TO_LOWER(COALESCE(TO_STRING(file.name), ""))
+| EVAL is_dir = COALESCE(TO_STRING(file.type), "") == "dir"
+// MFTECmd paths start with "." for the volume root, e.g. .\Users\bob
+| EVAL dir = TO_LOWER(COALESCE(TO_STRING(file.directory), ""))
+| EVAL d = REPLACE(dir, "^([.]|[a-z]:)", "")
+| EVAL f_exec = NOT is_dir AND fname RLIKE ".*[.](exe|dll|sys|scr|cpl|ocx|com|msi|ps1|psm1|bat|cmd|vbs|vbe|js|jse|wsf|hta|sct)"
+// a file copied (or extracted) keeps its $SI modified time but gets a new $SI created time
+| EVAL f_copied = COALESCE(DATE_DIFF("seconds", file.stdinfo.mtime, file.stdinfo.created) > 60, false)
+// folders PsExec, admin-share copies and remote tools write to; System32 and program folders are left out (OS and installer files are all "copied")
+| EVAL staging = CASE(
+    d == "", "drive root",
+    d == "\\windows", "\\Windows (ADMIN$ root)",
+    d RLIKE "\\\\windows\\\\temp(\\\\.*)?", "\\Windows\\Temp",
+    d RLIKE "\\\\(perflogs|temp|tmp|intel)(\\\\.*)?", "drive-root staging folder",
+    d RLIKE "\\\\users\\\\public(\\\\.*)?", "\\Users\\Public",
+    d RLIKE "\\\\programdata", "\\ProgramData (top level)",
+    d RLIKE "\\\\users\\\\[^\\\\]+\\\\appdata\\\\local\\\\temp(\\\\.*)?", "user Temp",
+    d RLIKE "\\\\users\\\\[^\\\\]+\\\\(downloads|desktop|documents)(\\\\.*)?", "user Downloads/Desktop/Documents",
+    "")
+| EVAL kind = CASE(
+    is_dir AND d == "\\users" AND NOT fname IN ("public", "default", "default user", "all users", "defaultapppool"), "user profile folder created",
+    NOT is_dir AND fname LIKE "*.mof" AND NOT d RLIKE "\\\\windows\\\\(system32|syswow64)\\\\wbem|\\\\windows\\\\(winsxs|servicing|softwaredistribution)\\\\.*|\\\\program files( [(]x86[)])?\\\\.*", ".mof file outside the WMI folder",
+    NOT is_dir AND fname LIKE "*.mof" AND d RLIKE "\\\\windows\\\\(system32|syswow64)\\\\wbem\\\\autorecover", ".mof file in wbem\\AutoRecover",
+    NOT is_dir AND d RLIKE "\\\\windows\\\\(system32|syswow64)\\\\wbem\\\\repository(\\\\fs)?", "WMI repository file",
+    f_exec AND f_copied AND staging != "", "executable or script copied in (modified before created)",
+    "")
+| WHERE kind != ""
+| EVAL event_time = COALESCE(file.filename.created, file.stdinfo.created)
+| INLINE STATS name_hosts = COUNT_DISTINCT(_index) BY kind, fname
+| EVAL f_rare = name_hosts <= 1
+| EVAL f_script = fname RLIKE ".*[.](ps1|psm1|bat|cmd|vbs|vbe|js|jse|wsf|hta|sct)"
+| EVAL f_psexec_name = fname RLIKE "(psexesvc|paexec.*|remcomsvc|csexecsvc|winexesvc)[.]exe"
+| EVAL score = CASE(
+    kind == ".mof file outside the WMI folder", 4,
+    kind LIKE "executable or script*", 3,
+    kind == "user profile folder created", 2,
+    1)
+    + CASE(kind LIKE "executable or script*" AND f_rare, 1, 0)
+    + CASE(kind LIKE "executable or script*" AND f_script, 1, 0)
+    + CASE(f_psexec_name, 3, 0)
+    + CASE(kind == "user profile folder created" AND f_rare, 1, 0)
+| KEEP
+    _index,
+    kind,
+    event_time,
+    score,
+    staging,
+    file.name,
+    dir,
+    file.size,
+    name_hosts,
+    file.stdinfo.created,
+    file.stdinfo.mtime,
+    file.filename.created,
+    kape.mft.inuse,
+    file.inode
+| SORT score DESC, event_time ASC
+| LIMIT 10000

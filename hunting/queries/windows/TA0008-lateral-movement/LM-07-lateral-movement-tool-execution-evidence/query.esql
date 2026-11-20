@@ -1,0 +1,90 @@
+// LM-07 | Lateral movement tools in execution artifacts: source side (mstsc, net, PsExec, at/schtasks, sc, wmic, PowerShell) and destination side (rdpclip, tstheme, psexesvc, wsmprovhost, scrcons, mofcomp)
+// Tactic: TA0008 Lateral Movement | ATT&CK: T1021.001, T1021.002, T1021.006, T1047, T1053.005, T1569.002
+// Indexes: prefetch-*, amcache-*, shimcache-*, registry-* | Needs: any of them (registry-*: RECmd UserAssist and/or BamDam plugin output)
+FROM prefetch-*, amcache-*, shimcache-*, registry-* METADATA _index
+| EVAL artifact = CASE(
+    _index LIKE "prefetch-*", "prefetch",
+    _index LIKE "amcache-*", "amcache",
+    _index LIKE "shimcache-*", "shimcache",
+    TO_STRING(event.dataset) == "registry.bamdam", "bam",
+    TO_STRING(event.dataset) == "registry.userassist", "userassist",
+    "other")
+| WHERE artifact != "other"
+// prefetch records the executable name only (file.path is the .pf file); the others record the full path
+| EVAL exe_path = TO_LOWER(CASE(
+    artifact == "prefetch", COALESCE(TO_STRING(file.target.path), ""),
+    artifact IN ("bam", "userassist"), COALESCE(TO_STRING(registry.plugin.program_name), TO_STRING(registry.plugin.program), ""),
+    COALESCE(TO_STRING(file.path), "")))
+| EVAL exe_name = REPLACE(exe_path, "^.*\\\\", "")
+| EVAL technique = CASE(
+    exe_name == "mstsc.exe", "RDP (source)",
+    exe_name IN ("rdpclip.exe", "tstheme.exe"), "RDP (destination)",
+    exe_name IN ("net.exe", "net1.exe"), "Mapped shares (source)",
+    exe_name RLIKE "(psexec|psexec64|psexeca64|paexec|remcom|csexec)[.]exe", "PsExec (source)",
+    exe_name RLIKE "(psexesvc|paexec[-_].*|remcomsvc|csexecsvc)[.]exe", "PsExec (destination)",
+    exe_name IN ("at.exe", "schtasks.exe"), "Scheduled tasks (source)",
+    exe_name == "sc.exe", "Services (source)",
+    exe_name == "wmic.exe", "WMI (source)",
+    exe_name IN ("scrcons.exe", "mofcomp.exe"), "WMI (destination)",
+    exe_name IN ("powershell.exe", "pwsh.exe", "winrs.exe"), "PowerShell remoting / WinRM (source)",
+    exe_name IN ("wsmprovhost.exe", "winrshost.exe"), "PowerShell remoting / WinRM (destination)",
+    null)
+| WHERE technique IS NOT NULL
+// UserAssist writes known folders as GUIDs: System32, SysWOW64 and Windows are mapped to their paths
+| EVAL exe_dir = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(exe_path, "\\\\[^\\\\]*$", ""),
+    "^[{]1ac14e77-02e7-4e5d-b744-2eb1ae5198b7[}]", "c:\\\\windows\\\\system32"),
+    "^[{]d65231b0-b2f1-4857-a4ce-a8e7c6ea7d27[}]", "c:\\\\windows\\\\syswow64"),
+    "^[{]f38bf404-1d43-42f2-9305-67de0b28fc23[}]", "c:\\\\windows"),
+    "^(\\\\device\\\\harddiskvolume[0-9]+|[a-z]:)", "")
+// the Windows binaries above live in System32 / SysWOW64 (PowerShell and WMI in their subfolders)
+| EVAL f_system_dir = exe_dir RLIKE "\\\\windows\\\\(system32|syswow64)(\\\\windowspowershell\\\\v1[.]0|\\\\wbem)?|\\\\windows\\\\(winsxs|servicing)\\\\.*"
+| EVAL f_userpath = exe_dir RLIKE ".*\\\\(users|programdata|perflogs|temp|appdata|downloads|desktop)(\\\\.*)?"
+| EVAL account = CASE(artifact IN ("bam", "userassist"),
+    COALESCE(TO_STRING(user.name), REPLACE(TO_STRING(registry.key), "(?i)^.*\\\\(S-1-[0-9-]+).*$", "$1")), null)
+| EVAL host = REPLACE(_index, "^[^-]+-", "")
+| STATS
+    artifacts = VALUES(artifact),
+    accounts = VALUES(account),
+    sha1_values = VALUES(file.hash.sha1),
+    prefetch_first_run_approx = MIN(file.stdinfo.ctime) WHERE artifact == "prefetch",
+    prefetch_last_run = MAX(kape.prefetch.last_run) WHERE artifact == "prefetch",
+    prefetch_runs = MAX(kape.prefetch.run_count) WHERE artifact == "prefetch",
+    amcache_first_seen = MIN(amcache.file_key_last_write) WHERE artifact == "amcache",
+    shimcache_file_mtime = MAX(file.mtime) WHERE artifact == "shimcache",
+    bam_last_run = MAX(registry.plugin.execution_time) WHERE artifact == "bam",
+    userassist_last_run = MAX(registry.plugin.last_executed) WHERE artifact == "userassist",
+    userassist_runs = MAX(TO_INTEGER(registry.plugin.run_counter)) WHERE artifact == "userassist",
+    exe_dirs = VALUES(exe_dir) WHERE artifact != "prefetch",
+    outside_system_dir = MAX(TO_INTEGER(NOT f_system_dir)) WHERE artifact != "prefetch",
+    in_userpath = MAX(TO_INTEGER(f_userpath)) WHERE artifact != "prefetch",
+    source_indices = VALUES(_index)
+  BY host, technique, exe_name
+| EVAL score = CASE(
+    technique LIKE "PsExec*", 4,
+    technique IN ("PowerShell remoting / WinRM (destination)", "WMI (destination)") OR exe_name IN ("winrs.exe", "at.exe"), 3,
+    technique == "RDP (destination)" OR exe_name == "mstsc.exe", 2,
+    1)
+    + CASE(COALESCE(in_userpath, 0) == 1, 2, 0)
+    + CASE(COALESCE(outside_system_dir, 0) == 1 AND NOT technique LIKE "PsExec*", 2, 0)
+| KEEP
+    source_indices,
+    host,
+    score,
+    technique,
+    exe_name,
+    exe_dirs,
+    artifacts,
+    accounts,
+    prefetch_first_run_approx,
+    prefetch_last_run,
+    prefetch_runs,
+    amcache_first_seen,
+    shimcache_file_mtime,
+    bam_last_run,
+    userassist_last_run,
+    userassist_runs,
+    outside_system_dir,
+    in_userpath,
+    sha1_values
+| SORT host ASC, score DESC, technique ASC
+| LIMIT 10000

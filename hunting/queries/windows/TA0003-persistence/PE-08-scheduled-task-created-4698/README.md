@@ -10,6 +10,8 @@
 
 **What it finds.** Task creation, deletion, enable, disable and update events with the task XML parsed into `command`, `arguments` and `run_as`, scored for interpreter commands, user-writable paths, encoded commands, hidden tasks, tasks outside `\Microsoft\` and SYSTEM tasks.
 
+**Author.** `author` is the task XML's `RegistrationInfo/Author`, which the SANS Hunt Evil poster points to for remotely created tasks (`schtasks /create /s host`, `at \\host`): it names the account and often the system the task was created from (`HOST\user`). When the part before the backslash is neither this computer nor the creator's domain, the row scores 2 more (`Author names another host`). Tasks without an `Author` element show an empty value.
+
 **Reading the output.** `SubjectLogonId` ties the change to a logon session ([LM-03](../../TA0008-lateral-movement/LM-03-logon-sessions-with-duration/)); a task created over the network shows a type 3 logon for the same account seconds before. When the XML has no `<Command>` (COM handler tasks), `command` holds the whole XML.
 
 **If it errors.** `Unknown column` on `TaskContent` or `TaskContentNew` means no loaded host has 4698 (created) or 4702 (updated) events; replace that field with `null` in the `COALESCE`. RD01 had none of these events.

@@ -1,6 +1,6 @@
 // LM-02 | netsh portproxy rules, RDP enablement and remote-admin settings in the registry
 // Tactic: TA0008 Lateral Movement | ATT&CK: T1090.001, T1021.001, T1112, T1548.002
-// Indexes: registry-* | Needs: RECmd batch output with Services\PortProxy, Terminal Server and Policies\System keys
+// Indexes: registry-* | Needs: RECmd batch output with Services\PortProxy, Terminal Server, Policies\System, Terminal Server Client and MountPoints2 keys
 FROM registry-* METADATA _index
 | WHERE event.dataset == "registry.batch"
 | EVAL key_lower = TO_LOWER(COALESCE(registry.key, ""))
@@ -14,9 +14,12 @@ FROM registry-* METADATA _index
     key_lower RLIKE ".*\\\\control\\\\terminal server" AND vname == "fsinglesessionperuser" AND vdata RLIKE "0|0x0+|0[ ].*", "Multiple RDP sessions per user allowed",
     key_lower RLIKE ".*\\\\policies\\\\system" AND vname == "localaccounttokenfilterpolicy" AND vdata RLIKE "1|0x0*1|1[ ].*", "Remote UAC filtering disabled (LocalAccountTokenFilterPolicy=1)",
     key_lower RLIKE ".*\\\\terminal server client\\\\(servers|default)(\\\\.*)?", "Outbound RDP history (client MRU)",
+    // NTUSER MountPoints2: ##server#share keys are network shares this user mapped (net use, Explorer)
+    key_lower RLIKE ".*\\\\explorer\\\\mountpoints2\\\\[#][#][^\\\\]+", "Mapped network share (MountPoints2)",
     null)
 | WHERE kind IS NOT NULL
 | EVAL is_pp = kind == "netsh portproxy rule"
+| EVAL mapped_share = CASE(kind LIKE "Mapped network share*", REPLACE(REPLACE(key_lower, "^.*\\\\mountpoints2\\\\", ""), "#", "\\\\"), null)
 | EVAL listen_addr = CASE(is_pp, MV_FIRST(SPLIT(vname, "/")), null)
 | EVAL listen_port = CASE(is_pp, MV_LAST(SPLIT(vname, "/")), null)
 | EVAL connect_addr = CASE(is_pp, MV_FIRST(SPLIT(vdata, "/")), null)
@@ -34,6 +37,8 @@ FROM registry-* METADATA _index
     + CASE(kind LIKE "RDP listening*", 2, 0)
     + CASE(kind LIKE "Multiple RDP*", 1, 0)
     + CASE(kind LIKE "Outbound RDP*", 1, 0)
+    + CASE(kind LIKE "Mapped network share*", 1, 0)
+    + CASE(kind LIKE "Mapped network share*" AND key_lower RLIKE ".*[#][#][^#]+[#](admin|[a-z])[$]", 3, 0)
 | KEEP
     _index,
     registry.last_write,
@@ -44,6 +49,7 @@ FROM registry-* METADATA _index
     listen_port,
     connect_addr,
     connect_port,
+    mapped_share,
     registry.value,
     vdata,
     registry.key,

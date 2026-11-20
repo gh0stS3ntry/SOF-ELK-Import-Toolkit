@@ -11,6 +11,14 @@ FROM evtxlogs-* METADATA _index
 | EVAL command = REPLACE(xml, "(?s)^.*<Command>(.*?)</Command>.*$", "$1")
 | EVAL arguments = REPLACE(xml, "(?s)^.*<Arguments>(.*?)</Arguments>.*$", "$1")
 | EVAL run_as = REPLACE(xml, "(?s)^.*<UserId>(.*?)</UserId>.*$", "$1")
+// RegistrationInfo/Author: the account (often HOST\user or DOMAIN\user) that created the task, on the system it was created from
+| EVAL author = CASE(x LIKE "*<author>*", REPLACE(xml, "(?s)^.*<Author>(.*?)</Author>.*$", "$1"), "")
+| EVAL author_prefix = TO_LOWER(CASE(author LIKE "*\\\\*", REPLACE(author, "\\\\.*$", ""), ""))
+| EVAL local_host = TO_LOWER(MV_FIRST(SPLIT(COALESCE(TO_STRING(winlog.computer_name), ""), ".")))
+| EVAL subject_domain = TO_LOWER(COALESCE(TO_STRING(winlog.payload.event_data.SubjectDomainName), ""))
+// an Author prefix that is neither this host nor the creator's domain names another machine: the task was made remotely or copied in
+| EVAL f_remote_author = author_prefix != "" AND author_prefix != local_host AND author_prefix != subject_domain
+    AND NOT author_prefix IN ("nt authority", "builtin", "microsoft corporation", "microsoft", "$(@%systemroot%")
 | EVAL f_not_ms = NOT STARTS_WITH(TO_LOWER(COALESCE(task, "")), "\\microsoft\\")
 | EVAL f_lolbin = x RLIKE ".*[<]command[>][^<]*(powershell|pwsh|cmd[.]exe|mshta|wscript|cscript|rundll32|regsvr32|certutil|bitsadmin|msbuild).*"
 | EVAL f_userpath = x RLIKE ".*\\\\(users\\\\public|programdata|perflogs|appdata|temp|downloads)\\\\.*"
@@ -18,14 +26,15 @@ FROM evtxlogs-* METADATA _index
 | EVAL f_hidden = x LIKE "*<hidden>true</hidden>*"
 | EVAL f_system = x RLIKE ".*[<]userid[>](s-1-5-18|system|nt authority.system)[<]/userid[>].*"
 | EVAL score = CASE(f_lolbin, 3, 0) + CASE(f_userpath, 2, 0) + CASE(f_encoded, 2, 0) + CASE(f_hidden, 2, 0)
-    + CASE(f_not_ms, 1, 0) + CASE(f_system, 1, 0)
+    + CASE(f_not_ms, 1, 0) + CASE(f_system, 1, 0) + CASE(f_remote_author, 2, 0)
 | EVAL reasons = REPLACE(CONCAT(
     CASE(f_lolbin, "interpreter/LOLBin command; ", ""),
     CASE(f_userpath, "user-writable path; ", ""),
     CASE(f_encoded, "encoded/hidden/download cradle; ", ""),
     CASE(f_hidden, "task marked hidden; ", ""),
     CASE(f_not_ms, "outside \\Microsoft\\; ", ""),
-    CASE(f_system, "runs as SYSTEM; ", "")
+    CASE(f_system, "runs as SYSTEM; ", ""),
+    CASE(f_remote_author, "Author names another host; ", "")
   ), "; $", "")
 | KEEP
     _index,
@@ -39,6 +48,7 @@ FROM evtxlogs-* METADATA _index
     command,
     arguments,
     run_as,
+    author,
     winlog.payload.event_data.SubjectUserName,
     winlog.payload.event_data.SubjectDomainName,
     winlog.payload.event_data.SubjectLogonId

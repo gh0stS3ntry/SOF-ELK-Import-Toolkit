@@ -9,16 +9,33 @@ FROM amcache-*, shimcache-*, filesystem-* METADATA _index
 | EVAL exe_path = TO_LOWER(COALESCE(TO_STRING(file.path), ""))
 | WHERE exe_path LIKE "*.exe" AND exe_path LIKE "*\\\\*"
 | EVAL exe_name = REPLACE(exe_path, "^.*\\\\", "")
-| EVAL exe_dir = REPLACE(REPLACE(exe_path, "\\\\[^\\\\]*$", ""), "^(\\\\device\\\\harddiskvolume[0-9]+|[a-z]:|[.]|\\\\volume[{][^}]*[}])", "")
-| EVAL f_sysname = exe_name IN ("svchost.exe", "lsass.exe", "csrss.exe", "smss.exe", "services.exe", "winlogon.exe", "wininit.exe", "spoolsv.exe", "taskhostw.exe", "taskhost.exe", "rundll32.exe", "dllhost.exe", "conhost.exe", "lsm.exe", "lsaiso.exe", "sihost.exe", "ctfmon.exe", "fontdrvhost.exe", "dwm.exe", "searchindexer.exe", "wuauclt.exe", "wermgr.exe", "werfault.exe", "msiexec.exe", "regsvr32.exe", "mshta.exe", "cmd.exe", "powershell.exe", "wmiprvse.exe", "audiodg.exe", "userinit.exe", "taskmgr.exe", "notepad.exe", "certutil.exe", "schtasks.exe", "sc.exe", "net.exe", "net1.exe", "explorer.exe")
-| EVAL f_expected_dir = exe_dir RLIKE "\\\\windows(\\\\system32|\\\\syswow64|\\\\winsxs\\\\.*|\\\\servicing\\\\.*|\\\\softwaredistribution\\\\.*|\\\\systemapps\\\\.*|\\\\system32\\\\windowspowershell\\\\v1[.]0|\\\\syswow64\\\\windowspowershell\\\\v1[.]0|\\\\system32\\\\wbem|\\\\syswow64\\\\wbem|\\\\temp\\\\[^\\\\]+[.]tmp|\\\\uus\\\\.*)?"
-    OR (exe_name == "explorer.exe" AND exe_dir RLIKE "\\\\windows")
+| EVAL exe_dir = REPLACE(REPLACE(REPLACE(exe_path, "\\\\[^\\\\]*$", ""), "^(%systemroot%|%windir%)", "c:\\\\windows"), "^(\\\\[?][?]\\\\|\\\\\\\\[?]\\\\)?(\\\\device\\\\harddiskvolume[0-9]+|[a-z]:|[.]|\\\\volume[{][^}]*[}])", "")
+| EVAL f_sysname = exe_name IN ("svchost.exe", "lsass.exe", "csrss.exe", "smss.exe", "services.exe", "winlogon.exe", "wininit.exe", "spoolsv.exe", "taskhostw.exe", "taskhost.exe", "runtimebroker.exe", "rundll32.exe", "dllhost.exe", "conhost.exe", "lsm.exe", "lsaiso.exe", "sihost.exe", "ctfmon.exe", "fontdrvhost.exe", "dwm.exe", "searchindexer.exe", "wuauclt.exe", "wermgr.exe", "werfault.exe", "msiexec.exe", "regsvr32.exe", "mshta.exe", "cmd.exe", "powershell.exe", "wmiprvse.exe", "audiodg.exe", "userinit.exe", "taskmgr.exe", "notepad.exe", "certutil.exe", "schtasks.exe", "sc.exe", "net.exe", "net1.exe", "explorer.exe")
+// SANS Hunt Evil "Know Normal": these exist only in %SystemRoot%\System32 (no 32-bit copy in SysWOW64)
+| EVAL f_system32_only = exe_name IN ("smss.exe", "csrss.exe", "wininit.exe", "winlogon.exe", "services.exe", "lsass.exe", "lsaiso.exe", "lsm.exe")
+// update, servicing and upgrade folders hold genuine copies of every name
+| EVAL f_store_dir = exe_dir RLIKE "\\\\windows\\\\(winsxs|servicing|softwaredistribution|systemapps|uus)\\\\.*|\\\\windows\\\\temp\\\\[^\\\\]+[.]tmp"
     OR exe_dir RLIKE ".*\\\\([$]windows[.][~]bt|windows[.]old)(\\\\.*)?"
     // $MFT: component store folders whose parent is gone (\PathUnknown\Directory with id ...)
     OR exe_dir RLIKE ".*\\\\(amd64|wow64|x86|arm64)_microsoft-windows-[^\\\\]+(\\\\[fr])?"
-    // Windows 11 Notepad is a Store app with a per-user execution alias
-    OR (exe_name == "notepad.exe" AND exe_dir RLIKE "\\\\program files\\\\windowsapps\\\\microsoft[.]windowsnotepad_[^\\\\]+\\\\notepad")
-    OR (exe_name == "notepad.exe" AND exe_dir RLIKE "\\\\users\\\\[^\\\\]+\\\\appdata\\\\local\\\\microsoft\\\\windowsapps(\\\\microsoft[.]windowsnotepad_8wekyb3d8bbwe)?")
+| EVAL expected_dir = CASE(
+    // explorer.exe lives in %SystemRoot% itself, not in System32 (a 32-bit copy is in SysWOW64)
+    exe_name == "explorer.exe", "\\windows or \\windows\\syswow64",
+    f_system32_only, "\\windows\\system32",
+    exe_name == "notepad.exe", "\\windows, system32, syswow64 or the Store app folder",
+    exe_name == "powershell.exe", "\\windows\\system32|syswow64\\windowspowershell\\v1.0",
+    exe_name == "wmiprvse.exe", "\\windows\\system32|syswow64\\wbem",
+    "\\windows\\system32 or \\windows\\syswow64")
+| EVAL f_expected_dir = f_store_dir OR CASE(
+    exe_name == "explorer.exe", exe_dir RLIKE "\\\\windows(\\\\syswow64)?",
+    f_system32_only, exe_dir == "\\windows\\system32",
+    exe_name == "notepad.exe", exe_dir RLIKE "\\\\windows(\\\\system32|\\\\syswow64)?"
+        // Windows 11 Notepad is a Store app with a per-user execution alias
+        OR exe_dir RLIKE "\\\\program files\\\\windowsapps\\\\microsoft[.]windowsnotepad_[^\\\\]+\\\\notepad"
+        OR exe_dir RLIKE "\\\\users\\\\[^\\\\]+\\\\appdata\\\\local\\\\microsoft\\\\windowsapps(\\\\microsoft[.]windowsnotepad_8wekyb3d8bbwe)?",
+    exe_name == "powershell.exe", exe_dir RLIKE "\\\\windows\\\\(system32|syswow64)\\\\windowspowershell\\\\v1[.]0",
+    exe_name == "wmiprvse.exe", exe_dir RLIKE "\\\\windows\\\\(system32|syswow64)\\\\wbem",
+    exe_dir RLIKE "\\\\windows\\\\(system32|syswow64)")
 | EVAL f_wrong_dir = f_sysname AND NOT f_expected_dir
 | EVAL f_lookalike = exe_name RLIKE "(scvhost|svchosts|svch0st|svhost|svchost32|svchosst|svchos|lsas|lssass|lsasss|isass|1sass|lsaas|csrs|cssrs|crss|smms|servics|service|winlogin|winlogon32|winiinit|spoolsvc|spools|taskhostt|taskhosts|rundl32|rundll|rundll64|dlhost|dllhst|conhst|expl0rer|explorar|explore|iexplorer|powershel|powershel1|cmd32|regsvr|msiexe|wmiprvse32|wmipsrv)[.]exe"
 | WHERE f_wrong_dir OR f_lookalike
@@ -31,10 +48,10 @@ FROM amcache-*, shimcache-*, filesystem-* METADATA _index
     first_seen = MIN(COALESCE(amcache.file_key_last_write, file.mtime, file.stdinfo.created, @timestamp)),
     last_seen = MAX(COALESCE(amcache.file_key_last_write, file.mtime, file.stdinfo.mtime, @timestamp)),
     source_indices = VALUES(_index)
-  BY exe_name, exe_dir, f_wrong_dir, f_lookalike
+  BY exe_name, exe_dir, expected_dir, f_wrong_dir, f_lookalike
 | EVAL score = CASE(f_lookalike, 4, 0) + CASE(f_wrong_dir, 3, 0)
     + CASE(exe_dir RLIKE ".*\\\\(users\\\\public|programdata|perflogs|windows\\\\temp|temp|appdata|downloads|[$]recycle[.]bin)(\\\\.*)?", 2, 0)
     + CASE(host_count == 1, 1, 0)
-| KEEP source_indices, host_count, score, exe_name, exe_dir, f_wrong_dir, f_lookalike, artifacts, products, first_seen, last_seen, sha1_values
+| KEEP source_indices, host_count, score, exe_name, exe_dir, expected_dir, f_wrong_dir, f_lookalike, artifacts, products, first_seen, last_seen, sha1_values
 | SORT score DESC, first_seen ASC
 | LIMIT 2000
