@@ -1,6 +1,6 @@
 // DE-04 | Defender, firewall, logging and security-tool settings in the registry
 // Tactic: TA0112 Defense Impairment | ATT&CK: T1562.001, T1562.002, T1562.004, T1112
-// Indexes: registry-* | Needs: RECmd batch output (DFIRBatch dumps the Defender policy and exclusion keys)
+// Indexes: registry-* | Needs: RECmd batch output (DFIRBatch dumps the Defender policy and exclusion keys; PowerShell ShellIds and PrefetchParameters keys for the last two kinds)
 FROM registry-* METADATA _index
 | WHERE event.dataset == "registry.batch"
 | EVAL key_lower = TO_LOWER(COALESCE(registry.key, ""))
@@ -26,12 +26,18 @@ FROM registry-* METADATA _index
     key_lower RLIKE ".*\\\\terminal server" AND vname == "fdenytsconnections" AND is_zero, "RDP enabled",
     key_lower RLIKE ".*\\\\amsi\\\\providers(\\\\.*)?", "AMSI provider",
     key_lower RLIKE ".*\\\\software\\\\microsoft\\\\amsi" AND vname IN ("amsienable") AND is_zero, "AMSI disabled",
+    // SANS Hunt Evil: attackers loosen the PowerShell execution policy before remoting or running scripts
+    key_lower RLIKE ".*\\\\powershell\\\\1\\\\shellids\\\\microsoft[.]powershell" AND vname == "executionpolicy" AND vdata_l IN ("bypass", "unrestricted"), "PowerShell execution policy Bypass/Unrestricted",
+    key_lower RLIKE ".*\\\\policies\\\\microsoft\\\\windows\\\\powershell" AND vname == "executionpolicy" AND vdata_l IN ("bypass", "unrestricted"), "PowerShell execution policy Bypass/Unrestricted",
+    // EnablePrefetcher 0 = Prefetch off: default on many Windows Server builds, otherwise anti-forensics
+    key_lower RLIKE ".*\\\\session manager\\\\memory management\\\\prefetchparameters" AND vname == "enableprefetcher" AND NOT vdata_l RLIKE "3|0x0*3|3[ ].*", "Prefetch disabled or reduced (EnablePrefetcher)",
     null)
 | WHERE kind IS NOT NULL
 | EVAL score = CASE(
     kind IN ("Tamper Protection off", "Defender protection disabled", "Security/logging service disabled (Start=4)", "ETW autologger disabled", "AMSI disabled"), 5,
     kind IN ("Defender exclusion", "Firewall profile disabled", "Event log channel disabled", "PowerShell logging disabled", "Defender cloud protection off"), 4,
-    kind IN ("UAC disabled", "RDP enabled"), 3,
+    kind IN ("UAC disabled", "RDP enabled", "PowerShell execution policy Bypass/Unrestricted"), 3,
+    kind == "Prefetch disabled or reduced (EnablePrefetcher)", 2,
     1)
 | EVAL f_excl_suspicious = kind == "Defender exclusion" AND (vname RLIKE ".*(\\\\users\\\\public|\\\\programdata|\\\\perflogs|\\\\windows\\\\temp|\\\\appdata|\\\\temp|\\\\downloads).*|[a-z]:\\\\?|[.]?(exe|dll|ps1|bat|cmd|vbs|js)")
 | EVAL score = score + CASE(f_excl_suspicious, 2, 0)

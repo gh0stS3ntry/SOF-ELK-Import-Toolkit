@@ -169,6 +169,7 @@ The Windows queries come first, then [AWS](#aws), [Linux](#linux) and [Web acces
 | [EX-16](queries/windows/TA0002-execution/EX-16-userassist-bam/) | Program execution recorded in UserAssist and BAM/DAM | `registry-*` | all; UserAssist matters most on workstations and RDP/jump hosts |
 | [EX-17](queries/windows/TA0002-execution/EX-17-runmru-commands/) | Commands typed in the Run dialog (RunMRU) | `registry-*` | end-user workstation, RDP/jump host, any server where admins log on interactively |
 | [EX-18](queries/windows/TA0002-execution/EX-18-executables-and-scripts-in-user-writable-folders/) | Executables (PE) and scripts in user-writable and world-writable folders: profiles, AppData, Temp, ProgramData, Public, Recycle Bin, writable Windows subfolders, drive-root folders | `filesystem-*` | all (baseline) |
+| [EX-19](queries/windows/TA0002-execution/EX-19-core-process-know-normal/) | Core Windows processes that break the SANS Hunt Evil "Know Normal" rules: wrong parent, path, account, svchost without `-k`, children of lsass, late start or extra instances per boot | `evtxlogs-*` | all (baseline) |
 
 ### TA0003 Persistence
 
@@ -181,7 +182,7 @@ The Windows queries come first, then [AWS](#aws), [Linux](#linux) and [Web acces
 | [PE-05](queries/windows/TA0003-persistence/PE-05-service-install-events/) | Service installation events (System 7045, Security 4697), scored | `evtxlogs-*` | all; servers and domain controllers especially |
 | [PE-06](queries/windows/TA0003-persistence/PE-06-scheduled-task-commands/) | Scheduled task creation and changes from the command line or PowerShell | `evtxlogs-*` | all |
 | [PE-07](queries/windows/TA0003-persistence/PE-07-task-scheduler-per-task/) | Task Scheduler Operational log summarised per host and task | `evtxlogs-*` | all |
-| [PE-08](queries/windows/TA0003-persistence/PE-08-scheduled-task-created-4698/) | Scheduled tasks created, updated or deleted (Security 4698-4702) | `evtxlogs-*` | all |
+| [PE-08](queries/windows/TA0003-persistence/PE-08-scheduled-task-created-4698/) | Scheduled tasks created, updated or deleted (Security 4698-4702), with the task Author | `evtxlogs-*` | all |
 | [PE-09](queries/windows/TA0003-persistence/PE-09-taskcache-registry/) | Scheduled tasks in the TaskCache registry key, scored by their actions | `registry-*` | all |
 | [PE-10](queries/windows/TA0003-persistence/PE-10-hidden-scheduled-tasks/) | Hidden scheduled tasks: TaskCache\Tree entries with no security descriptor | `registry-*` | all |
 | [PE-11](queries/windows/TA0003-persistence/PE-11-task-xml-files-mft/) | Scheduled task XML files on disk ($MFT), outside the \Microsoft\ tree | `filesystem-*` | all |
@@ -232,12 +233,14 @@ The Windows queries come first, then [AWS](#aws), [Linux](#linux) and [Web acces
 
 | ID | Query | Indexes | Roles |
 |---|---|---|---|
-| [LM-01](queries/windows/TA0008-lateral-movement/LM-01-lateral-movement-methods/) | Lateral movement via RDP, SMB, PsExec-style services, WinRM and WMI | `evtxlogs-*` | all |
-| [LM-02](queries/windows/TA0008-lateral-movement/LM-02-portproxy-and-remote-access-settings/) | netsh portproxy rules, RDP enablement and remote-admin settings | `registry-*` | all; jump hosts and internet-facing servers especially |
+| [LM-01](queries/windows/TA0008-lateral-movement/LM-01-lateral-movement-methods/) | Lateral movement via RDP, SMB, PsExec-style services, WinRM, PowerShell remoting and WMI, inbound and outbound | `evtxlogs-*` | all |
+| [LM-02](queries/windows/TA0008-lateral-movement/LM-02-portproxy-and-remote-access-settings/) | netsh portproxy rules, RDP enablement, remote-admin settings, outbound RDP history and mapped shares (MountPoints2) | `registry-*` | all; jump hosts and internet-facing servers especially |
 | [LM-03](queries/windows/TA0008-lateral-movement/LM-03-logon-sessions-with-duration/) | Logon sessions with start, end, duration and admin rights | `evtxlogs-*` | all |
 | [LM-04](queries/windows/TA0008-lateral-movement/LM-04-executables-dropped-in-admin-share-paths/) | Executables and scripts created in admin-share reachable folders | `filesystem-*` | all; servers and domain controllers especially |
 | [LM-05](queries/windows/TA0008-lateral-movement/LM-05-share-access/) | Network share access by source, account and share, with named pipes | `evtxlogs-*` | file server, domain controller, all servers |
 | [LM-06](queries/windows/TA0008-lateral-movement/LM-06-sum-ual-client-access/) | Server client access from User Access Logging (SUM database) | `sum-*` | file server, domain controller, web server, any Windows Server |
+| [LM-07](queries/windows/TA0008-lateral-movement/LM-07-lateral-movement-tool-execution-evidence/) | Lateral movement tools in Prefetch, Amcache, ShimCache, BAM and UserAssist: source side (mstsc, net, PsExec, at/schtasks, sc, wmic, PowerShell) and destination side (rdpclip, tstheme, psexesvc, wsmprovhost, scrcons, mofcomp) | `prefetch-*`, `amcache-*`, `shimcache-*`, `registry-*` | all (baseline) |
+| [LM-08](queries/windows/TA0008-lateral-movement/LM-08-remote-execution-filesystem-traces/) | Remote execution traces in the $MFT: new user profile folders, executables and scripts copied in (modified before created), .mof files, WMI repository writes | `filesystem-*` | all (baseline); servers especially |
 
 ### TA0009 Collection
 
@@ -290,12 +293,12 @@ The Windows queries come first, then [AWS](#aws), [Linux](#linux) and [Web acces
 | [DE-01](queries/windows/TA0112-defense-impairment/DE-01-timestomping/) | Timestomping: `$SI` earlier than `$FN`, zeroed sub-seconds | `filesystem-*` | all |
 | [DE-02](queries/windows/TA0112-defense-impairment/DE-02-event-log-clearing/) | Event logs cleared, event log service stopped or disabled | `evtxlogs-*` | all |
 | [DE-03](queries/windows/TA0112-defense-impairment/DE-03-defender-exclusions-and-preference-changes/) | Defender exclusions and protection settings changed | `evtxlogs-*` | all |
-| [DE-04](queries/windows/TA0112-defense-impairment/DE-04-security-tool-tampering-registry/) | Defender, firewall, logging and security-tool settings in the registry | `registry-*` | all |
+| [DE-04](queries/windows/TA0112-defense-impairment/DE-04-security-tool-tampering-registry/) | Defender, firewall, logging and security-tool settings in the registry, PowerShell execution policy, Prefetch disabled | `registry-*` | all |
 | [DE-05](queries/windows/TA0112-defense-impairment/DE-05-firewall-rule-changes-events/) | Windows Firewall rules and settings changed (events) | `evtxlogs-*` | all |
 | [DE-06](queries/windows/TA0112-defense-impairment/DE-06-firewall-rules-registry/) | Inbound allow rules and odd programs in the firewall rule list (registry) | `registry-*` | all; servers first |
 | [DE-07](queries/windows/TA0112-defense-impairment/DE-07-deleted-executables-usn/) | Executables and scripts deleted (USN `$J`) | `filesystem-*` | all |
 | [DE-08](queries/windows/TA0112-defense-impairment/DE-08-recycle-bin-deletions/) | Files sent to the Recycle Bin | `recyclebin-*` | end-user workstation; any host with interactive logons |
-| [DE-09](queries/windows/TA0112-defense-impairment/DE-09-masquerading-system-binaries/) | Masquerading: Windows binary names in the wrong folder, and look-alike names | `amcache-*`, `shimcache-*`, `filesystem-*` | all |
+| [DE-09](queries/windows/TA0112-defense-impairment/DE-09-masquerading-system-binaries/) | Masquerading: Windows binary names outside their own folder (System32-only core processes, explorer.exe in \Windows), and look-alike names | `amcache-*`, `shimcache-*`, `filesystem-*` | all |
 | [DE-10](queries/windows/TA0112-defense-impairment/DE-10-audit-policy-and-time-changes/) | Audit policy reduced, system time changed | `evtxlogs-*` | all; domain controllers for policy changes pushed by GPO |
 
 ### AWS
