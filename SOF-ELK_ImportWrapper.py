@@ -3,7 +3,8 @@
 
 Expected layout:
   SOF-ELK_ImportWrapper.py
-  Windows/csv_importers/<thirteen CSV importers and sof_elk_csv_bulk_common.py>
+  Windows/csv_importers/<fourteen CSV importers and sof_elk_csv_bulk_common.py>
+      (including iisgeolocate2sofelk.py: iisGeolocate CSVs and raw IIS u_ex*.log W3C logs)
   Windows/json_importers/<four JSON importers and sof_elk_json_bulk_common.py>
   Linux/linux2sofelk.py (UAC collections: a folder holding uac.log, or a UAC .zip)
   AWS/<cloudtrail|vpcflow|alb|cloudfrontaccess|waf|route53resolver|securityhub|eksaudit>2sofelk.py
@@ -58,7 +59,17 @@ CSV_IMPORTERS = {
     "SrumECmd": ("srumecmd2sofelk.py", "srum"),
     "SumECmd": ("sumecmd2sofelk.py", "sum"),
     "WxTCmd": ("wxtcmd2sofelk.py", "activitiescache"),
+    "iisGeolocate / IIS W3C": ("iisgeolocate2sofelk.py", "httpdlog"),
 }
+IIS_LABEL = "iisGeolocate / IIS W3C"
+# W3C columns every IIS request line has; iisGeolocate CSVs keep them as their header.
+IIS_SIGNATURE = {"date", "time", "cs-method", "cs-uri-stem"}
+
+
+def is_iis_columns(columns) -> bool:
+    """IIS W3C columns. CloudFront standard logs are W3C too, but always carry x-edge-* columns."""
+    cols = {c.strip().lower() for c in columns}
+    return IIS_SIGNATURE <= cols and not any(c.startswith("x-edge") for c in cols)
 
 # Linux collections (UAC) go to one front end that runs every Linux importer.
 LINUX_LABEL = "Linux (UAC)"
@@ -84,7 +95,7 @@ AWS_SUBDIR = "AWS"
 AWS_DATE_ORDERS = {"dmy", "mdy"}
 
 # CSV importers that do not accept --local-tz.
-NO_LOCAL_TZ = {"NirSoft BrowsingHistoryView", "ConvertUsageLogsTo-CSV"}
+NO_LOCAL_TZ = {"NirSoft BrowsingHistoryView", "ConvertUsageLogsTo-CSV", "iisGeolocate / IIS W3C"}
 
 # Columns only BrowsingHistoryView emits; used with "url" to recognise its exports.
 BHV_SIGNATURE = {"visit time", "visit count", "visited from", "visit type", "visit duration",
@@ -205,6 +216,13 @@ def classify_csv(path: Path, headers: list[str]) -> set[str]:
     ):
         found.add("SumECmd")
 
+    # iisGeolocate output: the IIS log's own W3C columns (plus GeoCity/GeoCountry), and its
+    # BadDataRows_REVIEW_ME.txt, which the importer reads only to report the rows it lacks.
+    if path.suffix.lower() == ".csv" and is_iis_columns(fields):
+        found.add(IIS_LABEL)
+    if name in ("baddatarows_review_me.txt", "badrows_review_me.txt"):
+        found.add(IIS_LABEL)
+
     # WxTCmd Windows Timeline output. It can generate Activity, ActivityOperations
     # and ActivityPackage CSVs.
     if path.suffix.lower() == ".csv" and (
@@ -288,9 +306,26 @@ class AwsDetector:
         return labels
 
 
+def is_iis_w3c_log(path: Path) -> bool:
+    """A raw IIS W3C extended log (u_ex*.log): a #Fields line with IIS request columns."""
+    try:
+        with path.open("r", encoding="utf-8-sig", errors="replace") as stream:
+            for _ in range(20):
+                line = stream.readline()
+                if not line:
+                    break
+                if line.lower().startswith("#fields:"):
+                    return is_iis_columns(line[8:].split())
+                if not line.startswith("#"):
+                    break
+    except OSError:
+        pass
+    return False
+
+
 def discover(root: Path, aws: AwsDetector | None = None
              ) -> tuple[dict[str, list[Path]], dict[str, list[Path]], list[Path], dict[str, list[Path]]]:
-    """Walk the tree once; return selected files for the four JSON and thirteen CSV importers,
+    """Walk the tree once; return selected files for the four JSON and fourteen CSV importers,
     the UAC collections (folders and zips) for the Linux importers, and AWS log files."""
     json_files = {name: [] for name in HYBRID_IMPORTERS}
     csv_files = {name: [] for name in CSV_IMPORTERS}
@@ -316,6 +351,9 @@ def discover(root: Path, aws: AwsDetector | None = None
                     json_files[importer].append(path)
                     claimed = True
             suffix = path.suffix.lower()
+            if suffix == ".log" and is_iis_w3c_log(path):
+                csv_files[IIS_LABEL].append(path)
+                claimed = True
             if suffix in {".csv", ".txt", ".tsv"}:
                 header = read_csv_header(path)
                 for importer in classify_csv(path, header):
@@ -638,7 +676,8 @@ def main() -> int:
                 print(f"[{label}] ERROR: could not locate importer {script} under {wrapper_dir}", flush=True)
                 failed.append((label, 127))
                 continue
-            staged_dir = staging.add(label, files)
+            # iisGeolocate keeps the folder layout so log.file.path is the file's path under the root.
+            staged_dir = staging.add(label, files, keep_tree_from=root if label == IIS_LABEL else None)
             code = run_one(label, script_path, staged_dir, args, staging, extra=extra, is_json=is_json)
             if code == 0:
                 success += 1

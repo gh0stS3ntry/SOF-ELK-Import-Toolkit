@@ -1,0 +1,57 @@
+// WCA-02 | Passwords, API keys, session IDs and JWTs in URLs, and the same token used from several clients (session hijacking)
+// Tactic: TA0006 Credential Access | ATT&CK: T1552.001, T1539, T1550.004
+// Indexes: httpdlog-* | Needs: web access logs with the query string (url.query): ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd
+FROM httpdlog-* METADATA _index
+| WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
+| EVAL raw = CONCAT(COALESCE(url.path, ""), "?", COALESCE(url.query, ""))
+| EVAL low = TO_LOWER(raw)
+| WHERE low RLIKE ".*[;?&](password|passwd|pwd|pass|passphrase|secret|client_secret|token|access_token|id_token|refresh_token|auth_token|api_key|apikey|api-key|jsessionid|phpsessid|aspsessionid[a-z]*|sessionid|session_id|session|sid|sessid|auth|jwt|bearer)=[^&;]+.*"
+    OR low LIKE "*eyj*.eyj*"
+// the value is kept as logged (case matters for tokens); a JWT outside a named parameter is caught by the second pattern
+| GROK raw "(?i)[;?&](?<credparam>password|passwd|pwd|pass|passphrase|secret|client_secret|token|access_token|id_token|refresh_token|auth_token|api_key|apikey|api-key|jsessionid|phpsessid|aspsessionid[a-z]*|sessionid|session_id|session|sid|sessid|auth|jwt|bearer)=(?<credvalue>[^&;#?]+)"
+| GROK raw "(?<jwt>eyJ[A-Za-z0-9_-]+[.]eyJ[A-Za-z0-9_-]+[.][A-Za-z0-9_-]*)"
+| EVAL credparam = COALESCE(TO_LOWER(credparam), CASE(COALESCE(jwt, "") != "", "(jwt)", "(unknown)"))
+| EVAL credvalue = COALESCE(jwt, credvalue, "")
+| WHERE LENGTH(credvalue) >= 6
+| EVAL kind = CASE(credparam IN ("password", "passwd", "pwd", "pass", "passphrase", "secret", "client_secret"), "password or secret",
+    credparam IN ("jsessionid", "phpsessid", "sessionid", "session_id", "session", "sid", "sessid") OR credparam LIKE "aspsessionid*", "session id",
+    credparam IN ("api_key", "apikey", "api-key"), "api key",
+    "token")
+| EVAL value_preview = CONCAT(LEFT(credvalue, 6), "...", RIGHT(credvalue, 4))
+| EVAL value_sha256 = SHA256(credvalue)
+| STATS
+    requests = COUNT(*),
+    clients = COUNT_DISTINCT(source.ip),
+    client_ips = VALUES(source.ip),
+    user_agents_n = COUNT_DISTINCT(user_agent.original),
+    user_agents = VALUES(user_agent.original),
+    paths = VALUES(url.path),
+    schemes = VALUES(url.scheme),
+    cleartext = COUNT(*) WHERE url.scheme == "http",
+    statuses = VALUES(http.response.status_code),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, kind, credparam, value_sha256, value_preview
+| EVAL score = CASE(clients > 1 AND kind != "password or secret", 3, 0) + CASE(user_agents_n > 1, 1, 0)
+    + CASE(kind == "password or secret", 2, 0) + CASE(cleartext > 0, 1, 0)
+| EVAL client_ips = MV_SLICE(client_ips, 0, 19), user_agents = MV_SLICE(user_agents, 0, 4), paths = MV_SLICE(paths, 0, 9)
+| KEEP
+    _index,
+    score,
+    kind,
+    credparam,
+    value_preview,
+    value_sha256,
+    requests,
+    clients,
+    user_agents_n,
+    cleartext,
+    first_seen,
+    last_seen,
+    client_ips,
+    schemes,
+    statuses,
+    paths,
+    user_agents
+| SORT score DESC, clients DESC, requests DESC
+| LIMIT 1000

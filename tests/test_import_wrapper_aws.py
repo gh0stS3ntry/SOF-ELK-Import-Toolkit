@@ -89,6 +89,24 @@ class AwsDiscoveryTests(unittest.TestCase):
         self.assertIn("E2ABCDEF123456.2026-10-20-01.a1b2c3d4", cf)
         self.assertIn("athena_cloudfront_standard_logs.csv", cf)
 
+    def test_iis_logs_go_to_the_iisgeolocate_importer(self):
+        iis = self.root / "iis"
+        iis.mkdir()
+        fields = "date time s-ip cs-method cs-uri-stem cs-uri-query s-port c-ip sc-status"
+        (iis / "20261120083000_u_ex261102_Chunk1.csv").write_text(
+            fields.replace(" ", ",") + ",GeoCity,GeoCountry\n"
+            "2026-11-02,01:00:00,10.0.0.5,GET,/,-,443,203.0.113.7,200,NA,NA\n")
+        (iis / "BadDataRows_REVIEW_ME.txt").write_text("SourceFile,LineNumber,Reason,Row\n")
+        (iis / "u_ex261102.log").write_text(
+            "#Software: Microsoft Internet Information Services 10.0\n#Fields: " + fields + "\n"
+            "2026-11-02 01:00:00 10.0.0.5 GET / - 443 203.0.113.7 200\n")
+        json_files, csv_files, _, aws_files = w.discover(self.root, self.aws)
+        got = sorted(p.name for p in csv_files[w.IIS_LABEL])
+        self.assertEqual(got, ["20261120083000_u_ex261102_Chunk1.csv", "BadDataRows_REVIEW_ME.txt", "u_ex261102.log"])
+        self.assertEqual(w.CSV_IMPORTERS[w.IIS_LABEL], ("iisgeolocate2sofelk.py", "httpdlog"))
+        # CloudFront's W3C files (raw and Athena CSV) stay with the CloudFront importer.
+        self.assertFalse(any("cloudfront" in str(p).lower() for p in csv_files[w.IIS_LABEL]))
+
     def test_security_lake_exports_go_to_every_source_importer(self):
         sl = self.root / "securitylake"
         shutil.copytree(FIXTURES / "securitylake", sl)

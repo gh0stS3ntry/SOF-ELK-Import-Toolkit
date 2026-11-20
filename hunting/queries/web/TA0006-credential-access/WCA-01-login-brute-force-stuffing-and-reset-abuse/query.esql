@@ -1,0 +1,75 @@
+// WCA-01 | Login brute force, credential stuffing, account enumeration, password-reset and MFA code abuse against web sign-in endpoints, per client
+// Tactic: TA0006 Credential Access | ATT&CK: T1110.001, T1110.003, T1110.004, T1589.001
+// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd (client.user.name only from IIS logs and from Apache/nginx logs with HTTP authentication)
+FROM httpdlog-* METADATA _index
+| WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
+| EVAL path = TO_LOWER(COALESCE(url.path, ""))
+| EVAL method = TO_UPPER(COALESCE(http.request.method, ""))
+| EVAL status = COALESCE(http.response.status_code, 0)
+// EDIT: add the application's own sign-in, reset and MFA routes
+| EVAL f_login = path RLIKE ".*(login|logon|signin|sign-in|sign_in|authenticate|j_security_check|wp-login[.]php|xmlrpc[.]php|owa/auth[.]owa|adfs/ls|/saml|/sso|oauth2?/token|connect/token|/auth/|/session|/token).*"
+| EVAL f_reset = path RLIKE ".*(forgot|reset|recover|lostpassword|lost-password|password/new|password/change|changepassword|change-password|unlock).*"
+| EVAL f_mfa = path RLIKE ".*(otp|mfa|2fa|totp|two-factor|twofactor|verify|verification|one-time|passcode|challenge).*"
+| EVAL f_register = path RLIKE ".*(register|signup|sign-up|createaccount|create-account|registration|check-?user|user-?exists|username-?available).*"
+| WHERE f_login OR f_reset OR f_mfa OR f_register OR status == 401
+| EVAL f_submit = method IN ("POST", "PUT") OR status == 401
+| EVAL minute = DATE_TRUNC(1 minute, @timestamp)
+| EVAL one = CASE(f_submit, 1, 0)
+| INLINE STATS per_minute = SUM(one) BY _index, source.ip, minute
+| STATS
+    requests = COUNT(*),
+    login_submits = COUNT(*) WHERE f_login AND f_submit,
+    basic_auth_401 = COUNT(*) WHERE status == 401,
+    forbidden_403 = COUNT(*) WHERE status == 403,
+    throttled_429 = COUNT(*) WHERE status == 429,
+    login_redirects = COUNT(*) WHERE f_login AND method == "POST" AND status IN (301, 302, 303, 307),
+    login_200 = COUNT(*) WHERE f_login AND method == "POST" AND status == 200,
+    reset_requests = COUNT(*) WHERE f_reset AND f_submit,
+    mfa_submits = COUNT(*) WHERE f_mfa AND f_submit,
+    register_requests = COUNT(*) WHERE f_register,
+    peak_per_minute = MAX(per_minute),
+    active_minutes = COUNT_DISTINCT(minute) WHERE f_submit,
+    user_names = COUNT_DISTINCT(client.user.name),
+    sample_users = VALUES(client.user.name),
+    user_agents_n = COUNT_DISTINCT(user_agent.original),
+    endpoints = VALUES(url.path),
+    statuses = VALUES(status),
+    user_agents = VALUES(user_agent.original),
+    domains = VALUES(url.domain),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp)
+  BY _index, source.ip
+| EVAL attempts = login_submits + basic_auth_401
+| EVAL score = CASE(attempts >= 20, 2, 0) + CASE(attempts >= 200, 2, 0) + CASE(peak_per_minute >= 10, 2, 0)
+    + CASE(user_names >= 5, 2, 0) + CASE(attempts >= 10 AND (login_redirects > 0 OR login_200 > 0), 1, 0)
+    + CASE(reset_requests >= 10, 2, 0) + CASE(mfa_submits >= 10, 3, 0) + CASE(register_requests >= 20, 1, 0)
+    + CASE(throttled_429 > 0, 1, 0) + CASE(user_agents_n >= 5, 1, 0)
+| WHERE score >= 2  // EDIT: lower to 1 to list every client of the sign-in pages
+| EVAL endpoints = MV_SLICE(endpoints, 0, 9), sample_users = MV_SLICE(sample_users, 0, 19), user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    score,
+    source.ip,
+    attempts,
+    peak_per_minute,
+    active_minutes,
+    login_submits,
+    login_redirects,
+    login_200,
+    basic_auth_401,
+    forbidden_403,
+    throttled_429,
+    reset_requests,
+    mfa_submits,
+    register_requests,
+    user_names,
+    sample_users,
+    user_agents_n,
+    first_seen,
+    last_seen,
+    statuses,
+    endpoints,
+    domains,
+    user_agents
+| SORT score DESC, attempts DESC
+| LIMIT 1000

@@ -384,14 +384,15 @@ function Copy-IndexTemplates([string]$SourceRoot, [string]$Destination) {
     # index-logstash.json and index-httpdlog.json are the same for SOF-ELK's
     # logstash-* and httpdlog-* (the Linux importers create logstash-<hostname>
     # and httpdlog-<hostname> with them). Linux browser history uses
-    # Windows\index_templates\index-browsinghistory.json.
+    # Windows\index_templates\index-browsinghistory.json. Windows index-httpdlog.json
+    # is the same again: iisgeolocate2sofelk.py creates httpdlog-<hostname> with it.
     # The other Linux templates (index-auditd.json, index-bodyfile.json,
     # index-wtmp.json, index-packages.json, index-linuxconfig.json) are
     # toolkit-only families, installed as sofelk-toolkit-<name>.
     $sources = @(
         @{ Dir = 'sof-elk-templates\component_templates'; ComponentPrefix = ''; IndexPrefix = '' },
         @{ Dir = 'sof-elk-templates\index_templates'; ComponentPrefix = ''; IndexPrefix = '' },
-        @{ Dir = 'Windows\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
+        @{ Dir = 'Windows\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-httpdlog.json') },
         @{ Dir = 'AWS\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-httpdlog.json', 'index-kubernetes.json') },
         @{ Dir = 'Generic-CSV\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
         @{ Dir = 'Generic-JSON\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },

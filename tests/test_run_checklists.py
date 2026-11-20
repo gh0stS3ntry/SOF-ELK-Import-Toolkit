@@ -45,6 +45,8 @@ INDICES = {
     "logstash-kali": [doc(**{"host.name": "kali", "host.os.type": "linux"})] * 4,
     "bodyfile-kali": [doc(**{"host.name": "kali", "host.os.type": "linux"})],
     "httpdlog-kali": [doc(**{"host.name": "kali", "host.os.type": "linux"})],
+    # IIS access logs (iisgeolocate2sofelk.py): a Windows host's httpdlog index stays with that host.
+    "httpdlog-rd01": [doc(**{"host.name": "RD01", "host.os.type": "windows", "event.dataset": "iis.access"})],
     "aws-cloudtrail-111122223333": [doc(**{"labels.evidence_source": "111122223333", "cloud.provider": "aws"})],
     "httpdlog-111122223333": [doc(**{"labels.evidence_source": "111122223333", "cloud.provider": "aws"})],
     "logstash-2026.10": [doc()],                       # SOF-ELK dated index: ignored
@@ -219,6 +221,7 @@ class RunnerTest(unittest.TestCase):
         self.assertTrue((self.out / "kali" / "00-triage" / "LTRI-01_kali.csv").is_file())
         self.assertTrue((self.out / "AWS" / "00-triage" / "ATRI-01_AWS.csv").is_file())
         self.assertTrue((self.out / "AWS" / "TA0001-initial-access" / "AIA-04_AWS.csv").is_file())
+        self.assertTrue((self.out / "AWS" / "00-triage" / "WTRI-01_AWS.csv").is_file())
 
         # A row stacked across hosts goes to every host it lists.
         for host in ("RD01", "WS-02"):
@@ -239,11 +242,20 @@ class RunnerTest(unittest.TestCase):
             self.assertNotIn("amcache-other", sources)
             if text.startswith("// A"):
                 self.assertNotIn("kali", sources)
+            elif text.startswith("// W"):
+                # web access log checks run once for the hosts (the Linux and the IIS web server
+                # together) and once for AWS, each on its own httpdlog indexes
+                self.assertIn(sources, ("httpdlog-kali, httpdlog-rd01", "httpdlog-111122223333"))
             else:
                 self.assertNotIn("111122223333", sources)
         # Each query runs once, not once per host.
         ids = [re.match(r"//\s*(\S+)", b["query"]).group(1) for b in QUERIES]
-        self.assertEqual(len(ids), len(set(ids)))
+        host_ids = [i for i in ids if not i.startswith("W")]
+        self.assertEqual(len(host_ids), len(set(host_ids)))
+        # ... except the web access log checks, which run once per group (hosts, AWS)
+        web_ids = [i for i in ids if i.startswith("W")]
+        self.assertEqual(len(set(web_ids)), 11)
+        self.assertEqual(len(web_ids), 22)
         # TRI-05 keeps _index, so it reads both Windows hosts but keeps rows of the requesting ones.
         tri05_text = next(b["query"] for b in QUERIES if b["query"].startswith("// TRI-05"))
         self.assertIn("FROM amcache-rd01, amcache-ws-02 METADATA _index", tri05_text)
@@ -386,7 +398,7 @@ class UnitTest(unittest.TestCase):
             files = r.checklists_for(target)
             self.assertEqual(files[0], r.BASELINES[r.ROLES[role][0]])
             self.assertTrue(r.build_plan(files), role)
-        self.assertEqual(len(r.build_plan(r.checklists_for(r.Target("aws", "AWS")))), 31)
+        self.assertEqual(len(r.build_plan(r.checklists_for(r.Target("aws", "AWS")))), 42)   # 31 AWS + 11 web access log checks
         self.assertEqual(len(r.ROLES), 12)
 
     def test_container_and_jump_host_checks_are_in_the_linux_baseline(self):

@@ -1,0 +1,53 @@
+// WTRI-01 | Web access log coverage per index and source: time range, status mix and which fields are filled
+// Tactic: Triage (first cut) | ATT&CK: n/a
+// Indexes: httpdlog-* | Needs: web access logs in httpdlog-* (ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd)
+FROM httpdlog-* METADATA _index
+| EVAL status = COALESCE(http.response.status_code, 0)
+| STATS
+    events = COUNT(*),
+    first_seen = MIN(@timestamp),
+    last_seen = MAX(@timestamp),
+    clients = COUNT_DISTINCT(source.ip),
+    s2xx = COUNT(*) WHERE status >= 200 AND status < 300,
+    s3xx = COUNT(*) WHERE status >= 300 AND status < 400,
+    s4xx = COUNT(*) WHERE status >= 400 AND status < 500,
+    s5xx = COUNT(*) WHERE status >= 500,
+    no_status = COUNT(*) WHERE status == 0,
+    with_method = COUNT(http.request.method),
+    with_path = COUNT(url.path),
+    with_query = COUNT(url.query),
+    with_user_agent = COUNT(user_agent.original),
+    with_referrer = COUNT(http.request.referrer),
+    with_response_bytes = COUNT(destination.bytes),
+    with_request_bytes = COUNT(source.bytes),
+    unparsed_requests = COUNT(sof-elk.rawrequest),
+    methods = VALUES(http.request.method),
+    domains = VALUES(url.domain)
+  BY _index, event.dataset
+| EVAL days = DATE_DIFF("day", first_seen, last_seen) + 1
+| EVAL domains = MV_SLICE(domains, 0, 9), methods = MV_SLICE(methods, 0, 19)
+| KEEP
+    _index,
+    event.dataset,
+    events,
+    first_seen,
+    last_seen,
+    days,
+    clients,
+    s2xx,
+    s3xx,
+    s4xx,
+    s5xx,
+    no_status,
+    with_method,
+    with_path,
+    with_query,
+    with_user_agent,
+    with_referrer,
+    with_response_bytes,
+    with_request_bytes,
+    unparsed_requests,
+    methods,
+    domains
+| SORT _index, event.dataset
+| LIMIT 1000

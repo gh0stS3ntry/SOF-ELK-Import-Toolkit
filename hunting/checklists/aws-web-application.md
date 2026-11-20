@@ -16,6 +16,7 @@ Internet-facing applications behind an Application Load Balancer, Classic ELB or
 | 2.1 | Exploitation attempts in the web access logs (ALB/ELB and other web servers), per client | [AIA-04](../queries/aws/TA0001-initial-access/AIA-04-web-exploitation-attempts/) | 2.4, 2.4.4 | SQL injection, path traversal, Log4Shell/JNDI, template injection and scanner user agents; the clients with the highest scores and the status codes they got (2xx after many 4xx matters). |
 | 2.2 | WAF blocked clients, and what the same clients got through | [AIA-05](../queries/aws/TA0001-initial-access/AIA-05-waf-blocked-and-allowed-sources/) | 2.4, 2.4.4 | Clients blocked many times that also have ALLOW requests: the WAF caught some of the attack, not all. |
 | 2.3 | WAF rules that matched but did not block | [AIA-06](../queries/aws/TA0001-initial-access/AIA-06-waf-count-mode-matches/) | 2.4 | Managed rules in Count mode and labels on allowed requests (SQLi, bad inputs, known bad IPs): those requests reached the application. |
+| 2.4 | Access-log checks derived from the OWASP WSTG, across ALB, CloudFront and other web logs |  | 2.4 | Run the [web access log checklist](web-access-logs.md): forced browsing, injection classes beyond row 2.1, method abuse, ALB desync classifications, access-control bypass, uploads, login and session attacks, ID enumeration, floods. The checklist runner runs it with the AWS checklists. |
 
 ## 3. Web shells and follow-on
 

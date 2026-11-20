@@ -1,0 +1,54 @@
+// WIM-01 | Request floods and server-error bursts per client and minute: application-layer DoS, ReDoS and fuzzing that breaks the application (5xx), rate limits hit (429)
+// Tactic: TA0040 Impact | ATT&CK: T1499.002, T1499.003, T1499.004
+// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd
+FROM httpdlog-* METADATA _index
+| WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
+| EVAL status = COALESCE(http.response.status_code, 0)
+| EVAL minute = DATE_TRUNC(1 minute, @timestamp)
+| STATS
+    requests = COUNT(*),
+    errors_5xx = COUNT(*) WHERE status >= 500,
+    throttled = COUNT(*) WHERE status == 429,
+    paths = COUNT_DISTINCT(url.path),
+    paths_5xx = VALUES(url.path) WHERE status >= 500,
+    user_agents = VALUES(user_agent.original)
+  BY _index, source.ip, minute
+| INLINE STATS median_rpm = MEDIAN(requests), p99_rpm = PERCENTILE(requests, 99) BY _index
+| WHERE requests >= 300 OR errors_5xx >= 20 OR (requests >= 60 AND requests >= 20 * median_rpm)  // EDIT: thresholds per minute
+| STATS
+    busy_minutes = COUNT(*),
+    peak_rpm = MAX(requests),
+    total_requests = SUM(requests),
+    errors_5xx = SUM(errors_5xx),
+    peak_5xx_per_minute = MAX(errors_5xx),
+    throttled = SUM(throttled),
+    max_distinct_paths = MAX(paths),
+    median_rpm = MAX(median_rpm),
+    p99_rpm = MAX(p99_rpm),
+    paths_5xx = VALUES(paths_5xx),
+    user_agents = VALUES(user_agents),
+    first_minute = MIN(minute),
+    last_minute = MAX(minute)
+  BY _index, source.ip
+| EVAL score = CASE(peak_rpm >= 600, 2, CASE(peak_rpm >= 300, 1, 0)) + CASE(peak_rpm >= 20 * median_rpm, 1, 0)
+    + CASE(errors_5xx >= 50, 2, CASE(errors_5xx >= 20, 1, 0)) + CASE(throttled > 0, 1, 0) + CASE(busy_minutes >= 10, 1, 0)
+| EVAL paths_5xx = MV_SLICE(paths_5xx, 0, 19), user_agents = MV_SLICE(user_agents, 0, 4)
+| KEEP
+    _index,
+    score,
+    source.ip,
+    busy_minutes,
+    peak_rpm,
+    median_rpm,
+    p99_rpm,
+    total_requests,
+    errors_5xx,
+    peak_5xx_per_minute,
+    throttled,
+    max_distinct_paths,
+    first_minute,
+    last_minute,
+    paths_5xx,
+    user_agents
+| SORT score DESC, peak_rpm DESC
+| LIMIT 1000

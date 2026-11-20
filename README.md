@@ -30,12 +30,14 @@ sof_elk_all_importers/
 │   │   ├── wxtcmd2sofelk.py
 │   │   ├── recmd2sofelk.py
 │   │   ├── clrusagelogs2sofelk.py
+│   │   ├── iisgeolocate2sofelk.py
 │   │   ├── sof_elk_csv_bulk_common.py
 │   │   ├── sof_elk_index_templates.py
 │   │   └── sof_elk_template_importer.py
 │   ├── index_templates/
 │   │   ├── component-toolkit-common.json
 │   │   ├── index-amcache.json
+│   │   ├── index-httpdlog.json
 │   │   ├── index-jumplist.json
 │   │   ├── index-registry.json
 │   │   ├── index-shellbag.json
@@ -146,6 +148,8 @@ Wrapper options:
 | `--timeout SECONDS` | Time to wait for each Elasticsearch HTTP response; default `300`. Passed to every importer. |
 | `--log-file PATH` | Append every importer's command line, retries, per-batch bulk results, and item-level errors to this file. Passed to every importer. |
 
+**IIS access logs.** iisGeolocate CSVs (and its `BadDataRows_REVIEW_ME.txt`) and raw IIS `u_ex*.log` W3C logs go to `Windows/csv_importers/iisgeolocate2sofelk.py`, which loads them into `httpdlog-<hostname>`. They are staged with their folder layout, so `log.file.path` is the path under the input directory. `--local-tz` is not passed, because IIS writes W3C times in UTC.
+
 **Linux (UAC) collections.** The wrapper also recognises UAC output, either a folder holding `uac.log` (with `[root]/`, `journal/`, `live_response/` or `bodyfile/` beside it) or a `.zip` with `uac.log` at its top, and runs `Linux/linux2sofelk.py` on each collection with the wrapper's host name, `--case`, Elasticsearch, retry, log and dry-run options. `--local-tz` is not passed: the Linux importers read the time zone from the evidence. A UAC collection is not searched for Windows exports. If a collection has binary journal files but no `journalctl -o json` export, that collection is reported as failed (exit status `3`) with the commands to make the export; see [`Linux/README.md`](Linux/README.md).
 
 **AWS logs.** The wrapper also finds AWS CloudTrail, VPC Flow, ALB/ELB access, CloudFront access, WAF, Route 53 Resolver query, Security Hub finding and EKS audit logs, plain or `.gz`, in their native formats, already converted to CSV (Athena, Logs Insights, Event history), or exported from Amazon Security Lake (OCSF records as JSON or Athena CSV). Every file that no Windows importer claimed is checked with the AWS importers' own `detect()` signatures, so the wrapper selects exactly the files the importer would accept (CloudTrail digest files are skipped). A native or CSV file goes to the first match in the order CloudTrail, WAF, Security Hub, EKS audit, Route 53 Resolver, CloudFront, ALB/ELB, VPC Flow. A Security Lake export goes to every importer whose source occurs in it (a lake-wide export can hold CloudTrail, VPC Flow, Route 53 and Security Hub records together), and each loads only its own records. The wrapper's host name becomes each importer's `--source`, so the indexes are `aws-cloudtrail-<hostname>`, `aws-vpcflow-<hostname>`, `aws-waf-<hostname>`, `aws-route53-<hostname>`, `aws-securityhub-<hostname>`, `kubernetes-<hostname>` and `httpdlog-<hostname>`. Security Lake's Parquet files are not read; download Athena results as CSV instead. `--case`, Elasticsearch, retry, log, `--sample-docs` and dry-run options are passed through; `--local-tz` is not (AWS times are UTC). AWS files are staged with their folder layout under the input directory, so the `AWSLogs/<account>/<service>/<region>/` S3 key still supplies the account and region, and `log.file.path` matches a direct run. See [`AWS/README.md`](AWS/README.md).
@@ -174,6 +178,7 @@ Hostnames are normalized the same way by every importer: lowercased (Elasticsear
 | `csv_importers/srumecmd2sofelk.py` | Eric Zimmerman SrumECmd | CSV | `srum-<hostname>` |
 | `csv_importers/sumecmd2sofelk.py` | Eric Zimmerman SumECmd | CSV | `sum-<hostname>` |
 | `csv_importers/wxtcmd2sofelk.py` | Eric Zimmerman WxTCmd | CSV | `activitiescache-<hostname>` |
+| `csv_importers/iisgeolocate2sofelk.py` | IIS W3C access logs: iisGeolocate CSV output or raw `u_ex*.log` | CSV / W3C text, `.gz` | `httpdlog-<hostname>` (`event.dataset` `iis.access`) |
 | `json_importers/mftecmd2sofelk.py` | Eric Zimmerman MFTECmd | JSON / JSON.GZ / CSV | `filesystem-<hostname>` |
 | `json_importers/evtxecmd2sofelk.py` | Eric Zimmerman EvtxECmd | JSON / JSON.GZ / CSV | `evtxlogs-<hostname>` |
 | `json_importers/lecmd2sofelk.py` | Eric Zimmerman LECmd | JSON / JSON.GZ / CSV | `lnkfiles-<hostname>` |
@@ -195,7 +200,7 @@ The per-host index names are intended to be discovered by the corresponding Kiba
 
 CSV importers do a type-inference pass before ingestion, convert recognized values, establish or extend mappings, and send documents through Elasticsearch's `_bulk` API. They retain the source-specific fields and metadata implemented by the importer, but the legacy KAPE CSV importers deliberately do not write the `forensic_tag` field in indexed documents. Source-specific classification may still be used internally by the importer.
 
-All thirteen CSV importers accept an input file or directory, search directories recursively, and support `--hostname`, `--case`, `--es`, `--batch-size`, `--user`, `--password`, `--insecure`, `--dry-run`, and the retry/logging options described under [Retries and logging](#retries-and-logging). The remaining options differ by importer:
+All fourteen CSV importers accept an input file or directory, search directories recursively, and support `--hostname`, `--case`, `--es`, `--batch-size`, `--user`, `--password`, `--insecure`, `--dry-run`, and the retry/logging options described under [Retries and logging](#retries-and-logging). The remaining options differ by importer:
 
 | Importer(s) | Inputs | Additional options |
 |---|---|---|
@@ -203,6 +208,7 @@ All thirteen CSV importers accept an input file or directory, search directories
 | `nirsoft_bhv` | one or more files/folders | `--index`, `--tz` (required), `--date-order` |
 | `recentfilecache`, `sqlecmd`, `sumecmd` | one file or folder | `--local-tz`, `--workers`, `--sample-docs` |
 | `clrusagelogs` | one file or folder | `--sample-docs` |
+| `iisgeolocate` | one or more files/folders | `--index`, `--sample-docs` (`--local-tz` is accepted and ignored: W3C times are UTC) |
 
 Most CSV importers use source filename clues and/or characteristic CSV headers to recognize the appropriate output type. When given a folder, the RecentFileCacheParser and SQLECmd importers select a CSV if its filename contains a tool clue or its header matches the same signature the wrapper uses; SumECmd relies on filename clues only.
 
@@ -369,6 +375,19 @@ python3 Windows/csv_importers/clrusagelogs2sofelk.py /cases/IR-2026-042/CLRUsage
 
 The wrapper can identify this output from its filename and the characteristic five-column header, so a standalone invocation is normally only needed when testing or troubleshooting the importer.
 
+### 14. `iisgeolocate2sofelk.py`
+
+Loads IIS web server access logs into `httpdlog-<hostname>`, next to the ALB/ELB, CloudFront, Apache, nginx and lighttpd logs, so the [web access log checklist](hunting/checklists/web-access-logs.md) and `FROM httpdlog-*` hunts cover IIS too. It reads the CSVs written by [iisGeolocate](https://github.com/EricZimmerman/iisGeolocate) (`<run>_<log name>_Chunk<N>.csv`: the log's own W3C columns plus `GeoCity` and `GeoCountry`) and raw IIS W3C extended logs (`u_ex*.log`, with or without `.gz`), whose `#Fields` lines set the columns. Fields use SOF-ELK's IIS names from its `6100-httpd.conf` parser: `c-ip` is `source.ip`, `s-ip` is `destination.ip`, `cs-uri-stem` is `url.path`, `cs-uri-query` is `url.query`, `sc-status` is `http.response.status_code`, `sc-substatus` is `http.response.substatus_code`, `sc-win32-status` is `process.exit_code`, `sc-bytes` is `destination.bytes`, `cs-bytes` is `source.bytes`, `cs-username` is `client.user.name`, `cs(User-Agent)` is `user_agent.original` (with IIS's `+` turned back into spaces), `cs-host` is `url.domain`, `s-sitename` is `service.name`, `s-computername` is `host.hostname` and `time-taken` is `iis.time_taken.ms` and `event.duration`. iisGeolocate's `GeoCity` and `GeoCountry` become `source.geo.city_name` and `source.geo.country_name` (`NA`, iisGeolocate's value for private and unknown addresses, is left out, and `United_States` becomes `United States`). Columns the importer does not know are kept under `iis.unmapped.*`. Every document has `event.dataset` `iis.access`, `host.os.type` `windows` and `log.file.path`. Field reference: [`docs/schemas/iis.md`](docs/schemas/iis.md).
+
+Document IDs come from the request line itself and the log's name (the run prefix and `_Chunk<N>` are removed), so re-running, loading another iisGeolocate run, or loading the raw `u_ex*.log` after its iisGeolocate CSV overwrites the same documents instead of duplicating them. iisGeolocate's `!UniqueIPs.csv` and console log are recognised and skipped; the rows it listed in `BadDataRows_REVIEW_ME.txt` are counted and reported, because they are not in its CSVs (load the raw log to include them). The index is created with `Windows/index_templates/index-httpdlog.json`; no index template is installed for `httpdlog-*`, so SOF-ELK's own monthly `httpdlog-YYYY.MM` indexes are untouched. An `httpdlog-<hostname>` index made by the AWS or Linux importers is extended rather than refused; any other existing index is refused.
+
+```bash
+python3 Windows/csv_importers/iisgeolocate2sofelk.py /cases/IR-2026-042/iisGeolocate --hostname WEB01 --dry-run
+python3 Windows/csv_importers/iisgeolocate2sofelk.py /cases/IR-2026-042/iisGeolocate /cases/IR-2026-042/inetpub/logs --hostname WEB01 --case IR-2026-042
+```
+
+The wrapper sends it every CSV whose header has `date`, `time`, `cs-method` and `cs-uri-stem` (and no CloudFront `x-edge-*` column), `BadDataRows_REVIEW_ME.txt`, and every `.log` file whose `#Fields` line has those columns.
+
 ## JSON importers: direct use
 
 The four importers under `Windows/json_importers/` implement the main field transformations in the corresponding SOF-ELK Logstash filters and shared preprocessing/postprocessing rules. In current versions they can ingest both the original JSON/JSON.GZ exports and corresponding CSV outputs. JSON input is parsed incrementally, so a whole export does not need to be loaded into memory. Keep `sof_elk_json_bulk_common.py` alongside all four scripts in `Windows/json_importers/`.
@@ -383,7 +402,7 @@ Timestamps are parsed with the standard library on Python 3.9 and later, includi
 
 Every document gets `host.name` (the normalized hostname, mapped as `keyword`) and, when `--case` is given, `case` (`keyword`), the same fields the CSV importers write. ES|QL queries can therefore filter `filesystem-*`, `evtxlogs-*`, `lnkfiles-*`, and `prefetch-*` by `host.name` and `case` as well as by `_index`. When an importer appends to an index created by an earlier version, it first adds the `host.name`/`case` keyword mappings; documents loaded before that do not have these fields until they are re-imported (deterministic IDs make the re-import overwrite them).
 
-### 14. `mftecmd2sofelk.py`
+### 15. `mftecmd2sofelk.py`
 
 Loads MFTECmd JSON or CSV into `filesystem-<hostname>`. JSON directory searches use MFTECmd output filename patterns, including `*_MFTECmd*_Output.json` and gzip equivalents; CSV discovery also accepts MFTECmd output CSVs. The importer transforms standard-information and filename MACB timestamps into `file.stdinfo.*` and `file.filename.*`, creates `file.name`, `file.path`, and `file.type`, translates `kape.mft.*`, converts NTFS attributes to boolean properties, handles alternate data streams, splits update reasons, and selects `@timestamp` from the most appropriate available MFT/USN time field.
 
@@ -396,7 +415,7 @@ python3 Windows/json_importers/mftecmd2sofelk.py /cases/IR-2026-042 --hostname W
 python3 Windows/json_importers/mftecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --es http://localhost:9200
 ```
 
-### 15. `evtxecmd2sofelk.py`
+### 16. `evtxecmd2sofelk.py`
 
 Loads EvtxECmd JSON or CSV into `evtxlogs-<hostname>`. JSON directory searches use `*_EvtxECmd_Output.json` and gzip equivalents; CSV discovery also accepts EvtxECmd output CSVs. The importer maps Windows event fields to `winlog.*` and KAPE fields, parses `Payload` JSON where present, expands supported event-data values, maps UserData/Binary, writes `UserId` to `winlog.user.identifier` (the native SOF-ELK name) and also copies it to `user.id`, parses remote IP/port where possible, splits keywords, and constructs the summary `message`.
 
@@ -409,7 +428,7 @@ python3 Windows/json_importers/evtxecmd2sofelk.py /cases/IR-2026-042 --hostname 
 python3 Windows/json_importers/evtxecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --workers 2
 ```
 
-### 16. `lecmd2sofelk.py`
+### 17. `lecmd2sofelk.py`
 
 Loads LECmd JSON or CSV into `lnkfiles-<hostname>`. JSON directory searches use `*_LECmd_Output.json` and gzip equivalents; CSV discovery also accepts LECmd output CSVs. The importer maps source/origin and target timestamps and paths into the SOF-ELK `file.*` layout; applies local/absolute target path precedence; handles header flags, attributes, extra blocks, empty target times, and `(None)` drive type; converts target MFT entry/sequence numbers; and selects source LNK modification time for `@timestamp`.
 
@@ -422,7 +441,7 @@ python3 Windows/json_importers/lecmd2sofelk.py /cases/IR-2026-042 --hostname WS0
 python3 Windows/json_importers/lecmd2sofelk.py /cases/IR-2026-042 --hostname WS01 --batch-size 3000 --workers 3
 ```
 
-### 17. `pecmd2sofelk.py`
+### 18. `pecmd2sofelk.py`
 
 Loads PECmd JSON or CSV into `prefetch-<hostname>`. JSON directory searches use `*_PECmd_Output.json` and gzip equivalents; CSV discovery also accepts PECmd output CSVs. `*_PECmd_Output_Timeline.json` and its CSV equivalent are deliberately excluded, since they are flattened timeline views of records already represented by regular output. The importer maps Prefetch and executable fields, splits `Directories` and `FilesLoaded`, removes configured .NET unset sentinels, converts timestamps and numeric fields, merges supported `PreviousRunN` values into `prefetch.previous_runs`, builds the summary `message`, and chooses `@timestamp` from LastRun and then source file modification time.
 
@@ -511,7 +530,7 @@ The script also applies SOF-ELK's Kibana advanced settings from `sof-elk-kibana/
 | `Linux/packages2sofelk.py` | `packages-*` | `packages-<hostname>` |
 | `Linux/linuxconfig2sofelk.py` | `linuxconfig-*` | `linuxconfig-<hostname>` |
 
-The `filesystem-*`, `evtxlogs-*`, `lnkfiles-*` and `prefetch-*` Data Views come from SOF-ELK's set. The AWS importers' indexes get the narrower patterns above, next to SOF-ELK's own `aws-*` Data View (for its Logstash CloudTrail output). `AWS/alb2sofelk.py` and `AWS/cloudfrontaccess2sofelk.py` write ALB/ELB and CloudFront access logs to `httpdlog-<source>`, which SOF-ELK's stock `httpdlog-*` Data View already covers, and `AWS/eksaudit2sofelk.py` writes EKS audit logs to `kubernetes-<source>`, covered by SOF-ELK's stock `kubernetes-*` Data View. The Linux importers write the journal, text syslog and FTP logs to `logstash-<hostname>` and web server logs to `httpdlog-<hostname>`, which SOF-ELK's stock `logstash-*` (Kibana's default) and `httpdlog-*` Data Views already cover, and browser history to `browsinghistory-<hostname>`, covered by the toolkit's `browsinghistory-*` Data View. The other Linux indexes get the toolkit Data Views `auditd-*`, `bodyfile-*`, `wtmp-*`, `packages-*` and `linuxconfig-*`.
+The `filesystem-*`, `evtxlogs-*`, `lnkfiles-*` and `prefetch-*` Data Views come from SOF-ELK's set. The AWS importers' indexes get the narrower patterns above, next to SOF-ELK's own `aws-*` Data View (for its Logstash CloudTrail output). `AWS/alb2sofelk.py` and `AWS/cloudfrontaccess2sofelk.py` write ALB/ELB and CloudFront access logs to `httpdlog-<source>`, which SOF-ELK's stock `httpdlog-*` Data View already covers, and `AWS/eksaudit2sofelk.py` writes EKS audit logs to `kubernetes-<source>`, covered by SOF-ELK's stock `kubernetes-*` Data View. `Windows/csv_importers/iisgeolocate2sofelk.py` writes IIS access logs to `httpdlog-<hostname>`, also covered by the stock `httpdlog-*` Data View. The Linux importers write the journal, text syslog and FTP logs to `logstash-<hostname>` and web server logs to `httpdlog-<hostname>`, which SOF-ELK's stock `logstash-*` (Kibana's default) and `httpdlog-*` Data Views already cover, and browser history to `browsinghistory-<hostname>`, covered by the toolkit's `browsinghistory-*` Data View. The other Linux indexes get the toolkit Data Views `auditd-*`, `bodyfile-*`, `wtmp-*`, `packages-*` and `linuxconfig-*`.
 
 The script uses Kibana's Data Views API and is standard-library only. By default it is idempotent: an existing Data View is detected and left unchanged. Use `--overwrite` to delete and recreate the managed views (SOF-ELK's are recreated with the same ids, so its dashboards keep working on a SOF-ELK VM). The Data Views are configured to use `@timestamp` as the time field and `allowNoIndex=true`, so they can be created before the first corresponding Elasticsearch index exists.
 
@@ -628,18 +647,18 @@ python3 SOF-ELK_RunChecklists.py IR-2026-042 ./IR-2026-042-hunt --es http://192.
 The two arguments are the case name (as given to the importers with `--case`; upper/lower case ignored) and the output directory (created if missing). The script then:
 
 1. Finds every index holding documents of the case, and groups them into hosts by the `<prefix>-<hostname>` suffix (`host.name` gives the folder name, such as `RD01`). SOF-ELK's own dated indexes (`logstash-2026.10`) are ignored. Generic-CSV and Generic-JSON indexes (`genericcsv-*`, `genericjson-*`) are ignored too: they have no fixed schema, so they never form or join a host and no checklist query reads them (the run lists them as ignored).
-2. Groups the AWS indexes (`aws-cloudtrail-*`, `aws-vpcflow-*`, `aws-waf-*`, and `httpdlog-*` loaded by `AWS/alb2sofelk.py` or `AWS/cloudfrontaccess2sofelk.py`) into one `AWS` target that runs the three AWS checklists without a prompt. A Linux web server's own `httpdlog-<host>` stays with that host.
+2. Groups the AWS indexes (`aws-cloudtrail-*`, `aws-vpcflow-*`, `aws-waf-*`, and `httpdlog-*` loaded by `AWS/alb2sofelk.py` or `AWS/cloudfrontaccess2sofelk.py`) into one `AWS` target that runs the three AWS checklists, plus the web access log checklist (`hunting/checklists/web-access-logs.md`), without a prompt. A Linux or IIS web server's own `httpdlog-<host>` stays with that host.
 3. Asks the role of every other host, by number or name. A host with several roles takes them comma-separated (`6,5` for a DC that is also a file server); `s` skips the host.
 
 | # | Role | Checklists run |
 |---|---|---|
 | 1 | `windows-end-user` | Windows baseline + end-user workstation |
-| 2 | `windows-web-server` | Windows baseline + web server |
+| 2 | `windows-web-server` | Windows baseline + web server + web access logs |
 | 3 | `windows-exchange-server` | Windows baseline + Exchange server |
 | 4 | `windows-database-server` | Windows baseline + database server |
 | 5 | `windows-file-server` | Windows baseline + file server |
 | 6 | `windows-domain-controller` | Windows baseline + domain controller |
-| 7 | `linux-web-server` | Linux baseline + Linux web server |
+| 7 | `linux-web-server` | Linux baseline + Linux web server + web access logs |
 | 8 | `linux-database-server` | Linux baseline + Linux database server |
 | 9 | `linux-file-server` | Linux baseline + Linux file server |
 | 10 | `linux-backup-server` | Linux baseline + Linux backup server |
@@ -704,7 +723,7 @@ It creates `forensic-elk\`, downloads both Windows zips from artifacts.elastic.c
 | `discovery.type` | `single-node` | Standalone node; no production bootstrap checks for the non-loopback bind. |
 | `xpack.security.enabled` (and enrollment, HTTP/transport TLS) | `false` | No username or password for the Kibana UI or the REST APIs. Written before the first start, so Elasticsearch never auto-generates TLS certificates or the `elastic` password. |
 | `elasticsearch.hosts` | `http://127.0.0.1:9200` | Connects Kibana to Elasticsearch. With security disabled there is no enrolment token to use; this is the whole integration. |
-| Index templates | SOF-ELK's native component and index templates from [`sof-elk-templates/`](sof-elk-templates/README.md) (`evtxlogs`, `filesystem`, `lnkfiles`, `aws`, `zeek` and the rest, under SOF-ELK's own names), plus the toolkit's templates from `Windows/`, `AWS/`, `Generic-CSV/`, `Generic-JSON/` and `Linux/index_templates/` (`sofelk-toolkit-*`; `AWS/index_templates/index-httpdlog.json`, `AWS/index_templates/index-kubernetes.json`, `Linux/index_templates/index-httpdlog.json` and `Linux/index_templates/index-logstash.json` are left out, as their importers never install them as templates over SOF-ELK's own families) | New indexes get the same settings and mappings as on a SOF-ELK VM with the toolkit, even before the first import. Copied to `forensic-elk\templates\` and loaded by `forensic-elk\load-templates.ps1`. |
+| Index templates | SOF-ELK's native component and index templates from [`sof-elk-templates/`](sof-elk-templates/README.md) (`evtxlogs`, `filesystem`, `lnkfiles`, `aws`, `zeek` and the rest, under SOF-ELK's own names), plus the toolkit's templates from `Windows/`, `AWS/`, `Generic-CSV/`, `Generic-JSON/` and `Linux/index_templates/` (`sofelk-toolkit-*`; `Windows/index_templates/index-httpdlog.json`, `AWS/index_templates/index-httpdlog.json`, `AWS/index_templates/index-kubernetes.json`, `Linux/index_templates/index-httpdlog.json` and `Linux/index_templates/index-logstash.json` are left out, as their importers never install them as templates over SOF-ELK's own families) | New indexes get the same settings and mappings as on a SOF-ELK VM with the toolkit, even before the first import. Copied to `forensic-elk\templates\` and loaded by `forensic-elk\load-templates.ps1`. |
 | Firewall rules (group "Forensic ELK") | Inbound TCP 9200/5601 from `LocalSubnet`, tied to the bundled `java.exe`/`node.exe` | Lets VMs on host-only/NAT/Hyper-V networks connect. Change the scope with `-FirewallRemoteAddress 192.168.56.0/24`, or skip with `-SkipFirewall`. Without Administrator rights the script skips this and warns. |
 
 Other options: `-InstallRoot DIR` (where `forensic-elk` is created; default is the current directory), `-HeapSize 4g` (fixed JVM heap instead of automatic sizing), `-SkipTemplates` (do not stage or load any templates), `-NoStart` (configure only), `-KeepDownloads` (keep the zip files), and `-StartupTimeoutSeconds N` (how long `start.bat` waits for each service; default 300).
