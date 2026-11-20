@@ -1,6 +1,6 @@
 // WTRI-01 | Web access log coverage per index and source: time range, status mix and which fields are filled
 // Tactic: Triage (first cut) | ATT&CK: n/a
-// Indexes: httpdlog-* | Needs: web access logs in httpdlog-* (ALB/ELB, CloudFront, Apache, nginx, lighttpd)
+// Indexes: httpdlog-* | Needs: web access logs in httpdlog-* (ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd)
 FROM httpdlog-* METADATA _index
 | EVAL status = COALESCE(http.response.status_code, 0)
 | STATS

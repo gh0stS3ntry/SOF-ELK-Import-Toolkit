@@ -45,6 +45,8 @@ INDICES = {
     "logstash-kali": [doc(**{"host.name": "kali", "host.os.type": "linux"})] * 4,
     "bodyfile-kali": [doc(**{"host.name": "kali", "host.os.type": "linux"})],
     "httpdlog-kali": [doc(**{"host.name": "kali", "host.os.type": "linux"})],
+    # IIS access logs (iisgeolocate2sofelk.py): a Windows host's httpdlog index stays with that host.
+    "httpdlog-rd01": [doc(**{"host.name": "RD01", "host.os.type": "windows", "event.dataset": "iis.access"})],
     "aws-cloudtrail-111122223333": [doc(**{"labels.evidence_source": "111122223333", "cloud.provider": "aws"})],
     "httpdlog-111122223333": [doc(**{"labels.evidence_source": "111122223333", "cloud.provider": "aws"})],
     "logstash-2026.10": [doc()],                       # SOF-ELK dated index: ignored
@@ -241,8 +243,9 @@ class RunnerTest(unittest.TestCase):
             if text.startswith("// A"):
                 self.assertNotIn("kali", sources)
             elif text.startswith("// W"):
-                # web access log checks run once for the hosts and once for AWS, each on its own httpdlog
-                self.assertIn(sources, ("httpdlog-kali", "httpdlog-111122223333"))
+                # web access log checks run once for the hosts (the Linux and the IIS web server
+                # together) and once for AWS, each on its own httpdlog indexes
+                self.assertIn(sources, ("httpdlog-kali, httpdlog-rd01", "httpdlog-111122223333"))
             else:
                 self.assertNotIn("111122223333", sources)
         # Each query runs once, not once per host.

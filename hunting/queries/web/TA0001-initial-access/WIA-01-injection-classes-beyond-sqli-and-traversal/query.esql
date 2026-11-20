@@ -1,6 +1,6 @@
 // WIA-01 | Injection classes beyond SQLi and traversal (SSTI, SSRF and out-of-band callbacks, XXE, NoSQL/LDAP/XPath, deserialization, prototype pollution, CRLF, encoding evasion, file inclusion, open redirect, CSV, mass assignment), scored per client
 // Tactic: TA0001 Initial Access | ATT&CK: T1190, T1595.002
-// Indexes: httpdlog-* | Needs: web access logs with the query string (url.query): ALB/ELB, CloudFront, Apache, nginx, lighttpd
+// Indexes: httpdlog-* | Needs: web access logs with the query string (url.query): ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd
 FROM httpdlog-* METADATA _index
 | WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
 | EVAL req = TO_LOWER(CONCAT(COALESCE(url.path, ""), "?", COALESCE(url.query, "")))

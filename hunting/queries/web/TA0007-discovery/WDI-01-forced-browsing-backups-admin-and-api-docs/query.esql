@@ -1,6 +1,6 @@
 // WDI-01 | Forced browsing: 404 bursts, backup and source files, VCS and config files, admin and management consoles, API docs and GraphQL introspection, and which of them were served, per client
 // Tactic: TA0007 Discovery | ATT&CK: T1595.003, T1083, T1552.001
-// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, Apache, nginx, lighttpd
+// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd
 FROM httpdlog-* METADATA _index
 | WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
 | EVAL path = TO_LOWER(COALESCE(url.path, ""))

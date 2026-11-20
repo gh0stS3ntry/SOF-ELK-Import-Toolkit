@@ -6,7 +6,7 @@
 | ATT&CK | n/a |
 | OWASP WSTG | WSTG-INFO-02, WSTG-INFO-10 (what the logs can and cannot show) |
 | Indexes | `httpdlog-*` |
-| Needs | web access logs in `httpdlog-*`: ALB/ELB (`alb2sofelk.py`), CloudFront (`cloudfrontaccess2sofelk.py`), Apache/nginx/lighttpd (`httpd2sofelk.py`) |
+| Needs | web access logs in `httpdlog-*`: ALB/ELB (`alb2sofelk.py`), CloudFront (`cloudfrontaccess2sofelk.py`), IIS (`iisgeolocate2sofelk.py`), Apache/nginx/lighttpd (`httpd2sofelk.py`) |
 | Applies to | every web evidence source; run before the other web checks |
 
 **What it finds.** One row per `httpdlog-*` index and `event.dataset` (`aws.alb`, `aws.elb_classic`, `aws.cloudfront`, `apache.access`, `nginx.access`, ...): the time range, client count, 2xx/3xx/4xx/5xx counts, and how many events have a method, path, query string, user agent, referrer, request and response size, plus request lines the importer could not parse (`unparsed_requests`).

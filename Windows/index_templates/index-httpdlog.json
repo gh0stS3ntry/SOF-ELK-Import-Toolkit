@@ -1,0 +1,269 @@
+{
+  "index_patterns": [
+    "httpdlog-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-common"
+  ],
+  "_meta": {
+    "description": "Microsoft IIS W3C access logs loaded by Windows/csv_importers/iisgeolocate2sofelk.py (iisGeolocate CSV output, or raw u_ex*.log W3C files) into httpdlog-<hostname>. SOF-ELK 6100-httpd.conf IIS field names; shared field types match AWS/index_templates/index-httpdlog.json and Linux/index_templates/index-httpdlog.json so FROM httpdlog-* spans IIS, ALB, CloudFront, Apache, nginx and lighttpd. Used as the index body only (merged with component-toolkit-common.json): no index template is installed for httpdlog-*, which is SOF-ELK's own family.",
+    "provider": "SOF-ELK-Import-Toolkit",
+    "version": 1
+  },
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "httpdlog",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "host": {
+          "properties": {
+            "hostname": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "os": {
+              "properties": {
+                "type": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        },
+        "event": {
+          "properties": {
+            "kind": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "category": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "duration": {
+              "type": "long"
+            },
+            "sequence": {
+              "type": "long"
+            }
+          }
+        },
+        "log": {
+          "properties": {
+            "file": {
+              "properties": {
+                "path": {
+                  "type": "keyword",
+                  "ignore_above": 4096
+                }
+              }
+            }
+          }
+        },
+        "service": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "source": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "integer"
+            },
+            "bytes": {
+              "type": "long"
+            },
+            "geo": {
+              "properties": {
+                "city_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "country_name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        },
+        "destination": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            },
+            "port": {
+              "type": "integer"
+            },
+            "bytes": {
+              "type": "long"
+            }
+          }
+        },
+        "client": {
+          "properties": {
+            "user": {
+              "properties": {
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        },
+        "http": {
+          "properties": {
+            "version": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "request": {
+              "properties": {
+                "method": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "referrer": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                },
+                "cookie": {
+                  "type": "keyword",
+                  "ignore_above": 8191
+                }
+              }
+            },
+            "response": {
+              "properties": {
+                "status_code": {
+                  "type": "short"
+                },
+                "substatus_code": {
+                  "type": "short"
+                }
+              }
+            }
+          }
+        },
+        "process": {
+          "properties": {
+            "exit_code": {
+              "type": "long"
+            }
+          }
+        },
+        "url": {
+          "properties": {
+            "original": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "scheme": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "domain": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "path": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "query": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "extension": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "user_agent": {
+          "properties": {
+            "original": {
+              "type": "keyword",
+              "ignore_above": 8191
+            }
+          }
+        },
+        "tls": {
+          "properties": {
+            "cipher": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "protocol": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "xff": {
+          "properties": {
+            "ip": {
+              "type": "ip"
+            }
+          }
+        },
+        "tags": {
+          "type": "keyword",
+          "ignore_above": 1024
+        },
+        "iis": {
+          "properties": {
+            "time_taken": {
+              "properties": {
+                "ms": {
+                  "type": "long"
+                }
+              }
+            },
+            "win32_status": {
+              "type": "long"
+            },
+            "source_format": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "malformed": {
+              "type": "keyword",
+              "ignore_above": 8191
+            },
+            "unmapped": {
+              "type": "object",
+              "dynamic": "true"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 // WIA-02 | HTTP method abuse: PUT/DELETE/WebDAV writes that succeeded, TRACE/TRACK/DEBUG, unknown verbs and method-override parameters, per client and method
 // Tactic: TA0001 Initial Access | ATT&CK: T1190, T1505.003
-// Indexes: httpdlog-* | Needs: web access logs with the request method: ALB/ELB, CloudFront, Apache, nginx, lighttpd
+// Indexes: httpdlog-* | Needs: web access logs with the request method: ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd
 FROM httpdlog-* METADATA _index
 | WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
 | EVAL method = TO_UPPER(COALESCE(http.request.method, "(none)"))

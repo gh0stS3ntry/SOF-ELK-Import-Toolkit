@@ -1,6 +1,6 @@
 // WCA-01 | Login brute force, credential stuffing, account enumeration, password-reset and MFA code abuse against web sign-in endpoints, per client
 // Tactic: TA0006 Credential Access | ATT&CK: T1110.001, T1110.003, T1110.004, T1589.001
-// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, Apache, nginx, lighttpd (client.user.name only from Apache/nginx logs with HTTP authentication)
+// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd (client.user.name only from IIS logs and from Apache/nginx logs with HTTP authentication)
 FROM httpdlog-* METADATA _index
 | WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
 | EVAL path = TO_LOWER(COALESCE(url.path, ""))

@@ -1,6 +1,6 @@
 // WCA-02 | Passwords, API keys, session IDs and JWTs in URLs, and the same token used from several clients (session hijacking)
 // Tactic: TA0006 Credential Access | ATT&CK: T1552.001, T1539, T1550.004
-// Indexes: httpdlog-* | Needs: web access logs with the query string (url.query): ALB/ELB, CloudFront, Apache, nginx, lighttpd
+// Indexes: httpdlog-* | Needs: web access logs with the query string (url.query): ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd
 FROM httpdlog-* METADATA _index
 | WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
 | EVAL raw = CONCAT(COALESCE(url.path, ""), "?", COALESCE(url.query, ""))

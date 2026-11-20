@@ -6,7 +6,7 @@
 | ATT&CK | T1190 Exploit Public-Facing Application, T1505.003 Web Shell |
 | OWASP WSTG | WSTG-CONF-06 HTTP Methods, WSTG-INJT-03 HTTP Verb Tampering |
 | Indexes | `httpdlog-*` |
-| Needs | web access logs in `httpdlog-*`: ALB/ELB (`alb2sofelk.py`), CloudFront (`cloudfrontaccess2sofelk.py`), Apache/nginx/lighttpd (`httpd2sofelk.py`) |
+| Needs | web access logs in `httpdlog-*`: ALB/ELB (`alb2sofelk.py`), CloudFront (`cloudfrontaccess2sofelk.py`), IIS (`iisgeolocate2sofelk.py`), Apache/nginx/lighttpd (`httpd2sofelk.py`) |
 | Applies to | every web server; IIS and Tomcat with WebDAV or PUT enabled first |
 
 **What it finds.** Requests with any method other than GET, POST, HEAD and OPTIONS, and requests with a method-override parameter (`_method=`, `x-http-method-override`), grouped by client and method. Scored: a write method (PUT, DELETE, PATCH, MOVE, COPY, MKCOL) that got a 2xx +3, a script file (`.php`, `.jsp`, `.aspx`, `.war`, `.htaccess`, ...) written with a 2xx +3, WebDAV methods +1, TRACE/TRACK/DEBUG/CONNECT +1 (+2 when answered 2xx), a method no RFC defines +2, method override +2.

@@ -407,7 +407,7 @@ def group_targets(client, case, counts):
             skipped.append((index, "SOF-ELK dated index, not a per-host index"))
             continue
         profiles[index] = index_profile(client, index, case)
-    # Suffixes that also have a non-AWS host index (a Linux web server's httpdlog-<host>).
+    # Suffixes that also have a non-AWS host index (a Linux or IIS web server's httpdlog-<host>).
     host_suffixes = {split_index(i)[1] for i, p in profiles.items()
                      if split_index(i)[0] not in AWS_FAMILIES | {"httpdlog"}
                      and p.get("cloud.provider") != "aws"}

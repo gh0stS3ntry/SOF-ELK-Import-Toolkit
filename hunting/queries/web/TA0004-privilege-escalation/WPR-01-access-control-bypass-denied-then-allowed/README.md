@@ -6,7 +6,7 @@
 | ATT&CK | T1190 Exploit Public-Facing Application, T1078 Valid Accounts |
 | OWASP WSTG | WSTG-ATHZ-02 Bypassing Authorization Schema, WSTG-ATHZ-03 Privilege Escalation, WSTG-CONF-13 Path Confusion, WSTG-CONF-06 (access control bypass), WSTG-APIT-04 |
 | Indexes | `httpdlog-*` |
-| Needs | web access logs in `httpdlog-*`: ALB/ELB (`alb2sofelk.py`), CloudFront (`cloudfrontaccess2sofelk.py`), Apache/nginx/lighttpd (`httpd2sofelk.py`) |
+| Needs | web access logs in `httpdlog-*`: ALB/ELB (`alb2sofelk.py`), CloudFront (`cloudfrontaccess2sofelk.py`), IIS (`iisgeolocate2sofelk.py`), Apache/nginx/lighttpd (`httpd2sofelk.py`) |
 | Applies to | web applications and reverse proxies that protect admin or internal paths |
 
 **What it finds.** Paths that some request was refused (401/403), normalised so that `/admin;x/`, `/admin/./`, `//admin`, `/%2e/admin` and `/admin/` are the same resource. Per client and path: refusals, 2xx answers, and 2xx answers reached through a path-confusion form (path parameters, `..;/`, encoded dots, slashes and backslashes, doubled slashes, trailing dots or spaces), through a different letter case on admin-like paths, or with a method other than GET/POST (HEAD or an invented verb). Scored: 2xx through a path trick +3, through a method change after a refusal +3, through a case change +2, 403 then 2xx for the same client +2, a client that never got refused reaching a path others were refused +1.

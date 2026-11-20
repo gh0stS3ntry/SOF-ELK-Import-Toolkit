@@ -6,7 +6,7 @@
 | ATT&CK | T1190 Exploit Public-Facing Application, T1595.002 Vulnerability Scanning |
 | OWASP WSTG | WSTG-INJT-16 HTTP Request Smuggling, WSTG-INJT-15 HTTP Response Splitting, WSTG-CONF-16 Web Cache Poisoning |
 | Indexes | `httpdlog-*` |
-| Needs | web access logs in `httpdlog-*`: ALB/ELB (`alb2sofelk.py`), CloudFront (`cloudfrontaccess2sofelk.py`), Apache/nginx/lighttpd (`httpd2sofelk.py`) |
+| Needs | web access logs in `httpdlog-*`: ALB/ELB (`alb2sofelk.py`), CloudFront (`cloudfrontaccess2sofelk.py`), IIS (`iisgeolocate2sofelk.py`), Apache/nginx/lighttpd (`httpd2sofelk.py`) |
 | Applies to | applications behind an ALB, ELB or CloudFront first; any web server for unparsed request lines |
 
 **What it finds.** Clients that sent requests the server or load balancer could not parse or classified as dangerous: request lines the importer kept only as `sof-elk.rawrequest` (binary, TLS on a plain HTTP port, broken framing), ALB HTTP desync mitigation `Ambiguous` and `Severe` classifications with their reason codes, CloudFront `Error` edge results, unusual HTTP versions, and bursts of 400/405/408/411/413/414/431/501/505. Scored: Severe +4, Ambiguous +2, unparsed +2, odd version +1, 20 or more bad-status answers +1, 20 or more CloudFront errors +1.

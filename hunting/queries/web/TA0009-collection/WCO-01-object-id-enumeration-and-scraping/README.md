@@ -6,7 +6,7 @@
 | ATT&CK | T1213 Data from Information Repositories, T1119 Automated Collection |
 | OWASP WSTG | WSTG-ATHZ-04 Insecure Direct Object References, WSTG-APIT-02 Broken Object Level Authorization, WSTG-APIT-03 Excessive Data Exposure, WSTG-BUSL-05 |
 | Indexes | `httpdlog-*` |
-| Needs | web access logs in `httpdlog-*`: ALB/ELB (`alb2sofelk.py`), CloudFront (`cloudfrontaccess2sofelk.py`), Apache/nginx/lighttpd (`httpd2sofelk.py`) |
+| Needs | web access logs in `httpdlog-*`: ALB/ELB (`alb2sofelk.py`), CloudFront (`cloudfrontaccess2sofelk.py`), IIS (`iisgeolocate2sofelk.py`), Apache/nginx/lighttpd (`httpd2sofelk.py`) |
 | Applies to | web applications and APIs that address records by ID (accounts, orders, invoices, documents) |
 
 **What it finds.** Every path is reduced to an endpoint template (numbers, long hex strings and UUIDs replaced, so `/api/users/1017` and `/api/users/1018` are both `/api/users/{n}`); requests with a digit in the query string count too. Per client, endpoint and method: how many distinct objects were requested, how many answered 2xx, 401/403 and 404, the bytes returned, and the speed. `median_objects` and `ratio` compare the client with everyone else on that endpoint. Rows need 50 or more objects. Scored: 10 times the median +2, 50 or more 2xx +2, a mix of 2xx and 401/403 +2 (authorization enforced for some objects, not others), mostly 404 +1 (guessing IDs), a write method +2, 30 or more requests per minute +1.

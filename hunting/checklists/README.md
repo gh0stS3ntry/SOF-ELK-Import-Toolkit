@@ -18,7 +18,7 @@ A first cut for each kind of host: what to establish about the host, and which q
 | [AWS account (CloudTrail)](aws-account-control-plane.md) | every AWS account in scope, from its CloudTrail logs |
 | [AWS web application (ALB and WAF)](aws-web-application.md) | internet-facing applications behind an ALB/ELB and AWS WAF |
 | [AWS network (VPC Flow Logs)](aws-vpc-network.md) | VPCs, subnets and interfaces with flow logs |
-| [Web access logs (OWASP WSTG)](web-access-logs.md) | every web server and web application whose access logs are in `httpdlog-*` (ALB/ELB, CloudFront, Apache, nginx, lighttpd); run with the Windows, Linux or AWS web checklist |
+| [Web access logs (OWASP WSTG)](web-access-logs.md) | every web server and web application whose access logs are in `httpdlog-*` (ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd); run with the Windows, Linux or AWS web checklist |
 | [Baseline: all Linux hosts](linux-baseline-all-hosts.md) | every Linux host |
 | [Linux web server](linux-web-server.md) | Apache, nginx and lighttpd servers and their applications |
 | [Linux database server](linux-database-server.md) | MySQL/MariaDB, PostgreSQL, MongoDB, Redis and Elasticsearch servers |
@@ -41,4 +41,4 @@ pip install openpyxl
 python3 hunting/tools/build_checklist_xlsx.py
 ```
 
-**Not covered by the pack.** Memory analysis (IR 2.2), live-response output (IR 2.3: `netstat`, `net session`, `ipconfig /displaydns`), IIS W3C access logs (no IIS importer yet; Apache, nginx, lighttpd, ALB and CloudFront logs are loaded and hunted by the [web access log checklist](web-access-logs.md)), SQL Server `ERRORLOG` and audit files, firewall/proxy/VPN logs, and email gateway logs are outside what this toolkit loads. The checklists list them where they matter so they are not forgotten.
+**Not covered by the pack.** Memory analysis (IR 2.2), live-response output (IR 2.3: `netstat`, `net session`, `ipconfig /displaydns`), Tomcat access logs (no Tomcat importer yet; IIS, Apache, nginx, lighttpd, ALB and CloudFront logs are loaded and hunted by the [web access log checklist](web-access-logs.md)), SQL Server `ERRORLOG` and audit files, firewall/proxy/VPN logs, and email gateway logs are outside what this toolkit loads. The checklists list them where they matter so they are not forgotten.

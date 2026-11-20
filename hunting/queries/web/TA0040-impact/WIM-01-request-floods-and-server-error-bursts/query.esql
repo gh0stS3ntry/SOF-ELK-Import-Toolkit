@@ -1,6 +1,6 @@
 // WIM-01 | Request floods and server-error bursts per client and minute: application-layer DoS, ReDoS and fuzzing that breaks the application (5xx), rate limits hit (429)
 // Tactic: TA0040 Impact | ATT&CK: T1499.002, T1499.003, T1499.004
-// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, Apache, nginx, lighttpd
+// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd
 FROM httpdlog-* METADATA _index
 | WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
 | EVAL status = COALESCE(http.response.status_code, 0)

@@ -6,7 +6,7 @@
 | ATT&CK | T1499.002 Service Exhaustion Flood, T1499.003 Application Exhaustion Flood, T1499.004 Application or System Exploitation |
 | OWASP WSTG | WSTG-INJT-28 Regular Expression Denial of Service, WSTG-ERRH-01 Improper Error Handling, WSTG-BUSL-05, WSTG-BUSL-07 |
 | Indexes | `httpdlog-*` |
-| Needs | web access logs in `httpdlog-*`: ALB/ELB (`alb2sofelk.py`), CloudFront (`cloudfrontaccess2sofelk.py`), Apache/nginx/lighttpd (`httpd2sofelk.py`) |
+| Needs | web access logs in `httpdlog-*`: ALB/ELB (`alb2sofelk.py`), CloudFront (`cloudfrontaccess2sofelk.py`), IIS (`iisgeolocate2sofelk.py`), Apache/nginx/lighttpd (`httpd2sofelk.py`) |
 | Applies to | every web application; outages and slowdowns the client reported first |
 
 **What it finds.** Requests per client per minute, against the median per-minute rate of all clients of that index. Rows are minutes with 300 or more requests, 20 or more 5xx answers, or 60 or more requests and 20 times the median. Per client: busy minutes, peak rate, total, 5xx answers and the paths that produced them, 429 answers. Scored on the peak (300/600 per minute), the peak against the median, 5xx volume (20/50), rate limiting and ten or more busy minutes.

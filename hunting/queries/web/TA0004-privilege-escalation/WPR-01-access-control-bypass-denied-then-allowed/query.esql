@@ -1,6 +1,6 @@
 // WPR-01 | Access-control bypass: protected paths answered 2xx after 401/403, through path-confusion tricks, another HTTP method or a different case, per client and path
 // Tactic: TA0004 Privilege Escalation | ATT&CK: T1190, T1078
-// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, Apache, nginx, lighttpd
+// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd
 FROM httpdlog-* METADATA _index
 | WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
 | EVAL raw_path = COALESCE(url.path, "")

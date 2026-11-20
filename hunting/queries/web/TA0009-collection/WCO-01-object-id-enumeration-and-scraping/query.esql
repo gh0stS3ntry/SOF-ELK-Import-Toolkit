@@ -1,6 +1,6 @@
 // WCO-01 | Object ID enumeration and scraping (IDOR / BOLA): one client walking many object IDs on the same endpoint, compared with the other clients of that endpoint
 // Tactic: TA0009 Collection | ATT&CK: T1213, T1119
-// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, Apache, nginx, lighttpd
+// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd
 FROM httpdlog-* METADATA _index
 | WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
 | EVAL path = TO_LOWER(COALESCE(url.path, ""))

@@ -1,6 +1,6 @@
 // WPE-01 | Malicious uploads: executable, double-extension and active-content files requested from upload folders, and whether the requesting client used an upload endpoint first
 // Tactic: TA0003 Persistence | ATT&CK: T1505.003, T1608.002
-// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, Apache, nginx, lighttpd
+// Indexes: httpdlog-* | Needs: web access logs: ALB/ELB, CloudFront, IIS, Apache, nginx, lighttpd
 FROM httpdlog-* METADATA _index
 | WHERE COALESCE(event.dataset, "") NOT LIKE "*.error"
 | EVAL path = TO_LOWER(COALESCE(url.path, ""))
