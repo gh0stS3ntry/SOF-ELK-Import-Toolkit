@@ -63,7 +63,8 @@ Run this on every host before its role checklist. Sections 1 and 2 tell you what
 | 6.4 | WMI event subscriptions | [PE-15](../queries/windows/TA0003-persistence/PE-15-wmi-event-subscriptions/) | 2.1.2 | Any `CommandLineEventConsumer` or `ActiveScriptEventConsumer` that is not the client's management software. |
 | 6.5 | Accounts created and added to groups | [PE-16](../queries/windows/TA0003-persistence/PE-16-account-and-group-changes/) | 2.4.18 to 2.4.20, 2.3.5 | New local accounts, accounts added to Administrators or RDP users, password resets. |
 | 6.6 | Startup folders | [PE-12](../queries/windows/TA0003-persistence/PE-12-startup-folder/) | 2.1.2 | Scripts and shortcuts in the all-users Startup folder. |
-| 6.7 | Remote-access tools installed | [C2-05](../queries/windows/TA0011-command-and-control/C2-05-remote-access-and-tunnel-tools/) | 2.1.3 | Any RMM product the client does not use, and tunnels (ngrok, cloudflared, chisel). |
+| 6.7 | Remote-access tools installed | [C2-05](../queries/windows/TA0011-command-and-control/C2-05-remote-access-and-tunnel-tools/), [C2-12](../queries/windows/TA0011-command-and-control/C2-12-lolrmm-rmm-services-and-tasks/), [C2-14](../queries/windows/TA0011-command-and-control/C2-14-lolrmm-rmm-files-on-disk/), [C2-15](../queries/windows/TA0011-command-and-control/C2-15-lolrmm-rmm-registry-keys/) | 2.1.3 | Any RMM product the client does not use, and tunnels (ngrok, cloudflared, chisel). C2-12/C2-14/C2-15 match the whole LOLRMM catalog: services and scheduled tasks, install folders, logs and config files on disk, registry keys. |
+| 6.8 | Remote-access tools run (LOLRMM) | [C2-10](../queries/windows/TA0011-command-and-control/C2-10-lolrmm-rmm-process-execution/), [C2-11](../queries/windows/TA0011-command-and-control/C2-11-lolrmm-rmm-execution-artifacts/) | 2.1.1, 2.1.3 | Any RMM program that ran, when it first ran and under which account; renamed copies (PE original name), copies in user folders, and shells or admin commands the RMM program started (an operator working through it). Ask which RMM product the client uses before chasing the rest. |
 
 ## 7. Credential access, discovery and lateral movement
 
@@ -88,6 +89,7 @@ Run this on every host before its role checklist. Sections 1 and 2 tell you what
 | 8.6 | Anti-forensics on files | [DE-01](../queries/windows/TA0112-defense-impairment/DE-01-timestomping/), [DE-07](../queries/windows/TA0112-defense-impairment/DE-07-deleted-executables-usn/) | 2.1.4, 2.1.5 | Timestomped executables, tools deleted right after use. |
 | 8.7 | Firewall changes | [DE-05](../queries/windows/TA0112-defense-impairment/DE-05-firewall-rule-changes-events/), [DE-06](../queries/windows/TA0112-defense-impairment/DE-06-firewall-rules-registry/) | 2.4.26, 2.4.27 | Inbound allow rules for RDP/SMB/WinRM or for tools; profiles turned off. |
 | 8.8 | MFT review around each finding | | 2.1.4 | Files created in the minutes around every lead (sort `filesystem-*` by `file.filename.created`). |
+| 8.9 | RMM vendor and relay domains (LOLRMM) | [C2-13](../queries/windows/TA0011-command-and-control/C2-13-lolrmm-rmm-domains-and-addresses/) | 2.1.7, 2.4.7 | DNS queries, connections, BITS jobs, command-line URLs and browser visits to RMM vendor, relay and download domains, by program; a download or install URL in a command line is the strongest lead. |
 
 ## Not covered by these queries
 
