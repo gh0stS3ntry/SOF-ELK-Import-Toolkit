@@ -238,6 +238,10 @@
             "upstream": {
               "type": "keyword",
               "ignore_above": 1024
+            },
+            "log_format": {
+              "type": "keyword",
+              "ignore_above": 1024
             }
           }
         }

@@ -7,12 +7,17 @@ Expected layout:
       (including iisgeolocate2sofelk.py: iisGeolocate CSVs and raw IIS u_ex*.log W3C logs)
   Windows/json_importers/<four JSON importers and sof_elk_json_bulk_common.py>
   Linux/linux2sofelk.py (UAC collections: a folder holding uac.log, or a UAC .zip)
+  Web/ncsa2sofelk.py (NCSA Common/Combined access logs from any web server, plain or .gz)
   AWS/<cloudtrail|vpcflow|alb|cloudfrontaccess|waf|route53resolver|securityhub|eksaudit>2sofelk.py
       (AWS logs, plain or .gz, native, CSV or Amazon Security Lake OCSF exports)
 
 A UAC collection is handed to Linux/linux2sofelk.py as a whole and its folder is not
 searched for Windows exports (its [root]/ copy of the host's files could hold CSVs that
 would otherwise be mistaken for KAPE output).
+
+NCSA Common (CLF) and Combined access logs outside a UAC collection (Apache or nginx on
+Windows, XAMPP, Tomcat localhost_access_log, IIS NCSA nc*.log, copied-off logs) are
+recognised with Web/ncsa2sofelk.py's own detect() and go to that importer (httpdlog-<hostname>).
 
 AWS logs are recognised with the AWS importers' own detect() functions, run on every file
 that no Windows importer claimed, so the wrapper and the importer always agree on a file. The
@@ -60,8 +65,18 @@ CSV_IMPORTERS = {
     "SumECmd": ("sumecmd2sofelk.py", "sum"),
     "WxTCmd": ("wxtcmd2sofelk.py", "activitiescache"),
     "iisGeolocate / IIS W3C": ("iisgeolocate2sofelk.py", "httpdlog"),
+    "NCSA access logs (Common/Combined)": ("ncsa2sofelk.py", "httpdlog"),
 }
 IIS_LABEL = "iisGeolocate / IIS W3C"
+# NCSA Common/Combined access logs: Web/ncsa2sofelk.py, found with that importer's detect().
+NCSA_LABEL = "NCSA access logs (Common/Combined)"
+NCSA_SUBDIR = "Web"
+NCSA_SCRIPT = "ncsa2sofelk.py"
+# Files the wrapper never offers to the NCSA detector (binary or structured exports).
+NCSA_SKIP_SUFFIXES = {".csv", ".tsv", ".json", ".jsonl", ".evtx", ".etl", ".zip", ".7z", ".rar", ".exe",
+                      ".dll", ".sys", ".db", ".sqlite", ".dat", ".hve", ".pf", ".lnk", ".xml", ".html",
+                      ".htm", ".js", ".php", ".png", ".jpg", ".gif", ".pdf", ".docx", ".xlsx", ".vhdx",
+                      ".vmdk", ".e01", ".raw", ".mem"}
 # W3C columns every IIS request line has; iisGeolocate CSVs keep them as their header.
 IIS_SIGNATURE = {"date", "time", "cs-method", "cs-uri-stem"}
 
@@ -95,7 +110,8 @@ AWS_SUBDIR = "AWS"
 AWS_DATE_ORDERS = {"dmy", "mdy"}
 
 # CSV importers that do not accept --local-tz.
-NO_LOCAL_TZ = {"NirSoft BrowsingHistoryView", "ConvertUsageLogsTo-CSV", "iisGeolocate / IIS W3C"}
+NO_LOCAL_TZ = {"NirSoft BrowsingHistoryView", "ConvertUsageLogsTo-CSV", "iisGeolocate / IIS W3C",
+               "NCSA access logs (Common/Combined)"}
 
 # Columns only BrowsingHistoryView emits; used with "url" to recognise its exports.
 BHV_SIGNATURE = {"visit time", "visit count", "visited from", "visit type", "visit duration",
@@ -323,10 +339,41 @@ def is_iis_w3c_log(path: Path) -> bool:
     return False
 
 
-def discover(root: Path, aws: AwsDetector | None = None
+class NcsaDetector:
+    """Web/ncsa2sofelk.py's own detect(), imported so the wrapper and the importer agree on a file.
+    If Web/ is missing or fails to import, NCSA discovery is disabled with a warning."""
+
+    def __init__(self, wrapper_dir: Path):
+        self.detect = None
+        self.error = ""
+        script = wrapper_dir / NCSA_SUBDIR / NCSA_SCRIPT
+        if not script.is_file():
+            self.error = f"{script} not found"
+            return
+        import importlib.util
+        try:
+            spec = importlib.util.spec_from_file_location("ncsa2sofelk", script)
+            module = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(module)
+            self.detect = module.detect
+        except Exception as exc:  # noqa: BLE001 - any import failure only disables NCSA discovery
+            self.error = f"could not load {NCSA_SCRIPT}: {exc}"
+
+    def claims(self, path: Path) -> bool:
+        if self.detect is None or path.suffix.lower() in NCSA_SKIP_SUFFIXES:
+            return False
+        try:
+            return bool(self.detect(path))
+        except Exception:  # noqa: BLE001
+            return False
+
+
+def discover(root: Path, aws: AwsDetector | None = None, ncsa: NcsaDetector | None = None
              ) -> tuple[dict[str, list[Path]], dict[str, list[Path]], list[Path], dict[str, list[Path]]]:
-    """Walk the tree once; return selected files for the four JSON and fourteen CSV importers,
-    the UAC collections (folders and zips) for the Linux importers, and AWS log files."""
+    """Walk the tree once; return selected files for the four JSON and fifteen CSV/text importers
+    (NCSA access logs are listed with the CSV importers), the UAC collections (folders and zips)
+    for the Linux importers, and AWS log files."""
     json_files = {name: [] for name in HYBRID_IMPORTERS}
     csv_files = {name: [] for name in CSV_IMPORTERS}
     aws_files: dict[str, list[Path]] = {name: [] for name in AWS_IMPORTERS}
@@ -359,6 +406,11 @@ def discover(root: Path, aws: AwsDetector | None = None
                 for importer in classify_csv(path, header):
                     csv_files[importer].append(path)
                     claimed = True
+            # NCSA Common/Combined access logs (access.log, access_log.1.gz, nc*.log, Tomcat's
+            # localhost_access_log.*.txt) have no fixed name; unclaimed files are sniffed.
+            if not claimed and ncsa is not None and not filename.startswith(".") and ncsa.claims(path):
+                csv_files[NCSA_LABEL].append(path)
+                claimed = True
             # AWS logs have no fixed extension (Firehose WAF files have none), so every file a
             # Windows importer did not claim is offered to the AWS detectors.
             if not claimed and aws is not None and not filename.startswith("."):
@@ -621,7 +673,10 @@ def main() -> int:
     aws = AwsDetector(wrapper_dir)
     if aws.error:
         print(f"WARNING: AWS log discovery is off: {aws.error}", flush=True)
-    json_files, csv_files, linux_collections, aws_files = discover(root, aws)
+    ncsa = NcsaDetector(wrapper_dir)
+    if ncsa.error:
+        print(f"WARNING: NCSA access log discovery is off: {ncsa.error}", flush=True)
+    json_files, csv_files, linux_collections, aws_files = discover(root, aws, ncsa)
 
     todo: list[tuple[str, str, str, list[Path], list[str] | None, bool]] = []
     failed: list[tuple[str, int]] = []
@@ -641,7 +696,7 @@ def main() -> int:
                 extra.extend(["--tz", args.bhv_tz])
                 if args.date_order:
                     extra.extend(["--date-order", args.date_order])
-            todo.append((label, "csv_importers", script, files, extra, False))
+            todo.append((label, NCSA_SUBDIR if label == NCSA_LABEL else "csv_importers", script, files, extra, False))
 
     print("\nDiscovery summary:", flush=True)
     total_files = 0
@@ -676,8 +731,9 @@ def main() -> int:
                 print(f"[{label}] ERROR: could not locate importer {script} under {wrapper_dir}", flush=True)
                 failed.append((label, 127))
                 continue
-            # iisGeolocate keeps the folder layout so log.file.path is the file's path under the root.
-            staged_dir = staging.add(label, files, keep_tree_from=root if label == IIS_LABEL else None)
+            # iisGeolocate and NCSA logs keep the folder layout, so log.file.path is the file's path
+            # under the root (and ncsa2sofelk.py can tell apache/, nginx/ and tomcat/ logs apart).
+            staged_dir = staging.add(label, files, keep_tree_from=root if label in (IIS_LABEL, NCSA_LABEL) else None)
             code = run_one(label, script_path, staged_dir, args, staging, extra=extra, is_json=is_json)
             if code == 0:
                 success += 1

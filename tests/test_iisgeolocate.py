@@ -74,6 +74,7 @@ class MockES:
 
     def __init__(self):
         self.indices = {}
+        self.templates = {}
         mock = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -108,6 +109,9 @@ class MockES:
             def do_PUT(self):
                 body = json.loads(self.read() or b"{}")
                 parts = self.path.strip("/").split("/")
+                if parts[0] in ("_component_template", "_index_template"):
+                    mock.templates[parts[1]] = body
+                    return self.reply(200, {"acknowledged": True})
                 if len(parts) == 1:
                     mock.indices[parts[0]] = {"mappings": body.get("mappings", {}), "docs": {}}
                     return self.reply(200, {"acknowledged": True})
