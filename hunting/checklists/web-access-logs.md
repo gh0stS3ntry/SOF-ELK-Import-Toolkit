@@ -41,5 +41,5 @@ Hunts across every web access log loaded into `httpdlog-*`: ALB/ELB and CloudFro
 ## Not covered by these queries
 
 - Request bodies and most headers (`Host`, `X-Forwarded-Host`, `X-Original-URL`, cookies, `Origin`): host header injection, cache poisoning, CORS, CSRF, JWT tampering and most client-side tests (WSTG-CLNT) leave nothing in an access log. CloudFront logs keep cookies (`http.request.cookie`) when cookie logging is on; WAF logs keep headers ([AIA-06](../queries/aws/TA0001-initial-access/AIA-06-waf-count-mode-matches/)).
-- Tomcat access logs (`localhost_access_log`): the toolkit has no Tomcat importer, so they are not in `httpdlog-*` unless they went through SOF-ELK's Logstash pipeline (dated indexes, which the checklist runner does not read).
+- Tomcat access logs (`localhost_access_log`) in the AccessLogValve `common` or `combined` pattern, and any other NCSA Common/Combined log, are loaded by `Web/ncsa2sofelk.py` (`event.dataset` `tomcat.access`, `apache.access`, `iis.access`, `web.access`, ...). Logs with a custom, non-NCSA pattern are not in `httpdlog-*`.
 - Business-logic abuse that looks like normal use (payment, coupon, inventory and workflow tests, WSTG-BUSL-01 to -04, -06, -10, -11) needs the application's own logs and the client's knowledge of normal behaviour.

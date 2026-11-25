@@ -41,4 +41,4 @@ pip install openpyxl
 python3 hunting/tools/build_checklist_xlsx.py
 ```
 
-**Not covered by the pack.** Memory analysis (IR 2.2), live-response output (IR 2.3: `netstat`, `net session`, `ipconfig /displaydns`), Tomcat access logs (no Tomcat importer yet; IIS, Apache, nginx, lighttpd, ALB and CloudFront logs are loaded and hunted by the [web access log checklist](web-access-logs.md)), SQL Server `ERRORLOG` and audit files, firewall/proxy/VPN logs, and email gateway logs are outside what this toolkit loads. The checklists list them where they matter so they are not forgotten.
+**Not covered by the pack.** Memory analysis (IR 2.2), live-response output (IR 2.3: `netstat`, `net session`, `ipconfig /displaydns`), web access logs in a custom non-NCSA format (IIS W3C, NCSA Common/Combined from Apache, nginx, Tomcat and others, lighttpd, ALB and CloudFront logs are loaded and hunted by the [web access log checklist](web-access-logs.md)), SQL Server `ERRORLOG` and audit files, firewall/proxy/VPN logs, and email gateway logs are outside what this toolkit loads. The checklists list them where they matter so they are not forgotten.

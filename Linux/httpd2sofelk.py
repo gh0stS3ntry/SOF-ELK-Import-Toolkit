@@ -23,6 +23,8 @@ match AWS/alb2sofelk.py, so `FROM httpdlog-*` covers ALB, Apache and nginx alike
 client.user.name (identd), server.user.name (the authenticated user), http.request.method,
 url.path, url.query, url.original, http.version, http.response.status_code, destination.bytes
 (response size), http.request.referrer, user_agent.original, and the "page" / "not_page" tag.
+httpd.log_format says which access log layout a line had: common, combined, vhost_common,
+vhost_combined (or partial for SOF-ELK's fallback).
 event.dataset is <server>.access or <server>.error (apache, nginx, lighttpd).
 
 The _id is derived from the host, the log family (access.log, access_log, ...) and the line, so a
@@ -54,7 +56,7 @@ MONTHS = {m: i for i, m in enumerate(
 
 ACCESS_BODY = (r'(?P<client>\S+) (?P<ident>\S+) (?P<user>"(?:[^"\\]|\\.)*"|\S+) \[(?P<time>[^\]]+)\] '
                r'"(?P<request>(?:[^"\\]|\\.)*)" (?P<status>\d{3}|-) (?P<bytes>\d+|-)'
-               r'(?: (?:"-"|"(?P<referrer>(?:[^"\\]|\\.)*)") (?:"-"|"(?P<agent>(?:[^"\\]|\\.)*)"))?(?P<extra>.*)$')
+               r'(?P<combined> (?:"-"|"(?P<referrer>(?:[^"\\]|\\.)*)") (?:"-"|"(?P<agent>(?:[^"\\]|\\.)*)"))?(?P<extra>.*)$')
 ACCESS_RE = re.compile("^" + ACCESS_BODY)
 VHOST_ACCESS_RE = re.compile(r"^(?P<vhost>[^\s:]+)(?::(?P<vport>\d+))? " + ACCESS_BODY)
 SSL_REQUEST_RE = re.compile(r'^\[(?P<time>[^\]]+)\] (?P<client>\S+) (?P<proto>\S+) (?P<cipher>\S+) '
@@ -247,6 +249,10 @@ def parse_access(line, server):
     set_field(doc, "user_agent.original", unescape(m.group("agent")))
     extra = (m.group("extra") or "").strip()
     set_field(doc, "httpd.extra", extra)
+    # Which NCSA layout the line has: common (CLF) or combined (CLF + referrer + user agent),
+    # each optionally led by "vhost:port" (Apache's vhost_combined / other_vhosts_access.log).
+    log_format = "combined" if m.group("combined") else "common"
+    set_field(doc, "httpd.log_format", f"vhost_{log_format}" if vhost else log_format)
     if vhost:
         set_field(doc, "url.domain", vhost.group("vhost"))
         if not doc.get("destination", {}).get("port"):
@@ -358,7 +364,7 @@ def parse_partial(line, server):
     stamp = http_time(m.group(1))
     if stamp is None:
         return None
-    doc = {"tags": ["partial_httpd_log"], "message": line}
+    doc = {"tags": ["partial_httpd_log"], "message": line, "httpd": {"log_format": "partial"}}
     head = line[:m.start()].split()
     if head:
         set_client(doc, head[0] if is_ip(split_host_port(head[0])[0]) else None)

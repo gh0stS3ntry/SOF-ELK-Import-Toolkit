@@ -1,0 +1,13 @@
+{
+ "bulk_calls": 1,
+ "faults": [],
+ "indices": {
+  "httpdlog-web01": {
+   "docs": 15
+  }
+ },
+ "retried_items": 0,
+ "templates": [],
+ "type_errors": {},
+ "unmapped_dynamic": {}
+}
