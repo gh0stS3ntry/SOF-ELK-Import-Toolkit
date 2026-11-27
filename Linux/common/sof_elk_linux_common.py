@@ -53,6 +53,10 @@ TEMPLATE_SETS = {
     "linux": (TEMPLATE_DIR, "component-toolkit-linux-common.json", COMMON_COMPONENT),
     "windows": (LINUX_DIR.parent / "Windows" / "index_templates", "component-toolkit-common.json",
                 "sofelk-toolkit-common"),
+    # Java/javalog2sofelk.py: its index template lives in Java/index_templates (4th item, the
+    # folder of index-<prefix>.json) and is composed of the Linux common component.
+    "java": (TEMPLATE_DIR, "component-toolkit-linux-common.json", COMMON_COMPONENT,
+             LINUX_DIR.parent / "Java" / "index_templates"),
 }
 
 # The retrying bulk client is shared with the Windows and AWS importers.
@@ -659,9 +663,11 @@ def _merge(base, extra):
 
 def load_templates(prefix, template_set="linux"):
     """(component, index_template, merged index body) for an index prefix like 'logstash'."""
-    folder, component_file, _ = TEMPLATE_SETS[template_set]
+    entry = TEMPLATE_SETS[template_set]
+    folder, component_file = entry[0], entry[1]
+    index_folder = entry[3] if len(entry) > 3 else folder
     component = _load_json(component_file, folder)
-    index_tpl = _load_json(f"index-{prefix}.json", folder)
+    index_tpl = _load_json(f"index-{prefix}.json", index_folder)
     merged = _merge(component.get("template", {}), index_tpl.get("template", {}))
     return component, index_tpl, merged
 

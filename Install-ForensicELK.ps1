@@ -396,6 +396,7 @@ function Copy-IndexTemplates([string]$SourceRoot, [string]$Destination) {
         @{ Dir = 'AWS\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-httpdlog.json', 'index-kubernetes.json') },
         @{ Dir = 'Generic-CSV\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
         @{ Dir = 'Generic-JSON\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
+        @{ Dir = 'Java\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-' },
         @{ Dir = 'Linux\index_templates'; ComponentPrefix = 'sofelk-'; IndexPrefix = 'sofelk-toolkit-'; Exclude = @('index-logstash.json', 'index-httpdlog.json') }
     )
     if (Test-Path -LiteralPath $Destination) { Remove-Item -LiteralPath $Destination -Recurse -Force }

@@ -8,6 +8,7 @@ Expected layout:
   Windows/json_importers/<four JSON importers and sof_elk_json_bulk_common.py>
   Linux/linux2sofelk.py (UAC collections: a folder holding uac.log, or a UAC .zip)
   Web/ncsa2sofelk.py (NCSA Common/Combined access logs from any web server, plain or .gz)
+  Java/javalog2sofelk.py (Java application logs: Log4j, Logback, JUL, Spring Boot, plain or .gz)
   AWS/<cloudtrail|vpcflow|alb|cloudfrontaccess|waf|route53resolver|securityhub|eksaudit>2sofelk.py
       (AWS logs, plain or .gz, native, CSV or Amazon Security Lake OCSF exports)
 
@@ -18,6 +19,9 @@ would otherwise be mistaken for KAPE output).
 NCSA Common (CLF) and Combined access logs outside a UAC collection (Apache or nginx on
 Windows, XAMPP, Tomcat localhost_access_log, IIS NCSA nc*.log, copied-off logs) are
 recognised with Web/ncsa2sofelk.py's own detect() and go to that importer (httpdlog-<hostname>).
+Java application logs (Log4j/Logback/JUL/Spring Boot pattern layouts, stack traces and multi-line
+SQL included) are recognised with Java/javalog2sofelk.py's detect() and go to that importer
+(javalog-<hostname>); the wrapper's --local-tz is passed on for their local times.
 
 AWS logs are recognised with the AWS importers' own detect() functions, run on every file
 that no Windows importer claimed, so the wrapper and the importer always agree on a file. The
@@ -66,13 +70,19 @@ CSV_IMPORTERS = {
     "WxTCmd": ("wxtcmd2sofelk.py", "activitiescache"),
     "iisGeolocate / IIS W3C": ("iisgeolocate2sofelk.py", "httpdlog"),
     "NCSA access logs (Common/Combined)": ("ncsa2sofelk.py", "httpdlog"),
+    "Java application logs (Log4j/Logback)": ("javalog2sofelk.py", "javalog"),
 }
 IIS_LABEL = "iisGeolocate / IIS W3C"
 # NCSA Common/Combined access logs: Web/ncsa2sofelk.py, found with that importer's detect().
 NCSA_LABEL = "NCSA access logs (Common/Combined)"
 NCSA_SUBDIR = "Web"
 NCSA_SCRIPT = "ncsa2sofelk.py"
-# Files the wrapper never offers to the NCSA detector (binary or structured exports).
+# Java application logs: Java/javalog2sofelk.py, found with that importer's detect() on files
+# neither a Windows importer nor the NCSA detector claimed.
+JAVALOG_LABEL = "Java application logs (Log4j/Logback)"
+JAVALOG_SUBDIR = "Java"
+JAVALOG_SCRIPT = "javalog2sofelk.py"
+# Files the wrapper never offers to the NCSA or Java log detectors (binary or structured exports).
 NCSA_SKIP_SUFFIXES = {".csv", ".tsv", ".json", ".jsonl", ".evtx", ".etl", ".zip", ".7z", ".rar", ".exe",
                       ".dll", ".sys", ".db", ".sqlite", ".dat", ".hve", ".pf", ".lnk", ".xml", ".html",
                       ".htm", ".js", ".php", ".png", ".jpg", ".gif", ".pdf", ".docx", ".xlsx", ".vhdx",
@@ -339,26 +349,26 @@ def is_iis_w3c_log(path: Path) -> bool:
     return False
 
 
-class NcsaDetector:
-    """Web/ncsa2sofelk.py's own detect(), imported so the wrapper and the importer agree on a file.
-    If Web/ is missing or fails to import, NCSA discovery is disabled with a warning."""
+class ImporterDetector:
+    """An importer's own detect(), imported so the wrapper and the importer agree on a file.
+    If the importer is missing or fails to import, its discovery is disabled with a warning."""
 
-    def __init__(self, wrapper_dir: Path):
+    def __init__(self, wrapper_dir: Path, subdir: str, script_name: str):
         self.detect = None
         self.error = ""
-        script = wrapper_dir / NCSA_SUBDIR / NCSA_SCRIPT
+        script = wrapper_dir / subdir / script_name
         if not script.is_file():
             self.error = f"{script} not found"
             return
         import importlib.util
         try:
-            spec = importlib.util.spec_from_file_location("ncsa2sofelk", script)
+            spec = importlib.util.spec_from_file_location(Path(script_name).stem, script)
             module = importlib.util.module_from_spec(spec)
             assert spec.loader is not None
             spec.loader.exec_module(module)
             self.detect = module.detect
-        except Exception as exc:  # noqa: BLE001 - any import failure only disables NCSA discovery
-            self.error = f"could not load {NCSA_SCRIPT}: {exc}"
+        except Exception as exc:  # noqa: BLE001 - any import failure only disables this discovery
+            self.error = f"could not load {script_name}: {exc}"
 
     def claims(self, path: Path) -> bool:
         if self.detect is None or path.suffix.lower() in NCSA_SKIP_SUFFIXES:
@@ -369,11 +379,25 @@ class NcsaDetector:
             return False
 
 
-def discover(root: Path, aws: AwsDetector | None = None, ncsa: NcsaDetector | None = None
-             ) -> tuple[dict[str, list[Path]], dict[str, list[Path]], list[Path], dict[str, list[Path]]]:
-    """Walk the tree once; return selected files for the four JSON and fifteen CSV/text importers
-    (NCSA access logs are listed with the CSV importers), the UAC collections (folders and zips)
-    for the Linux importers, and AWS log files."""
+class NcsaDetector(ImporterDetector):
+    """Web/ncsa2sofelk.py's detect()."""
+
+    def __init__(self, wrapper_dir: Path):
+        super().__init__(wrapper_dir, NCSA_SUBDIR, NCSA_SCRIPT)
+
+
+class JavaLogDetector(ImporterDetector):
+    """Java/javalog2sofelk.py's detect() (Log4j/Logback/JUL/Spring Boot layouts)."""
+
+    def __init__(self, wrapper_dir: Path):
+        super().__init__(wrapper_dir, JAVALOG_SUBDIR, JAVALOG_SCRIPT)
+
+
+def discover(root: Path, aws: AwsDetector | None = None, ncsa: NcsaDetector | None = None,
+             javalog: JavaLogDetector | None = None) -> tuple[dict[str, list[Path]], dict[str, list[Path]], list[Path], dict[str, list[Path]]]:
+    """Walk the tree once; return selected files for the four JSON and sixteen CSV/text importers
+    (NCSA access logs and Java application logs are listed with the CSV importers), the UAC
+    collections (folders and zips) for the Linux importers, and AWS log files."""
     json_files = {name: [] for name in HYBRID_IMPORTERS}
     csv_files = {name: [] for name in CSV_IMPORTERS}
     aws_files: dict[str, list[Path]] = {name: [] for name in AWS_IMPORTERS}
@@ -410,6 +434,11 @@ def discover(root: Path, aws: AwsDetector | None = None, ncsa: NcsaDetector | No
             # localhost_access_log.*.txt) have no fixed name; unclaimed files are sniffed.
             if not claimed and ncsa is not None and not filename.startswith(".") and ncsa.claims(path):
                 csv_files[NCSA_LABEL].append(path)
+                claimed = True
+            # Java application logs (server.log, catalina.out, app.2026-11-26.log.gz) are sniffed
+            # the same way: a Log4j/Logback/JUL layout on the first lines.
+            if not claimed and javalog is not None and not filename.startswith(".") and javalog.claims(path):
+                csv_files[JAVALOG_LABEL].append(path)
                 claimed = True
             # AWS logs have no fixed extension (Firehose WAF files have none), so every file a
             # Windows importer did not claim is offered to the AWS detectors.
@@ -634,7 +663,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=2000, help="Documents per bulk request")
     parser.add_argument("--workers", type=int, default=2, help="Concurrent bulk workers for JSON importers")
     parser.add_argument("--case", help="Optional case/incident ID added to every document by every importer")
-    parser.add_argument("--local-tz", help="UTC offset for *LOCAL timestamp fields in KAPE CSVs, e.g. +08:00")
+    parser.add_argument("--local-tz", help="UTC offset for *LOCAL timestamp fields in KAPE CSVs and for Java application log times, e.g. +08:00")
     parser.add_argument("--bhv-tz", help="Timezone offset for NirSoft BrowsingHistoryView, e.g. +08:00 or UTC")
     parser.add_argument("--date-order", choices=("dmy", "mdy", "ymd"),
                         help="Regional date order: forced for BrowsingHistoryView, and passed to the AWS importers"
@@ -676,7 +705,10 @@ def main() -> int:
     ncsa = NcsaDetector(wrapper_dir)
     if ncsa.error:
         print(f"WARNING: NCSA access log discovery is off: {ncsa.error}", flush=True)
-    json_files, csv_files, linux_collections, aws_files = discover(root, aws, ncsa)
+    javalog = JavaLogDetector(wrapper_dir)
+    if javalog.error:
+        print(f"WARNING: Java application log discovery is off: {javalog.error}", flush=True)
+    json_files, csv_files, linux_collections, aws_files = discover(root, aws, ncsa, javalog)
 
     todo: list[tuple[str, str, str, list[Path], list[str] | None, bool]] = []
     failed: list[tuple[str, int]] = []
@@ -696,7 +728,8 @@ def main() -> int:
                 extra.extend(["--tz", args.bhv_tz])
                 if args.date_order:
                     extra.extend(["--date-order", args.date_order])
-            todo.append((label, NCSA_SUBDIR if label == NCSA_LABEL else "csv_importers", script, files, extra, False))
+            subdir = {NCSA_LABEL: NCSA_SUBDIR, JAVALOG_LABEL: JAVALOG_SUBDIR}.get(label, "csv_importers")
+            todo.append((label, subdir, script, files, extra, False))
 
     print("\nDiscovery summary:", flush=True)
     total_files = 0
@@ -731,9 +764,10 @@ def main() -> int:
                 print(f"[{label}] ERROR: could not locate importer {script} under {wrapper_dir}", flush=True)
                 failed.append((label, 127))
                 continue
-            # iisGeolocate and NCSA logs keep the folder layout, so log.file.path is the file's path
-            # under the root (and ncsa2sofelk.py can tell apache/, nginx/ and tomcat/ logs apart).
-            staged_dir = staging.add(label, files, keep_tree_from=root if label in (IIS_LABEL, NCSA_LABEL) else None)
+            # iisGeolocate, NCSA and Java logs keep the folder layout, so log.file.path is the file's
+            # path under the root (and ncsa2sofelk.py can tell apache/, nginx/ and tomcat/ logs apart).
+            keep_tree = label in (IIS_LABEL, NCSA_LABEL, JAVALOG_LABEL)
+            staged_dir = staging.add(label, files, keep_tree_from=root if keep_tree else None)
             code = run_one(label, script_path, staged_dir, args, staging, extra=extra, is_json=is_json)
             if code == 0:
                 success += 1
