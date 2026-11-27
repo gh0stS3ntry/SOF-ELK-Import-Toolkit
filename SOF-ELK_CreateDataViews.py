@@ -35,6 +35,7 @@ Create the Kibana Data Views used with the SOF-ELK direct-import toolkit.
   aws-securityhub-*   AWS/securityhub2sofelk.py (Security Hub findings, ASFF)
   genericcsv-*        Generic-CSV/genericcsv2sofelk.py (any CSV or XLSX, fields from its header)
   genericjson-*       Generic-JSON/genericjson2sofelk.py (any JSON, fields from its keys)
+  javalog-*           Java/javalog2sofelk.py (Java application logs: Log4j, Logback, JUL, Spring Boot)
   auditd-*            Linux/auditd2sofelk.py (Linux audit log, one document per event)
   bodyfile-*          Linux/bodyfile2sofelk.py (Linux bodyfile file system timeline)
   wtmp-*              Linux/wtmp2sofelk.py (wtmp, btmp and wtmpdb login records)
@@ -87,6 +88,7 @@ DATA_VIEWS = [
     ("aws-securityhub", "aws-securityhub-*"),
     ("genericcsv", "genericcsv-*"),
     ("genericjson", "genericjson-*"),
+    ("javalog", "javalog-*"),
     ("auditd", "auditd-*"),
     ("bodyfile", "bodyfile-*"),
     ("wtmp", "wtmp-*"),

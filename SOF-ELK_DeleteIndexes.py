@@ -61,6 +61,8 @@ TOOLKIT_PREFIXES = frozenset({
     "kubernetes",
     # Generic-CSV and Generic-JSON
     "genericcsv", "genericjson",
+    # Java application logs (Java/javalog2sofelk.py)
+    "javalog",
     # Linux (journal, text syslog and vsftpd share SOF-ELK's logstash family; web logs go to
     # httpdlog and browser history to browsinghistory, both listed above)
     "logstash", "auditd", "bodyfile", "wtmp", "packages", "linuxconfig",

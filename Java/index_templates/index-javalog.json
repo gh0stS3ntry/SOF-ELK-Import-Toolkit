@@ -1,0 +1,243 @@
+{
+  "index_patterns": [
+    "javalog-*"
+  ],
+  "priority": 200,
+  "composed_of": [
+    "sofelk-toolkit-linux-common"
+  ],
+  "template": {
+    "mappings": {
+      "_meta": {
+        "toolkit_schema": "javalog",
+        "toolkit_schema_version": 1
+      },
+      "properties": {
+        "message": {
+          "type": "keyword",
+          "ignore_above": 8191,
+          "fields": {
+            "text": {
+              "type": "match_only_text"
+            }
+          }
+        },
+        "log": {
+          "properties": {
+            "level": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "logger": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "origin": {
+              "properties": {
+                "function": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "file": {
+                  "properties": {
+                    "name": {
+                      "type": "keyword",
+                      "ignore_above": 1024
+                    },
+                    "line": {
+                      "type": "long"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "process": {
+          "properties": {
+            "pid": {
+              "type": "long"
+            },
+            "thread": {
+              "properties": {
+                "name": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "id": {
+                  "type": "long"
+                }
+              }
+            }
+          }
+        },
+        "service": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "error": {
+          "properties": {
+            "type": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "message": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "stack_trace": {
+              "type": "text"
+            }
+          }
+        },
+        "trace": {
+          "properties": {
+            "id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "span": {
+          "properties": {
+            "id": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "user": {
+          "properties": {
+            "name": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        },
+        "javalog": {
+          "properties": {
+            "layout": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "pattern": {
+              "type": "keyword",
+              "ignore_above": 4096
+            },
+            "timestamp_original": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "first_line": {
+              "type": "keyword",
+              "ignore_above": 8191,
+              "fields": {
+                "text": {
+                  "type": "match_only_text"
+                }
+              }
+            },
+            "line_count": {
+              "type": "integer"
+            },
+            "class": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "location": {
+              "type": "keyword",
+              "ignore_above": 4096
+            },
+            "ndc": {
+              "type": "keyword",
+              "ignore_above": 4096
+            },
+            "marker": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "context": {
+              "type": "keyword",
+              "ignore_above": 1024
+            },
+            "mdc": {
+              "type": "keyword",
+              "ignore_above": 4096
+            },
+            "relative_ms": {
+              "type": "long"
+            },
+            "sequence": {
+              "type": "long"
+            },
+            "exception": {
+              "properties": {
+                "classes": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "root_cause": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "root_cause_message": {
+                  "type": "keyword",
+                  "ignore_above": 8191,
+                  "fields": {
+                    "text": {
+                      "type": "match_only_text"
+                    }
+                  }
+                },
+                "top_frame": {
+                  "type": "keyword",
+                  "ignore_above": 4096
+                },
+                "frame_count": {
+                  "type": "integer"
+                }
+              }
+            },
+            "sql": {
+              "properties": {
+                "statement": {
+                  "type": "keyword",
+                  "ignore_above": 8191,
+                  "fields": {
+                    "text": {
+                      "type": "match_only_text"
+                    }
+                  }
+                },
+                "verb": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "tables": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                },
+                "object_id": {
+                  "type": "keyword",
+                  "ignore_above": 1024
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "_meta": {
+    "description": "Java application logs (Log4j / Logback / JUL / Spring Boot pattern layouts) loaded by Java/javalog2sofelk.py, one index per evidence host: javalog-<hostname>"
+  }
+}
